@@ -431,10 +431,17 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
     }
     .kpi-value {
       font-weight: 700;
-      font-size: clamp(1rem, 0.78rem + 0.72vw, 1.45rem);
-      line-height: 1.15;
-      overflow-wrap: anywhere;
-      word-break: break-word;
+      font-size: clamp(0.95rem, 0.68rem + 0.48vw, 1.2rem);
+      line-height: 1.12;
+      letter-spacing: -0.01em;
+      overflow-wrap: normal;
+      word-break: keep-all;
+    }
+    .kpi-money {
+      font-size: clamp(0.88rem, 0.58rem + 0.34vw, 1.05rem);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
     .muted { color: var(--muted); }
     .good { color: var(--good); }
@@ -549,17 +556,17 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
     <section class="grid">
       <article class="card">
         <div class="kpi-title">Saldo Carteira</div>
-        <div class="kpi-value" id="wallet-balance">$0.00</div>
+        <div class="kpi-value kpi-money" id="wallet-balance">$0.00</div>
         <div class="muted" id="available-balance">Disponível $0.00</div>
       </article>
       <article class="card">
         <div class="kpi-title">P&L Diário</div>
-        <div class="kpi-value" id="daily-total">$0.00</div>
+        <div class="kpi-value kpi-money" id="daily-total">$0.00</div>
         <div class="muted" id="daily-breakdown">Realizado/Funding/Comissão</div>
       </article>
       <article class="card">
         <div class="kpi-title">P&L Aberto</div>
-        <div class="kpi-value" id="open-pnl">$0.00</div>
+        <div class="kpi-value kpi-money" id="open-pnl">$0.00</div>
         <div class="muted" id="positions-count">0 posições abertas</div>
       </article>
       <article class="card">

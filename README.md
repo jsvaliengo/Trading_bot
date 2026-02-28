@@ -118,7 +118,7 @@ export TRADING_BOT_DAILY_REPORT_MINUTE_BRT=55
 export TRADING_BOT_DAILY_REPORT_LOOKBACK_HOURS=24
 export TRADING_BOT_DASHBOARD_HOST=127.0.0.1
 export TRADING_BOT_DASHBOARD_PORT=8080
-export TRADING_BOT_DASHBOARD_REFRESH_SECONDS=10
+export TRADING_BOT_DASHBOARD_REFRESH_SECONDS=5
 export TRADING_BOT_DASHBOARD_AUTH_TOKEN=
 ```
 
@@ -176,7 +176,7 @@ python -m trading_bot.web.dashboard
 Parâmetros úteis:
 
 ```bash
-python -m trading_bot.web.dashboard --host 127.0.0.1 --port 8080 --refresh-seconds 10
+python -m trading_bot.web.dashboard --host 127.0.0.1 --port 8080 --refresh-seconds 5
 ```
 
 Para proteger com token:
