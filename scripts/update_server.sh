@@ -14,6 +14,10 @@ BOT_MODULE="${BOT_MODULE:-trading_bot.core.bot}"
 BOT_PROCESS_PATTERN="${BOT_PROCESS_PATTERN:-python.*-m[[:space:]]+${BOT_MODULE//./\\.}}"
 PYTHON_BIN="${PYTHON_BIN:-$VENV_DIR/bin/python}"
 SKIP_GIT_PULL="${SKIP_GIT_PULL:-0}"
+RUNTIME_DIR="${RUNTIME_DIR:-$PROJECT_DIR/runtime}"
+DEPLOY_SHA="${DEPLOY_SHA:-local}"
+DEPLOY_REF="${DEPLOY_REF:-manual}"
+DEPLOY_ACTOR="${DEPLOY_ACTOR:-manual}"
 
 log() {
   printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
@@ -78,5 +82,18 @@ else
   log "Falha ao iniciar bot."
   exit 1
 fi
+
+mkdir -p "$RUNTIME_DIR"
+DEPLOY_INFO_FILE="$RUNTIME_DIR/deploy_info.json"
+cat > "$DEPLOY_INFO_FILE" <<EOF
+{
+  "deployed_at_utc": "$(date -u '+%Y-%m-%dT%H:%M:%SZ')",
+  "deploy_sha": "$DEPLOY_SHA",
+  "deploy_ref": "$DEPLOY_REF",
+  "deploy_actor": "$DEPLOY_ACTOR",
+  "host": "$(hostname)"
+}
+EOF
+log "Metadados de deploy salvos em $DEPLOY_INFO_FILE"
 
 log "Concluído."

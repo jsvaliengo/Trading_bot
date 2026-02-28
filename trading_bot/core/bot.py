@@ -22,7 +22,8 @@ import os
 import shutil
 import fcntl
 import threading
-from datetime import datetime
+from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Tuple
 
 from .config import config
@@ -148,6 +149,7 @@ class TradingBot:
         self.daily_target_reached = False  # Se a meta do dia foi atingida
         self.daily_target_type = None      # 'PROFIT' ou 'LOSS'
         self.last_daily_reset = datetime.now().date()  # Data do último reset
+        self.last_daily_performance_report_date = ""
         
         # Histórico de evolução da carteira (para relatório)
         # Guarda snapshots: {'timestamp': datetime, 'balance': float, 'pnl': float}
@@ -495,6 +497,7 @@ class TradingBot:
                 'trade_history': self.trade_history,
                 'peak_prices': self.peak_prices,
                 'trailing_activated': self.trailing_activated,
+                'last_daily_performance_report_date': self.last_daily_performance_report_date,
                 'last_transfer_check_ts_ms': int(self.last_transfer_check_ts_ms or 0),
                 'processed_transfer_ids': self.processed_transfer_ids[-max(100, int(config.CAPITAL_TRANSFER_TRACKED_IDS_LIMIT)):]
             }
@@ -534,6 +537,9 @@ class TradingBot:
             self.trade_history = state.get('trade_history', [])
             self.peak_prices = state.get('peak_prices', {})
             self.trailing_activated = state.get('trailing_activated', {})
+            self.last_daily_performance_report_date = str(
+                state.get('last_daily_performance_report_date', '') or ''
+            )
             self.last_transfer_check_ts_ms = int(state.get('last_transfer_check_ts_ms', 0) or 0)
             self.processed_transfer_ids = list(state.get('processed_transfer_ids', []) or [])
             
@@ -2443,6 +2449,209 @@ class TradingBot:
                 daily_loss_limit=config.DAILY_LOSS_LIMIT if config.USE_DAILY_TARGETS else None,
                 daily_target_reached=self.daily_target_reached
             )
+
+    def _format_usd_brl(self, value: float, decimals: int = 2, show_sign: bool = False) -> str:
+        """
+        Formata valores em USD + BRL reaproveitando o formatador do notifier.
+        """
+        try:
+            if hasattr(self, 'telegram') and hasattr(self.telegram, '_format_usd_brl'):
+                return self.telegram._format_usd_brl(value, decimals, show_sign)
+        except Exception:
+            pass
+
+        sign = ""
+        if show_sign and value > 0:
+            sign = "+"
+        return f"{sign}${value:.{decimals}f}"
+
+    def _build_daily_performance_snapshot(self, lookback_hours: int) -> Dict[str, Any]:
+        """
+        Consolida métricas de performance em uma janela móvel (últimas N horas).
+        """
+        lookback_hours = max(1, int(lookback_hours))
+        now_utc = datetime.now(timezone.utc)
+        window_start_utc = now_utc - timedelta(hours=lookback_hours)
+        window_start_ms = int(window_start_utc.timestamp() * 1000)
+
+        income_list = self.exchange.get_income_history(limit=1000, start_time=window_start_ms)
+
+        realized_total = 0.0
+        commission_total = 0.0
+        funding_total = 0.0
+        realized_events = []
+        symbol_pnl = defaultdict(float)
+
+        for item in income_list:
+            try:
+                ts = int(item.get('time', 0) or 0)
+                if ts < window_start_ms:
+                    continue
+                income_type = str(item.get('incomeType', '') or '')
+                amount = float(item.get('income', 0) or 0)
+                symbol = str(item.get('symbol', 'N/A') or 'N/A')
+            except Exception:
+                continue
+
+            if income_type == 'REALIZED_PNL':
+                realized_total += amount
+                realized_events.append({'ts': ts, 'symbol': symbol, 'pnl': amount})
+                symbol_pnl[symbol] += amount
+            elif income_type == 'COMMISSION':
+                commission_total += amount
+            elif income_type == 'FUNDING_FEE':
+                funding_total += amount
+
+        realized_events.sort(key=lambda e: e['ts'])
+        wins = [e['pnl'] for e in realized_events if e['pnl'] > 0]
+        losses = [e['pnl'] for e in realized_events if e['pnl'] < 0]
+        trade_count = len(wins) + len(losses)
+        win_rate = (len(wins) / trade_count * 100) if trade_count else 0.0
+        avg_win = (sum(wins) / len(wins)) if wins else 0.0
+        avg_loss = (sum(losses) / len(losses)) if losses else 0.0
+        gross_win = sum(wins)
+        gross_loss = sum(losses)  # negativo
+        profit_factor = (gross_win / abs(gross_loss)) if gross_loss < 0 else None
+        best_win = max(wins) if wins else 0.0
+        worst_loss = min(losses) if losses else 0.0
+
+        # Drawdown em curva de P&L realizado na janela.
+        equity = 0.0
+        peak_equity = 0.0
+        max_drawdown = 0.0
+        for event in realized_events:
+            equity += event['pnl']
+            if equity > peak_equity:
+                peak_equity = equity
+            drawdown = peak_equity - equity
+            if drawdown > max_drawdown:
+                max_drawdown = drawdown
+
+        top_winner_symbol = ""
+        top_winner_pnl = 0.0
+        top_loser_symbol = ""
+        top_loser_pnl = 0.0
+        if symbol_pnl:
+            top_winner_symbol, top_winner_pnl = max(symbol_pnl.items(), key=lambda kv: kv[1])
+            top_loser_symbol, top_loser_pnl = min(symbol_pnl.items(), key=lambda kv: kv[1])
+
+        try:
+            account_info = self.exchange.get_account_info()
+            open_pnl = float(account_info.get('unrealized_pnl', 0.0))
+        except Exception:
+            open_pnl = 0.0
+
+        net_after_costs = realized_total + commission_total + funding_total
+        net_with_open = net_after_costs + open_pnl
+
+        return {
+            'lookback_hours': lookback_hours,
+            'window_start_utc': window_start_utc,
+            'window_end_utc': now_utc,
+            'trade_count': trade_count,
+            'win_count': len(wins),
+            'loss_count': len(losses),
+            'win_rate': win_rate,
+            'gross_win': gross_win,
+            'gross_loss': gross_loss,
+            'avg_win': avg_win,
+            'avg_loss': avg_loss,
+            'best_win': best_win,
+            'worst_loss': worst_loss,
+            'profit_factor': profit_factor,
+            'max_drawdown': max_drawdown,
+            'realized_total': realized_total,
+            'commission_total': commission_total,
+            'funding_total': funding_total,
+            'net_after_costs': net_after_costs,
+            'open_pnl': open_pnl,
+            'net_with_open': net_with_open,
+            'top_winner_symbol': top_winner_symbol,
+            'top_winner_pnl': top_winner_pnl,
+            'top_loser_symbol': top_loser_symbol,
+            'top_loser_pnl': top_loser_pnl,
+            'income_count': len(income_list),
+        }
+
+    def send_daily_performance_report(self, force: bool = False) -> bool:
+        """
+        Envia relatório diário consolidado para tomada de decisão de risco/SL.
+        """
+        lookback_hours = max(1, int(getattr(config, "DAILY_PERFORMANCE_REPORT_LOOKBACK_HOURS", 24)))
+        snapshot = self._build_daily_performance_snapshot(lookback_hours=lookback_hours)
+
+        if snapshot['trade_count'] == 0 and not force:
+            return False
+
+        status_emoji = "🟢" if snapshot['net_after_costs'] >= 0 else "🔴"
+        status_text = "POSITIVO" if snapshot['net_after_costs'] >= 0 else "NEGATIVO"
+        profit_factor = snapshot['profit_factor']
+        profit_factor_text = "∞" if profit_factor is None else f"{profit_factor:.2f}"
+        sl_status = "ON" if config.USE_INDIVIDUAL_STOP_LOSS else "OFF"
+
+        start_utc = snapshot['window_start_utc'].strftime("%d/%m %H:%M")
+        end_utc = snapshot['window_end_utc'].strftime("%d/%m %H:%M")
+        top_winner = snapshot['top_winner_symbol'].replace('USDT', '') if snapshot['top_winner_symbol'] else "N/A"
+        top_loser = snapshot['top_loser_symbol'].replace('USDT', '') if snapshot['top_loser_symbol'] else "N/A"
+
+        message = (
+            f"📅 <b>RELATÓRIO DIÁRIO ({snapshot['lookback_hours']}h)</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"🕒 <b>Janela UTC:</b> {start_utc} → {end_utc}\n"
+            f"🧾 <b>Registros income:</b> <code>{snapshot['income_count']}</code>\n\n"
+            f"📊 <b>TRADES FECHADOS:</b>\n"
+            f"• Total: <code>{snapshot['trade_count']}</code>\n"
+            f"• Wins/Losses: <code>{snapshot['win_count']}/{snapshot['loss_count']}</code>\n"
+            f"• Win Rate: <code>{snapshot['win_rate']:.1f}%</code>\n"
+            f"• Profit Factor: <code>{profit_factor_text}</code>\n"
+            f"• Média Win: <code>{self._format_usd_brl(snapshot['avg_win'], 4, True)}</code>\n"
+            f"• Média Loss: <code>{self._format_usd_brl(snapshot['avg_loss'], 4, True)}</code>\n"
+            f"• Maior Win: <code>{self._format_usd_brl(snapshot['best_win'], 4, True)}</code>\n"
+            f"• Maior Loss: <code>{self._format_usd_brl(snapshot['worst_loss'], 4, True)}</code>\n"
+            f"• Max Drawdown (realizado): <code>{self._format_usd_brl(-snapshot['max_drawdown'], 4, True)}</code>\n\n"
+            f"{status_emoji} <b>RESULTADO ({status_text}):</b>\n"
+            f"• Realizado (trades): <code>{self._format_usd_brl(snapshot['realized_total'], 4, True)}</code>\n"
+            f"• Comissão: <code>{self._format_usd_brl(snapshot['commission_total'], 4, True)}</code>\n"
+            f"• Funding: <code>{self._format_usd_brl(snapshot['funding_total'], 4, True)}</code>\n"
+            f"• Líquido: <code>{self._format_usd_brl(snapshot['net_after_costs'], 4, True)}</code>\n"
+            f"• Aberto agora: <code>{self._format_usd_brl(snapshot['open_pnl'], 4, True)}</code>\n"
+            f"• Líquido + Aberto: <code>{self._format_usd_brl(snapshot['net_with_open'], 4, True)}</code>\n\n"
+            f"🏆 <b>Top Winner:</b> <code>{top_winner} {self._format_usd_brl(snapshot['top_winner_pnl'], 4, True)}</code>\n"
+            f"📉 <b>Top Loser:</b> <code>{top_loser} {self._format_usd_brl(snapshot['top_loser_pnl'], 4, True)}</code>\n\n"
+            f"🛡️ <b>Risco atual:</b> SL {sl_status} ({config.STOP_LOSS_PERCENT:.2f}%) | "
+            f"Trailing {config.TRAILING_ACTIVATION_PERCENT:.2f}/{config.TRAILING_DISTANCE_PERCENT:.2f}%\n"
+            f"━━━━━━━━━━━━━━━━━━━━━"
+        )
+
+        return self.telegram.send_message(message)
+
+    def _maybe_send_daily_performance_report(self) -> bool:
+        """
+        Dispara relatório diário automático 1x por dia no horário BRT configurado.
+        """
+        if not bool(getattr(config, "DAILY_PERFORMANCE_REPORT_ENABLED", True)):
+            return False
+
+        report_hour = int(getattr(config, "DAILY_PERFORMANCE_REPORT_HOUR_BRT", 23))
+        report_minute = int(getattr(config, "DAILY_PERFORMANCE_REPORT_MINUTE_BRT", 55))
+        now_brt = datetime.now(timezone(timedelta(hours=-3)))
+
+        if (now_brt.hour, now_brt.minute) < (report_hour, report_minute):
+            return False
+
+        report_date = now_brt.strftime("%Y-%m-%d")
+        if self.last_daily_performance_report_date == report_date:
+            return False
+
+        sent = self.send_daily_performance_report(force=True)
+        if sent:
+            self.last_daily_performance_report_date = report_date
+            self.save_state()
+            logger.info(
+                f"📅 Relatório diário enviado ({report_date} BRT às "
+                f"{report_hour:02d}:{report_minute:02d})"
+            )
+        return sent
     
     def send_trades_report(self):
         """
@@ -2884,6 +3093,7 @@ class TradingBot:
             "Use /status para ver status a qualquer momento.\n"
             "Use /portfolio para evolução da carteira.\n"
             "Use /trades para relatório de trades.\n"
+            "Use /dailyreport para relatório diário e controle on/off.\n"
             "Use /apihealth para relatório de saúde.\n"
             "Use /pause para pausar o bot.\n"
             "Use /stop para parar o bot."
@@ -2943,6 +3153,8 @@ class TradingBot:
                         next_terminal_status_time = now + terminal_status_interval
 
                     # Relatórios e manutenção periódica
+                    self._maybe_send_daily_performance_report()
+
                     if now >= next_state_save_time:
                         self.save_state()
                         next_state_save_time = now + state_save_interval

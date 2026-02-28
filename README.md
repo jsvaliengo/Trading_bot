@@ -112,6 +112,10 @@ Você pode padronizar execução por ambiente com variáveis:
 export TRADING_BOT_ENV=prod
 export TRADING_BOT_RUNTIME_DIR=runtime
 export TRADING_BOT_LOG_LEVEL=INFO
+export TRADING_BOT_DAILY_REPORT_ENABLED=true
+export TRADING_BOT_DAILY_REPORT_HOUR_BRT=23
+export TRADING_BOT_DAILY_REPORT_MINUTE_BRT=55
+export TRADING_BOT_DAILY_REPORT_LOOKBACK_HOURS=24
 ```
 
 Arquivos de runtime ficam em `runtime/` por ambiente:
@@ -185,11 +189,52 @@ Se `USE_TESTNET=False`, garanta no `.env` do servidor:
 TRADING_BOT_MAINNET_CONFIRM=eu_sei_o_risco
 ```
 
+Comandos úteis no Telegram:
+- `/dailyreport now` envia relatório de performance das últimas N horas
+- `/dailyreport on` e `/dailyreport off` ligam/desligam envio automático diário
+
 Também foi adicionado CI no GitHub Actions em:
 
 `/.github/workflows/ci.yml`
 
 Ele roda `pytest` em todo `push` e `pull request`.
+
+### Deploy Oracle com rollback automático
+
+Workflow:
+
+`/.github/workflows/deploy-oracle.yml`
+
+Ele:
+1. roda `pytest` no GitHub Actions
+2. cria backup do código atual no servidor (`/home/ubuntu/deploy_backups/trading_bot/...`)
+3. sincroniza o novo código
+4. executa `scripts/update_server.sh`
+5. em falha, faz rollback automático do backup
+6. coleta diagnóstico (processo do bot, `runtime/deploy_info.json` e tail de log)
+
+### Rollback manual (quando quiser voltar rápido)
+
+Workflow manual:
+
+`/.github/workflows/rollback-oracle.yml`
+
+No GitHub, abra **Actions > Rollback Oracle > Run workflow** e:
+- deixe `backup_dir` vazio para usar o último backup
+- ou informe o caminho completo de um backup específico
+
+Também dá para executar direto no servidor:
+
+```bash
+cd ~/trading_bot
+./scripts/rollback_server.sh
+```
+
+Para escolher backup específico:
+
+```bash
+BACKUP_DIR=/home/ubuntu/deploy_backups/trading_bot/20260228-120000-abc1234 ./scripts/rollback_server.sh
+```
 
 ---
 
@@ -250,9 +295,12 @@ trading_bot/
 │   ├── test_connection.py
 │   ├── test_config.py
 │   ├── test_funding.py
+│   ├── rollback_server.sh
 │   └── update_server.sh
 ├── pytest.ini
 ├── .github/workflows/ci.yml
+├── .github/workflows/deploy-oracle.yml
+├── .github/workflows/rollback-oracle.yml
 ├── requirements.txt
 └── README.md
 ```

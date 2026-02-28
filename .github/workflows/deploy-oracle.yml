@@ -147,7 +147,8 @@ jobs:
             REMOTE_PATH="/home/${OCI_USER}/${REMOTE_PATH#~/}"
           fi
 
-          ssh -p "$PORT" "$OCI_USER@$OCI_HOST" "REMOTE_PATH='$REMOTE_PATH' bash -s" <<'EOF'
+          ssh -p "$PORT" "$OCI_USER@$OCI_HOST" \
+            "REMOTE_PATH='$REMOTE_PATH' DEPLOY_SHA='${GITHUB_SHA}' DEPLOY_REF='${GITHUB_REF_NAME}' DEPLOY_ACTOR='${GITHUB_ACTOR}' bash -s" <<'EOF'
           set -euo pipefail
 
           cd "$REMOTE_PATH"
@@ -171,6 +172,9 @@ jobs:
           fi
 
           chmod +x "$SCRIPT_PATH"
+          DEPLOY_SHA="${DEPLOY_SHA:-local}" \
+          DEPLOY_REF="${DEPLOY_REF:-manual}" \
+          DEPLOY_ACTOR="${DEPLOY_ACTOR:-manual}" \
           SKIP_GIT_PULL=1 "./$SCRIPT_PATH"
           EOF
 
@@ -221,5 +225,46 @@ jobs:
             SKIP_GIT_PULL=1 "./$SCRIPT_PATH" || true
           else
             echo "⚠️ update_server.sh não encontrado após rollback."
+          fi
+          EOF
+
+      - name: Collect deploy diagnostics
+        if: always()
+        env:
+          OCI_HOST: ${{ secrets.OCI_HOST }}
+          OCI_USER: ${{ secrets.OCI_USER }}
+          OCI_PORT: ${{ secrets.OCI_PORT }}
+          OCI_PATH: ${{ secrets.OCI_PATH }}
+        run: |
+          set -euo pipefail
+          PORT="${OCI_PORT:-22}"
+          REMOTE_PATH="${OCI_PATH:-/home/ubuntu/trading_bot}"
+          if [[ "$REMOTE_PATH" == "~/"* ]]; then
+            REMOTE_PATH="/home/${OCI_USER}/${REMOTE_PATH#~/}"
+          fi
+
+          ssh -p "$PORT" "$OCI_USER@$OCI_HOST" "REMOTE_PATH='$REMOTE_PATH' bash -s" <<'EOF'
+          set -euo pipefail
+
+          cd "$REMOTE_PATH" || exit 0
+          echo "=== BOT PROCESSOS ==="
+          pgrep -af "python.*-m[[:space:]]+trading_bot\\.core\\.bot" || true
+          echo
+          echo "=== DEPLOY INFO ==="
+          if [[ -f runtime/deploy_info.json ]]; then
+            cat runtime/deploy_info.json
+          else
+            echo "runtime/deploy_info.json não encontrado."
+          fi
+          echo
+          echo "=== LOG (últimas 80 linhas) ==="
+          if [[ -f runtime/trading_bot.prod.log ]]; then
+            tail -n 80 runtime/trading_bot.prod.log
+          elif [[ -f runtime/trading_bot.log ]]; then
+            tail -n 80 runtime/trading_bot.log
+          elif [[ -f trading_bot.log ]]; then
+            tail -n 80 trading_bot.log
+          else
+            echo "Arquivo de log não encontrado."
           fi
           EOF

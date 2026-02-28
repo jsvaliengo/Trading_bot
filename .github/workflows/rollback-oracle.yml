@@ -1,0 +1,131 @@
+name: Rollback Oracle
+
+on:
+  workflow_dispatch:
+    inputs:
+      backup_dir:
+        description: "Caminho completo do backup no servidor (opcional, padrão = último backup)"
+        required: false
+        default: ""
+      skip_restart:
+        description: "Restaurar sem reiniciar bot"
+        required: false
+        type: choice
+        options:
+          - "false"
+          - "true"
+        default: "false"
+
+concurrency:
+  group: rollback-oracle-prod
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  rollback:
+    name: Rollback on Oracle
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Start SSH agent
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.OCI_SSH_KEY }}
+
+      - name: Add Oracle host key
+        env:
+          OCI_HOST: ${{ secrets.OCI_HOST }}
+          OCI_PORT: ${{ secrets.OCI_PORT }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          PORT="${OCI_PORT:-22}"
+          ssh-keyscan -p "$PORT" -H "$OCI_HOST" >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Show available backups
+        env:
+          OCI_HOST: ${{ secrets.OCI_HOST }}
+          OCI_USER: ${{ secrets.OCI_USER }}
+          OCI_PORT: ${{ secrets.OCI_PORT }}
+        run: |
+          set -euo pipefail
+          PORT="${OCI_PORT:-22}"
+          BACKUP_ROOT="/home/${OCI_USER}/deploy_backups/trading_bot"
+          echo "Backups em: $BACKUP_ROOT"
+          ssh -p "$PORT" "$OCI_USER@$OCI_HOST" "ls -1dt '$BACKUP_ROOT'/* 2>/dev/null | head -n 20 || true"
+
+      - name: Upload rollback script
+        env:
+          OCI_HOST: ${{ secrets.OCI_HOST }}
+          OCI_USER: ${{ secrets.OCI_USER }}
+          OCI_PORT: ${{ secrets.OCI_PORT }}
+        run: |
+          set -euo pipefail
+          PORT="${OCI_PORT:-22}"
+          scp -P "$PORT" scripts/rollback_server.sh "$OCI_USER@$OCI_HOST:/tmp/rollback_server.sh"
+
+      - name: Execute rollback
+        env:
+          OCI_HOST: ${{ secrets.OCI_HOST }}
+          OCI_USER: ${{ secrets.OCI_USER }}
+          OCI_PORT: ${{ secrets.OCI_PORT }}
+          OCI_PATH: ${{ secrets.OCI_PATH }}
+          BACKUP_DIR_INPUT: ${{ inputs.backup_dir }}
+          SKIP_RESTART_INPUT: ${{ inputs.skip_restart }}
+        run: |
+          set -euo pipefail
+          PORT="${OCI_PORT:-22}"
+          REMOTE_PATH="${OCI_PATH:-/home/ubuntu/trading_bot}"
+
+          if [[ "$REMOTE_PATH" == "~/"* ]]; then
+            REMOTE_PATH="/home/${OCI_USER}/${REMOTE_PATH#~/}"
+          fi
+
+          ssh -p "$PORT" "$OCI_USER@$OCI_HOST" \
+            "chmod +x /tmp/rollback_server.sh && PROJECT_DIR='$REMOTE_PATH' BACKUP_DIR='$BACKUP_DIR_INPUT' SKIP_RESTART='$SKIP_RESTART_INPUT' /tmp/rollback_server.sh"
+
+      - name: Collect bot status
+        if: always()
+        env:
+          OCI_HOST: ${{ secrets.OCI_HOST }}
+          OCI_USER: ${{ secrets.OCI_USER }}
+          OCI_PORT: ${{ secrets.OCI_PORT }}
+          OCI_PATH: ${{ secrets.OCI_PATH }}
+        run: |
+          set -euo pipefail
+          PORT="${OCI_PORT:-22}"
+          REMOTE_PATH="${OCI_PATH:-/home/ubuntu/trading_bot}"
+          if [[ "$REMOTE_PATH" == "~/"* ]]; then
+            REMOTE_PATH="/home/${OCI_USER}/${REMOTE_PATH#~/}"
+          fi
+
+          ssh -p "$PORT" "$OCI_USER@$OCI_HOST" "REMOTE_PATH='$REMOTE_PATH' bash -s" <<'EOF'
+          set -euo pipefail
+          cd "$REMOTE_PATH" || exit 0
+          echo "=== BOT PROCESSOS ==="
+          pgrep -af "python.*-m[[:space:]]+trading_bot\\.core\\.bot" || true
+          echo
+          echo "=== DEPLOY INFO ==="
+          if [[ -f runtime/deploy_info.json ]]; then
+            cat runtime/deploy_info.json
+          else
+            echo "runtime/deploy_info.json não encontrado."
+          fi
+          echo
+          echo "=== LOG (últimas 80 linhas) ==="
+          if [[ -f runtime/trading_bot.prod.log ]]; then
+            tail -n 80 runtime/trading_bot.prod.log
+          elif [[ -f runtime/trading_bot.log ]]; then
+            tail -n 80 runtime/trading_bot.log
+          elif [[ -f trading_bot.log ]]; then
+            tail -n 80 trading_bot.log
+          else
+            echo "Arquivo de log não encontrado."
+          fi
+          EOF

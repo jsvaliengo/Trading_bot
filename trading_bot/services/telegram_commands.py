@@ -64,6 +64,7 @@ class TelegramCommandHandler:
             '/trades': self.cmd_trades,
             '/lockinfo': self.cmd_lockinfo,
             '/apihealth': self.cmd_apihealth,
+            '/dailyreport': self.cmd_dailyreport,
             '/config': self.cmd_config,
             '/positions': self.cmd_positions,
             '/coins': self.cmd_coins,
@@ -528,6 +529,53 @@ class TelegramCommandHandler:
         except Exception as e:
             self.send_message(f"❌ Erro ao gerar API health: {e}")
 
+    def cmd_dailyreport(self, args: list):
+        """Envia relatório diário consolidado e controla envio automático."""
+        if self.bot is None or self.config is None:
+            self.send_message("❌ Bot/config não disponível")
+            return
+
+        if not hasattr(self.bot, 'send_daily_performance_report'):
+            self.send_message("⚠️ Esta versão do bot não suporta /dailyreport.")
+            return
+
+        if not args:
+            enabled = "ON" if getattr(self.config, "DAILY_PERFORMANCE_REPORT_ENABLED", True) else "OFF"
+            hour = int(getattr(self.config, "DAILY_PERFORMANCE_REPORT_HOUR_BRT", 23))
+            minute = int(getattr(self.config, "DAILY_PERFORMANCE_REPORT_MINUTE_BRT", 55))
+            lookback = int(getattr(self.config, "DAILY_PERFORMANCE_REPORT_LOOKBACK_HOURS", 24))
+            self.send_message(
+                f"📅 <b>RELATÓRIO DIÁRIO</b>\n\n"
+                f"• Automático: <code>{enabled}</code>\n"
+                f"• Horário (BRT): <code>{hour:02d}:{minute:02d}</code>\n"
+                f"• Janela: <code>{lookback}h</code>\n\n"
+                f"Uso:\n"
+                f"• <code>/dailyreport now</code> (enviar agora)\n"
+                f"• <code>/dailyreport on</code> / <code>/dailyreport off</code>"
+            )
+            return
+
+        action = args[0].strip().lower()
+        if action in {"on", "off"}:
+            self.config.DAILY_PERFORMANCE_REPORT_ENABLED = (action == "on")
+            state = "ATIVADO" if self.config.DAILY_PERFORMANCE_REPORT_ENABLED else "DESATIVADO"
+            self.send_message(f"✅ Relatório diário automático <b>{state}</b>.")
+            return
+
+        if action in {"now", "force"}:
+            sent = self.bot.send_daily_performance_report(force=True)
+            if not sent:
+                self.send_message("ℹ️ Não foi possível enviar o relatório agora.")
+            return
+
+        self.send_message(
+            "❌ Opção inválida.\n\n"
+            "Use:\n"
+            "• <code>/dailyreport now</code>\n"
+            "• <code>/dailyreport on</code>\n"
+            "• <code>/dailyreport off</code>"
+        )
+
     def cmd_portfolio(self, args: list):
         """Envia evolução da carteira sob demanda."""
         if self.bot is None:
@@ -987,6 +1035,7 @@ class TelegramCommandHandler:
 /status - Status completo
 /portfolio - Evolução da carteira
 /trades - Relatório de trades
+/dailyreport - Relatório diário (on/off)
 /lockinfo - Status do lock
 /apihealth - Saúde operacional
 /config - Ver configurações
@@ -1009,6 +1058,7 @@ class TelegramCommandHandler:
 <i>Exemplos:</i>
 • <code>/leverage 20</code>
 • <code>/tp 10</code>
+• <code>/dailyreport now</code>
 • <code>/sl off</code>
 • <code>/trailing 0.5 0.25</code>
 """
