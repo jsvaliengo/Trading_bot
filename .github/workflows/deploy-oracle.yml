@@ -45,5 +45,34 @@ jobs:
           PORT="${OCI_PORT:-22}"
           REMOTE_PATH="${OCI_PATH:-/home/ubuntu/trading_bot}"
 
-          ssh -p "$PORT" "$OCI_USER@$OCI_HOST" \
-            "cd '$REMOTE_PATH' && chmod +x scripts/update_server.sh && ./scripts/update_server.sh"
+          # Expande ~/ para caminho absoluto no runner antes de enviar ao servidor.
+          if [[ "$REMOTE_PATH" == "~/"* ]]; then
+            REMOTE_PATH="/home/${OCI_USER}/${REMOTE_PATH#~/}"
+          fi
+
+          ssh -p "$PORT" "$OCI_USER@$OCI_HOST" "REMOTE_PATH='$REMOTE_PATH' bash -s" <<'EOF'
+          set -euo pipefail
+
+          cd "$REMOTE_PATH"
+          echo "Deploy path: $(pwd)"
+          ls -la
+
+          SCRIPT_PATH=""
+          if [[ -f "scripts/update_server.sh" ]]; then
+            SCRIPT_PATH="scripts/update_server.sh"
+          elif [[ -f "update_server.sh" ]]; then
+            SCRIPT_PATH="update_server.sh"
+          else
+            echo "❌ Não encontrei update_server.sh no diretório de deploy."
+            echo "Conteúdo do diretório atual:"
+            ls -la
+            if [[ -d scripts ]]; then
+              echo "Conteúdo de scripts/:"
+              ls -la scripts
+            fi
+            exit 1
+          fi
+
+          chmod +x "$SCRIPT_PATH"
+          "./$SCRIPT_PATH"
+          EOF
