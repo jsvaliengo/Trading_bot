@@ -426,6 +426,12 @@ class TradingConfig:
     DAILY_PERFORMANCE_REPORT_MINUTE_BRT: int = _env_int("TRADING_BOT_DAILY_REPORT_MINUTE_BRT", 55)
     DAILY_PERFORMANCE_REPORT_LOOKBACK_HOURS: int = _env_int("TRADING_BOT_DAILY_REPORT_LOOKBACK_HOURS", 24)
 
+    # Dashboard web de monitoramento (somente leitura)
+    DASHBOARD_HOST: str = os.getenv("TRADING_BOT_DASHBOARD_HOST", "127.0.0.1").strip() or "127.0.0.1"
+    DASHBOARD_PORT: int = _env_int("TRADING_BOT_DASHBOARD_PORT", 8080)
+    DASHBOARD_REFRESH_SECONDS: int = _env_int("TRADING_BOT_DASHBOARD_REFRESH_SECONDS", 10)
+    DASHBOARD_AUTH_TOKEN: str = os.getenv("TRADING_BOT_DASHBOARD_AUTH_TOKEN", "").strip()
+
     # ============================================
     # AJUSTE AUTOMÁTICO DE CAPITAL (DEPÓSITO/SAQUE)
     # ============================================
@@ -709,6 +715,12 @@ class TradingConfig:
 
         if self.DAILY_PERFORMANCE_REPORT_LOOKBACK_HOURS < 1 or self.DAILY_PERFORMANCE_REPORT_LOOKBACK_HOURS > 168:
             errors.append("⚠️  ALERTA: DAILY_PERFORMANCE_REPORT_LOOKBACK_HOURS deve estar entre 1 e 168!")
+
+        if self.DASHBOARD_PORT < 1 or self.DASHBOARD_PORT > 65535:
+            errors.append("⚠️  ALERTA: DASHBOARD_PORT deve estar entre 1 e 65535!")
+
+        if self.DASHBOARD_REFRESH_SECONDS < 2 or self.DASHBOARD_REFRESH_SECONDS > 300:
+            errors.append("⚠️  ALERTA: DASHBOARD_REFRESH_SECONDS deve estar entre 2 e 300!")
 
         if self.CAPITAL_TRANSFER_MIN_ABS_USDT < 0:
             errors.append("⚠️  ALERTA: CAPITAL_TRANSFER_MIN_ABS_USDT deve ser >= 0!")

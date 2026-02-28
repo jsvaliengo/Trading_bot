@@ -116,6 +116,10 @@ export TRADING_BOT_DAILY_REPORT_ENABLED=true
 export TRADING_BOT_DAILY_REPORT_HOUR_BRT=23
 export TRADING_BOT_DAILY_REPORT_MINUTE_BRT=55
 export TRADING_BOT_DAILY_REPORT_LOOKBACK_HOURS=24
+export TRADING_BOT_DASHBOARD_HOST=127.0.0.1
+export TRADING_BOT_DASHBOARD_PORT=8080
+export TRADING_BOT_DASHBOARD_REFRESH_SECONDS=10
+export TRADING_BOT_DASHBOARD_AUTH_TOKEN=
 ```
 
 Arquivos de runtime ficam em `runtime/` por ambiente:
@@ -160,6 +164,35 @@ Em MAINNET sem terminal interativo (server/CI), defina antes:
 ```bash
 TRADING_BOT_MAINNET_CONFIRM=eu_sei_o_risco
 ```
+
+### Dashboard Web (monitoramento em tempo real)
+
+Você pode subir uma página web read-only para acompanhar posições, P&L e saúde do bot:
+
+```bash
+python -m trading_bot.web.dashboard
+```
+
+Parâmetros úteis:
+
+```bash
+python -m trading_bot.web.dashboard --host 127.0.0.1 --port 8080 --refresh-seconds 10
+```
+
+Para proteger com token:
+
+```bash
+python -m trading_bot.web.dashboard --token "SEU_TOKEN_FORTE"
+```
+
+Depois acesse:
+- sem token: `http://127.0.0.1:8080`
+- com token: `http://127.0.0.1:8080/?token=SEU_TOKEN_FORTE`
+
+Recomendação para Oracle:
+- mantenha bind em `127.0.0.1`
+- exponha via Nginx/Cloudflare Tunnel com autenticação
+- evite publicar porta aberta sem token
 
 ---
 
@@ -285,12 +318,17 @@ trading_bot/
 │   │   └── strategy.py
 │   ├── infra/
 │   │   └── binance_client.py
+│   ├── web/
+│   │   ├── __init__.py
+│   │   └── dashboard.py
 │   └── services/
 │       ├── notifications.py
 │       ├── pair_selector.py
 │       └── telegram_commands.py
 ├── tests/
-│   └── test_bot_regressions.py
+│   ├── test_bot_regressions.py
+│   ├── test_dashboard_regressions.py
+│   └── test_services_regressions.py
 ├── scripts/
 │   ├── test_connection.py
 │   ├── test_config.py
