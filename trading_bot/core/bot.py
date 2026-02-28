@@ -3154,11 +3154,29 @@ def main():
     print(f"   • Take Profit: {config.TAKE_PROFIT_PERCENT}%")
     print()
     
-    # Confirmação
+    # Confirmação para MAINNET
     if not config.USE_TESTNET:
-        resp = input("⚠️  ATENÇÃO: Modo MAINNET (dinheiro real)! Confirma? (sim/não): ")
-        if resp.lower() != 'sim':
-            print("Operação cancelada.")
+        auto_confirm_raw = os.getenv("TRADING_BOT_MAINNET_CONFIRM", "").strip().lower()
+        auto_confirm_enabled = auto_confirm_raw in {
+            "sim",
+            "yes",
+            "true",
+            "1",
+            "eu_sei_o_risco",
+        }
+
+        if auto_confirm_enabled:
+            print("✅ Confirmação MAINNET via TRADING_BOT_MAINNET_CONFIRM.")
+        elif sys.stdin.isatty():
+            resp = input("⚠️  ATENÇÃO: Modo MAINNET (dinheiro real)! Confirma? (sim/não): ")
+            if resp.strip().lower() != 'sim':
+                print("Operação cancelada.")
+                return
+        else:
+            print(
+                "❌ Execução não interativa em MAINNET sem confirmação explícita.\n"
+                "Defina TRADING_BOT_MAINNET_CONFIRM=eu_sei_o_risco no ambiente/.env."
+            )
             return
     
     # Cria e executa o bot
