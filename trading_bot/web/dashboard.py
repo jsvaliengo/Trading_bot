@@ -770,11 +770,29 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
       gap: 3px;
       align-items: end;
       min-height: 48px;
+      position: relative;
     }
     .bar {
       border-radius: 4px 4px 2px 2px;
       background: linear-gradient(180deg, rgba(71, 211, 255, 0.9), rgba(71, 211, 255, 0.2));
       min-height: 4px;
+      cursor: pointer;
+    }
+    .history-tooltip {
+      position: fixed;
+      z-index: 1000;
+      pointer-events: none;
+      background: rgba(235, 241, 247, 0.96);
+      color: #172230;
+      border: 1px solid rgba(23, 34, 48, 0.18);
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: .82rem;
+      line-height: 1.3;
+      box-shadow: 0 10px 28px rgba(0, 0, 0, 0.25);
+      display: none;
+      max-width: 260px;
+      white-space: nowrap;
     }
     .error-box {
       background: rgba(255, 111, 97, 0.10);
@@ -1172,10 +1190,44 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
       }
     }
 
+    function ensureHistoryTooltip() {
+      let tip = document.getElementById("history-tooltip");
+      if (!tip) {
+        tip = document.createElement("div");
+        tip.id = "history-tooltip";
+        tip.className = "history-tooltip";
+        document.body.appendChild(tip);
+      }
+      return tip;
+    }
+
+    function showHistoryTooltip(evt, title, valueText) {
+      const tip = ensureHistoryTooltip();
+      tip.innerHTML = `<div>${escapeHtml(title)}</div><div><strong>${escapeHtml(valueText)}</strong></div>`;
+      tip.style.display = "block";
+      const pad = 12;
+      const rect = tip.getBoundingClientRect();
+      let x = evt.clientX + 14;
+      let y = evt.clientY - rect.height - 14;
+      if (x + rect.width + pad > window.innerWidth) {
+        x = evt.clientX - rect.width - 14;
+      }
+      if (x < pad) x = pad;
+      if (y < pad) y = evt.clientY + 18;
+      tip.style.left = `${x}px`;
+      tip.style.top = `${y}px`;
+    }
+
+    function hideHistoryTooltip() {
+      const tip = document.getElementById("history-tooltip");
+      if (tip) tip.style.display = "none";
+    }
+
     function renderHistory(points, rate) {
       const bars = document.getElementById("history-bars");
       const label = document.getElementById("history-label");
       bars.innerHTML = "";
+      hideHistoryTooltip();
 
       if (!Array.isArray(points) || points.length === 0) {
         label.textContent = "Sem snapshots no state file";
@@ -1195,6 +1247,19 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
         bar.style.background = val >= 0
           ? "linear-gradient(180deg, rgba(63,226,127,0.92), rgba(63,226,127,0.2))"
           : "linear-gradient(180deg, rgba(255,111,97,0.92), rgba(255,111,97,0.2))";
+
+        let when = "Snapshot";
+        if (p && p.timestamp) {
+          const dt = new Date(String(p.timestamp));
+          if (!Number.isNaN(dt.getTime())) {
+            when = dt.toLocaleString("pt-BR");
+          }
+        }
+        const valText = formatMoney(val, rate, 2);
+        bar.addEventListener("mouseenter", (evt) => showHistoryTooltip(evt, when, valText));
+        bar.addEventListener("mousemove", (evt) => showHistoryTooltip(evt, when, valText));
+        bar.addEventListener("mouseleave", () => hideHistoryTooltip());
+
         bars.appendChild(bar);
       });
 
@@ -1232,7 +1297,15 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
       });
     }
 
-    function drawLineChart(svgId, captionId, points, color, valueKey = "value", asPercent = false) {
+    function drawLineChart(
+      svgId,
+      captionId,
+      points,
+      color,
+      valueKey = "value",
+      asPercent = false,
+      seriesLabel = "Cumulative PNL"
+    ) {
       const svg = document.getElementById(svgId);
       const caption = document.getElementById(captionId);
 
@@ -1278,6 +1351,100 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
         <line x1="${padX}" y1="${yZero.toFixed(2)}" x2="${width - padX}" y2="${yZero.toFixed(2)}" stroke="rgba(248,193,75,0.35)" stroke-width="1.2" />
         <path d="${d.trim()}" fill="none" stroke="${color}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />
       `;
+
+      const ns = "http://www.w3.org/2000/svg";
+      const hoverGroup = document.createElementNS(ns, "g");
+      hoverGroup.style.display = "none";
+
+      const hoverLine = document.createElementNS(ns, "line");
+      hoverLine.setAttribute("stroke", "rgba(240,245,248,0.68)");
+      hoverLine.setAttribute("stroke-width", "1.5");
+      hoverLine.setAttribute("stroke-dasharray", "4 4");
+
+      const hoverDot = document.createElementNS(ns, "circle");
+      hoverDot.setAttribute("r", "6.5");
+      hoverDot.setAttribute("fill", color);
+      hoverDot.setAttribute("stroke", "rgba(240,245,248,0.92)");
+      hoverDot.setAttribute("stroke-width", "2");
+
+      const tipRect = document.createElementNS(ns, "rect");
+      tipRect.setAttribute("rx", "8");
+      tipRect.setAttribute("ry", "8");
+      tipRect.setAttribute("width", "220");
+      tipRect.setAttribute("height", "56");
+      tipRect.setAttribute("fill", "rgba(235,241,247,0.95)");
+
+      const tipDate = document.createElementNS(ns, "text");
+      tipDate.setAttribute("font-size", "14");
+      tipDate.setAttribute("font-family", "Space Grotesk, sans-serif");
+      tipDate.setAttribute("fill", "#172230");
+
+      const tipValue = document.createElementNS(ns, "text");
+      tipValue.setAttribute("font-size", "14");
+      tipValue.setAttribute("font-family", "Space Grotesk, sans-serif");
+      tipValue.setAttribute("fill", "#172230");
+
+      hoverGroup.appendChild(hoverLine);
+      hoverGroup.appendChild(hoverDot);
+      hoverGroup.appendChild(tipRect);
+      hoverGroup.appendChild(tipDate);
+      hoverGroup.appendChild(tipValue);
+      svg.appendChild(hoverGroup);
+
+      function formatHoverValue(v) {
+        const sign = v > 0 ? "+" : "";
+        if (asPercent) return `${sign}${v.toFixed(2)}%`;
+        return `${sign}${v.toFixed(2)} USD`;
+      }
+
+      function showAtIndex(index) {
+        const clamped = Math.max(0, Math.min(values.length - 1, index));
+        const px = toX(clamped);
+        const py = toY(values[clamped]);
+        const pDate = String((points[clamped] && points[clamped].date) || "-");
+        const pValue = Number((points[clamped] && points[clamped][valueKey]) || 0);
+
+        hoverLine.setAttribute("x1", String(px));
+        hoverLine.setAttribute("x2", String(px));
+        hoverLine.setAttribute("y1", String(padY));
+        hoverLine.setAttribute("y2", String(height - padY));
+
+        hoverDot.setAttribute("cx", String(px));
+        hoverDot.setAttribute("cy", String(py));
+
+        let tx = px + 12;
+        let ty = py - 62;
+        const tw = 220;
+        const th = 56;
+        if (tx + tw > width - 6) tx = px - tw - 12;
+        if (tx < 6) tx = 6;
+        if (ty < 6) ty = py + 10;
+        if (ty + th > height - 6) ty = height - th - 6;
+
+        tipRect.setAttribute("x", String(tx));
+        tipRect.setAttribute("y", String(ty));
+        tipDate.setAttribute("x", String(tx + 10));
+        tipDate.setAttribute("y", String(ty + 21));
+        tipDate.textContent = pDate;
+        tipValue.setAttribute("x", String(tx + 10));
+        tipValue.setAttribute("y", String(ty + 42));
+        tipValue.textContent = `${seriesLabel}: ${formatHoverValue(pValue)}`;
+
+        hoverGroup.style.display = "block";
+      }
+
+      svg.addEventListener("mousemove", (evt) => {
+        const rect = svg.getBoundingClientRect();
+        if (!rect.width || !rect.height) return;
+        const xSvg = ((evt.clientX - rect.left) / rect.width) * width;
+        const step = innerW / Math.max(1, values.length - 1);
+        const idx = Math.round((xSvg - padX) / Math.max(step, 1e-9));
+        showAtIndex(idx);
+      });
+
+      svg.addEventListener("mouseleave", () => {
+        hoverGroup.style.display = "none";
+      });
 
       const first = values[0];
       const last = values[values.length - 1];
@@ -1366,8 +1533,24 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
 
       document.getElementById("calendar-month").textContent = `${periodStart} → ${periodEnd}`;
       renderCalendar(analytics.daily_series || [], rate);
-      drawLineChart("chart-cum-usd", "chart-cum-usd-caption", analytics.cumulative_usd || [], "#f8c14b", "value", false);
-      drawLineChart("chart-cum-pct", "chart-cum-pct-caption", analytics.cumulative_pct || [], "#47d3ff", "value", true);
+      drawLineChart(
+        "chart-cum-usd",
+        "chart-cum-usd-caption",
+        analytics.cumulative_usd || [],
+        "#f8c14b",
+        "value",
+        false,
+        "Cumulative PNL"
+      );
+      drawLineChart(
+        "chart-cum-pct",
+        "chart-cum-pct-caption",
+        analytics.cumulative_pct || [],
+        "#47d3ff",
+        "value",
+        true,
+        "Cumulative PNL %"
+      );
     }
 
     async function refreshAnalytics() {
