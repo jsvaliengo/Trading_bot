@@ -15,7 +15,6 @@ COMO CONFIGURAR:
 
 import logging
 import requests
-from typing import Optional
 from datetime import datetime, timezone, timedelta
 
 logger = logging.getLogger(__name__)
@@ -393,20 +392,6 @@ class TelegramNotifier:
         
         return self.send_message(message)
     
-    def send_error_alert(self, error_message: str) -> bool:
-        """
-        Envia alerta de erro.
-        """
-        message = f"""
-⚠️ <b>ALERTA DE ERRO</b>
-━━━━━━━━━━━━━━━━━━━━━
-
-<code>{error_message}</code>
-
-━━━━━━━━━━━━━━━━━━━━━"""
-        
-        return self.send_message(message)
-    
     def send_position_closed(
         self,
         symbol: str,
@@ -745,7 +730,7 @@ class TelegramNotifier:
                 )
             message += f"\n   <b>Total: <code>{self._format_usd_brl(total_win_value, 2, True)}</code></b>"
         else:
-            message += f"\n✅ <b>TRADES POSITIVOS:</b> Nenhum"
+            message += "\n✅ <b>TRADES POSITIVOS:</b> Nenhum"
         
         message += "\n"
         
@@ -759,7 +744,7 @@ class TelegramNotifier:
                 )
             message += f"\n   <b>Total: <code>{self._format_usd_brl(total_loss_value, 2, True)}</code></b>"
         else:
-            message += f"\n❌ <b>TRADES NEGATIVOS:</b> Nenhum"
+            message += "\n❌ <b>TRADES NEGATIVOS:</b> Nenhum"
         
         # RESUMO
         message += f"""

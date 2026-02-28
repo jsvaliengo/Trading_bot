@@ -14,7 +14,29 @@ permissions:
   contents: read
 
 jobs:
+  tests:
+    name: Run tests before deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run pytest
+        run: pytest -q
+
   deploy:
+    name: Deploy to Oracle
+    needs: tests
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -36,6 +58,46 @@ jobs:
           PORT="${OCI_PORT:-22}"
           ssh-keyscan -p "$PORT" -H "$OCI_HOST" >> ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
+
+      - name: Backup current server code
+        id: backup
+        env:
+          OCI_HOST: ${{ secrets.OCI_HOST }}
+          OCI_USER: ${{ secrets.OCI_USER }}
+          OCI_PORT: ${{ secrets.OCI_PORT }}
+          OCI_PATH: ${{ secrets.OCI_PATH }}
+        run: |
+          set -euo pipefail
+          PORT="${OCI_PORT:-22}"
+          REMOTE_PATH="${OCI_PATH:-/home/ubuntu/trading_bot}"
+
+          # Expande ~/ para caminho absoluto.
+          if [[ "$REMOTE_PATH" == "~/"* ]]; then
+            REMOTE_PATH="/home/${OCI_USER}/${REMOTE_PATH#~/}"
+          fi
+
+          BACKUP_ROOT="/home/${OCI_USER}/deploy_backups/trading_bot"
+          BACKUP_DIR="${BACKUP_ROOT}/$(date +%Y%m%d-%H%M%S)-${GITHUB_SHA::7}"
+
+          ssh -p "$PORT" "$OCI_USER@$OCI_HOST" "REMOTE_PATH='$REMOTE_PATH' BACKUP_DIR='$BACKUP_DIR' bash -s" <<'EOF'
+          set -euo pipefail
+          mkdir -p "$BACKUP_DIR"
+          if [[ -d "$REMOTE_PATH" ]]; then
+            rsync -a --delete \
+              --exclude ".git/" \
+              --exclude ".venv/" \
+              --exclude "venv/" \
+              --exclude "__pycache__/" \
+              --exclude ".pytest_cache/" \
+              --exclude ".env" \
+              --exclude "runtime/" \
+              --exclude "deploy_backups/" \
+              "$REMOTE_PATH/" "$BACKUP_DIR/"
+          fi
+          EOF
+
+          echo "remote_path=$REMOTE_PATH" >> "$GITHUB_OUTPUT"
+          echo "backup_dir=$BACKUP_DIR" >> "$GITHUB_OUTPUT"
 
       - name: Sync project files to server
         env:
@@ -65,6 +127,7 @@ jobs:
             --exclude ".pytest_cache/" \
             --exclude ".env" \
             --exclude "runtime/" \
+            --exclude "deploy_backups/" \
             -e "ssh -p $PORT" \
             ./ "$OCI_USER@$OCI_HOST:$REMOTE_PATH/"
 
@@ -108,5 +171,55 @@ jobs:
           fi
 
           chmod +x "$SCRIPT_PATH"
-          "./$SCRIPT_PATH"
+          SKIP_GIT_PULL=1 "./$SCRIPT_PATH"
+          EOF
+
+      - name: Rollback on failure
+        if: failure()
+        env:
+          OCI_HOST: ${{ secrets.OCI_HOST }}
+          OCI_USER: ${{ secrets.OCI_USER }}
+          OCI_PORT: ${{ secrets.OCI_PORT }}
+          REMOTE_PATH: ${{ steps.backup.outputs.remote_path }}
+          BACKUP_DIR: ${{ steps.backup.outputs.backup_dir }}
+        run: |
+          set -euo pipefail
+          PORT="${OCI_PORT:-22}"
+
+          ssh -p "$PORT" "$OCI_USER@$OCI_HOST" "REMOTE_PATH='$REMOTE_PATH' BACKUP_DIR='$BACKUP_DIR' bash -s" <<'EOF'
+          set -euo pipefail
+
+          if [[ -z "${BACKUP_DIR:-}" || ! -d "$BACKUP_DIR" ]]; then
+            echo "⚠️ Backup não encontrado. Pulando rollback."
+            exit 0
+          fi
+
+          echo "🔄 Rollback: $BACKUP_DIR -> $REMOTE_PATH"
+          mkdir -p "$REMOTE_PATH"
+
+          rsync -a --delete \
+            --exclude ".git/" \
+            --exclude ".venv/" \
+            --exclude "venv/" \
+            --exclude "__pycache__/" \
+            --exclude ".pytest_cache/" \
+            --exclude ".env" \
+            --exclude "runtime/" \
+            --exclude "deploy_backups/" \
+            "$BACKUP_DIR/" "$REMOTE_PATH/"
+
+          cd "$REMOTE_PATH"
+          SCRIPT_PATH=""
+          if [[ -f "scripts/update_server.sh" ]]; then
+            SCRIPT_PATH="scripts/update_server.sh"
+          elif [[ -f "update_server.sh" ]]; then
+            SCRIPT_PATH="update_server.sh"
+          fi
+
+          if [[ -n "$SCRIPT_PATH" ]]; then
+            chmod +x "$SCRIPT_PATH"
+            SKIP_GIT_PULL=1 "./$SCRIPT_PATH" || true
+          else
+            echo "⚠️ update_server.sh não encontrado após rollback."
+          fi
           EOF

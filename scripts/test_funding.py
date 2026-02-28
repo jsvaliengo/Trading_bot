@@ -81,7 +81,7 @@ try:
             print(f"      Total: ${data['total']:.4f}")
             
             # Mostra últimos 3 de cada tipo
-            print(f"      Últimos registros:")
+            print("      Últimos registros:")
             for item in data['items'][-3:]:
                 print(f"         • {item['time']} | {item['symbol']}: ${item['amount']:.4f}")
         
