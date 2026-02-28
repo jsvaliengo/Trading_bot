@@ -429,7 +429,7 @@ class TradingConfig:
     # Dashboard web de monitoramento (somente leitura)
     DASHBOARD_HOST: str = os.getenv("TRADING_BOT_DASHBOARD_HOST", "127.0.0.1").strip() or "127.0.0.1"
     DASHBOARD_PORT: int = _env_int("TRADING_BOT_DASHBOARD_PORT", 8080)
-    DASHBOARD_REFRESH_SECONDS: int = _env_int("TRADING_BOT_DASHBOARD_REFRESH_SECONDS", 10)
+    DASHBOARD_REFRESH_SECONDS: int = _env_int("TRADING_BOT_DASHBOARD_REFRESH_SECONDS", 5)
     DASHBOARD_AUTH_TOKEN: str = os.getenv("TRADING_BOT_DASHBOARD_AUTH_TOKEN", "").strip()
 
     # ============================================
