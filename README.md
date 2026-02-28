@@ -1,6 +1,6 @@
 # 🤖 Bot de Trading - Estratégia Hedge + DCA
 
-Bot de trading automatizado para Binance Futures inspirado na estratégia do CoinTech2U.
+Bot de trading automatizado para Binance Futures.
 
 ## ⚠️ AVISO IMPORTANTE
 
