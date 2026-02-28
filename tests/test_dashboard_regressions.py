@@ -90,6 +90,16 @@ def test_dashboard_collector_includes_trailing_flags_from_state(tmp_path):
                 "symbols": [],
             }
 
+        def get_income_history(self, limit=1000, start_time=None):
+            return [
+                # Dia positivo
+                {"incomeType": "REALIZED_PNL", "income": "3.0", "time": 1740700000000},
+                {"incomeType": "COMMISSION", "income": "-0.5", "time": 1740700000000},
+                # Dia negativo
+                {"incomeType": "REALIZED_PNL", "income": "-2.0", "time": 1740786400000},
+                {"incomeType": "FUNDING_FEE", "income": "-0.1", "time": 1740786400000},
+            ]
+
     collector = DashboardDataCollector(
         state_file_path=str(state_file),
         exchange=ExchangeStub(),
@@ -105,4 +115,43 @@ def test_dashboard_collector_includes_trailing_flags_from_state(tmp_path):
     assert data["positions"][0]["trailing_active"] is True
     assert data["positions"][0]["peak_price"] == 2800.0
     assert data["fx"]["usd_brl"] == 5.25
+    assert "analytics" in data
+    assert len(data["analytics"]["daily_series"]) == 30
+    assert len(data["analytics"]["month_days"]) >= 28
+    assert len(data["analytics"]["cumulative_usd"]) == 30
+    assert "period_usd" in data["analytics"]["pnl"]
 
+
+def test_dashboard_collector_respects_custom_date_range(tmp_path):
+    state_file = tmp_path / "bot_state.test.json"
+    state_file.write_text(json.dumps({"saved_at": "2026-02-28T12:00:00+00:00"}), encoding="utf-8")
+
+    class ExchangeStub:
+        def get_account_info(self):
+            return {}
+
+        def get_daily_pnl_from_binance(self):
+            return {}
+
+        def get_open_positions(self):
+            return []
+
+        def get_retry_stats_report(self, reset=False):
+            return {}
+
+        def get_order_stats_report(self, reset=False):
+            return {}
+
+        def get_income_history(self, limit=1000, start_time=None):
+            return []
+
+    collector = DashboardDataCollector(
+        state_file_path=str(state_file),
+        exchange=ExchangeStub(),
+        fx_rate_provider=lambda: 5.0,
+    )
+    data = collector.collect(start_date_str="2026-01-01", end_date_str="2026-01-10")
+
+    assert data["analytics"]["start_date"] == "2026-01-01"
+    assert data["analytics"]["end_date"] == "2026-01-10"
+    assert len(data["analytics"]["daily_series"]) == 10

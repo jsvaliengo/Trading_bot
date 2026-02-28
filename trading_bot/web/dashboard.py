@@ -10,7 +10,8 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-from datetime import datetime, timezone
+from collections import defaultdict
+from datetime import date, datetime, timedelta, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -23,6 +24,7 @@ from ..core.config import config
 from ..infra.binance_client import BinanceConnection
 
 logger = logging.getLogger(__name__)
+BRT = timezone(timedelta(hours=-3))
 
 
 def _to_float(value: Any, default: float = 0.0) -> float:
@@ -47,6 +49,15 @@ def _parse_iso_datetime(raw: Any) -> datetime | None:
         if text.endswith("Z"):
             text = text[:-1] + "+00:00"
         return datetime.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def _parse_date_yyyy_mm_dd(raw: Any) -> date | None:
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    try:
+        return datetime.strptime(raw.strip(), "%Y-%m-%d").date()
     except ValueError:
         return None
 
@@ -136,6 +147,9 @@ class DashboardDataCollector:
         self._exchange = exchange
         self._exchange_factory = exchange_factory or BinanceConnection
         self._fx_rate_provider = fx_rate_provider or UsdBrlRateProvider().get_rate
+        self._income_cache_payload: List[Dict[str, Any]] = []
+        self._income_cache_at: datetime | None = None
+        self._income_cache_key: tuple[int, int] | None = None
 
     def _get_exchange(self):
         if self._exchange is not None:
@@ -188,9 +202,242 @@ class DashboardDataCollector:
         normalized.sort(key=lambda item: abs(item["unrealized_pnl"]), reverse=True)
         return normalized
 
-    def collect(self) -> Dict[str, Any]:
+    def _get_income_events(
+        self,
+        exchange: Any,
+        start_ms: int,
+        end_ms: int,
+        cache_ttl_seconds: int = 60,
+    ) -> List[Dict[str, Any]]:
+        now_utc = datetime.now(timezone.utc)
+        cache_key = (int(start_ms), int(end_ms))
+
+        if self._income_cache_at is not None and self._income_cache_key == cache_key:
+            elapsed = (now_utc - self._income_cache_at).total_seconds()
+            if elapsed < cache_ttl_seconds:
+                return self._income_cache_payload
+
+        items: List[Dict[str, Any]] = []
+        seen = set()
+        cursor = int(start_ms)
+        max_loops = 20
+
+        for _ in range(max_loops):
+            batch = exchange.get_income_history(limit=1000, start_time=cursor)
+            if not isinstance(batch, list) or not batch:
+                break
+
+            max_batch_ts = cursor
+            for item in batch:
+                ts = _to_int(item.get("time"), 0)
+                if ts <= 0:
+                    continue
+                if ts < start_ms or ts > end_ms:
+                    continue
+
+                unique_id = (
+                    ts,
+                    str(item.get("incomeType", "")),
+                    str(item.get("symbol", "")),
+                    str(item.get("income", "")),
+                    str(item.get("asset", "")),
+                    str(item.get("tranId", "")),
+                )
+                if unique_id in seen:
+                    continue
+                seen.add(unique_id)
+                items.append(item)
+                if ts > max_batch_ts:
+                    max_batch_ts = ts
+
+            if max_batch_ts <= cursor:
+                break
+            cursor = max_batch_ts + 1
+            if cursor > end_ms:
+                break
+
+        self._income_cache_payload = items
+        self._income_cache_at = now_utc
+        self._income_cache_key = cache_key
+        return items
+
+    def _build_pnl_analytics(
+        self,
+        exchange: Any | None,
+        state_payload: Dict[str, Any],
+        errors: List[str],
+        start_date: date,
+        end_date: date,
+    ) -> Dict[str, Any]:
+        total_days = max(1, (end_date - start_date).days + 1)
+        day_net: Dict[str, float] = defaultdict(float)
+        realized_total = 0.0
+        commission_total = 0.0
+        funding_total = 0.0
+        trades_win_count = 0
+        trades_loss_count = 0
+        trades_breakeven_count = 0
+
+        if exchange is not None and hasattr(exchange, "get_income_history"):
+            try:
+                start_ms = int(datetime.combine(start_date, datetime.min.time(), tzinfo=BRT).astimezone(timezone.utc).timestamp() * 1000)
+                end_ms = int(datetime.combine(end_date, datetime.max.time(), tzinfo=BRT).astimezone(timezone.utc).timestamp() * 1000)
+                income_items = self._get_income_events(
+                    exchange,
+                    start_ms=start_ms,
+                    end_ms=end_ms,
+                    cache_ttl_seconds=60,
+                )
+                for item in income_items:
+                    try:
+                        income_type = str(item.get("incomeType", "") or "")
+                        if income_type not in {"REALIZED_PNL", "COMMISSION", "FUNDING_FEE"}:
+                            continue
+
+                        amount = _to_float(item.get("income"), 0.0)
+                        ts_ms = _to_int(item.get("time"), 0)
+                        if ts_ms <= 0:
+                            continue
+
+                        day_local = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).astimezone(BRT).date()
+                        if day_local < start_date or day_local > end_date:
+                            continue
+
+                        day_key = day_local.strftime("%Y-%m-%d")
+                        day_net[day_key] += amount
+                        if income_type == "REALIZED_PNL":
+                            realized_total += amount
+                            if amount > 0:
+                                trades_win_count += 1
+                            elif amount < 0:
+                                trades_loss_count += 1
+                            else:
+                                trades_breakeven_count += 1
+                        elif income_type == "COMMISSION":
+                            commission_total += amount
+                        elif income_type == "FUNDING_FEE":
+                            funding_total += amount
+                    except Exception:
+                        continue
+            except Exception as exc:
+                errors.append(f"erro em get_income_history (analytics): {exc}")
+
+        trailing_days: List[Dict[str, Any]] = []
+        for offset in range(total_days):
+            day = start_date + timedelta(days=offset)
+            key = day.strftime("%Y-%m-%d")
+            trailing_days.append(
+                {
+                    "date": key,
+                    "day": day.day,
+                    "weekday": day.weekday(),  # segunda=0
+                    "pnl": round(day_net.get(key, 0.0), 8),
+                }
+            )
+
+        month_start = start_date.replace(day=1)
+        next_month = (month_start.replace(day=28) + timedelta(days=4)).replace(day=1)
+        days_in_month = (next_month - month_start).days
+        month_days: List[Dict[str, Any]] = []
+        for day_num in range(1, days_in_month + 1):
+            day = month_start.replace(day=day_num)
+            key = day.strftime("%Y-%m-%d")
+            month_days.append(
+                {
+                    "date": key,
+                    "day": day_num,
+                    "weekday": day.weekday(),
+                    "pnl": round(day_net.get(key, 0.0), 8),
+                }
+            )
+
+        pnl_period = sum(item["pnl"] for item in trailing_days)
+
+        initial_capital = _to_float(state_payload.get("initial_capital"), 0.0)
+        lifetime_usd = _to_float(state_payload.get("total_pnl"), 0.0)
+
+        def _pct(value: float) -> float:
+            if initial_capital <= 0:
+                return 0.0
+            return (value / initial_capital) * 100.0
+
+        positive_days = [item["pnl"] for item in trailing_days if item["pnl"] > 0]
+        negative_days = [item["pnl"] for item in trailing_days if item["pnl"] < 0]
+        breakeven_days = [item["pnl"] for item in trailing_days if item["pnl"] == 0]
+
+        total_profit = sum(positive_days)
+        total_loss = sum(negative_days)
+        avg_profit = total_profit / len(positive_days) if positive_days else 0.0
+        avg_loss_abs = abs(total_loss) / len(negative_days) if negative_days else 0.0
+        pl_ratio = (avg_profit / avg_loss_abs) if avg_loss_abs > 0 else None
+
+        cumulative_usd: List[Dict[str, Any]] = []
+        cumulative_pct: List[Dict[str, Any]] = []
+        running = 0.0
+        for item in trailing_days:
+            running += item["pnl"]
+            cumulative_usd.append({"date": item["date"], "value": round(running, 8)})
+            cumulative_pct.append({"date": item["date"], "value": round(_pct(running), 8)})
+
+        return {
+            "window_days": total_days,
+            "month_label": month_start.strftime("%Y-%m"),
+            "start_date": start_date.strftime("%Y-%m-%d"),
+            "end_date": end_date.strftime("%Y-%m-%d"),
+            "month_days": month_days,
+            "daily_series": trailing_days,
+            "cumulative_usd": cumulative_usd,
+            "cumulative_pct": cumulative_pct,
+            "summary": {
+                "total_profit_usd": total_profit,
+                "total_loss_usd": total_loss,
+                "net_period_usd": pnl_period,
+                "winning_days": len(positive_days),
+                "losing_days": len(negative_days),
+                "breakeven_days": len(breakeven_days),
+                "avg_profit_usd": avg_profit,
+                "avg_loss_usd": -avg_loss_abs if avg_loss_abs > 0 else 0.0,
+                "profit_loss_ratio": pl_ratio,
+                "realized_total_usd": realized_total,
+                "commission_total_usd": commission_total,
+                "funding_total_usd": funding_total,
+                "net_after_costs_usd": realized_total + commission_total + funding_total,
+                "trades_win_count": trades_win_count,
+                "trades_loss_count": trades_loss_count,
+                "trades_breakeven_count": trades_breakeven_count,
+                "trades_total_count": trades_win_count + trades_loss_count + trades_breakeven_count,
+            },
+            "pnl": {
+                "period_usd": pnl_period,
+                "period_pct": _pct(pnl_period),
+                "lifetime_usd": lifetime_usd,
+                "lifetime_pct": _pct(lifetime_usd),
+            },
+        }
+
+    def collect(self, start_date_str: str = "", end_date_str: str = "") -> Dict[str, Any]:
         now = datetime.now(timezone.utc)
         errors: List[str] = []
+        now_brt = datetime.now(BRT).date()
+
+        parsed_start = _parse_date_yyyy_mm_dd(start_date_str)
+        parsed_end = _parse_date_yyyy_mm_dd(end_date_str)
+
+        if parsed_start is None and parsed_end is None:
+            end_date = now_brt
+            start_date = end_date - timedelta(days=29)
+        else:
+            end_date = parsed_end or now_brt
+            start_date = parsed_start or (end_date - timedelta(days=29))
+
+        if start_date > end_date:
+            start_date, end_date = end_date, start_date
+
+        max_span_days = 370
+        span_days = (end_date - start_date).days + 1
+        if span_days > max_span_days:
+            start_date = end_date - timedelta(days=max_span_days - 1)
+            errors.append("intervalo reduzido automaticamente para no máximo 370 dias")
 
         state_payload, state_error = _read_json_file(self.state_file)
         if state_error:
@@ -269,6 +516,13 @@ class DashboardDataCollector:
                     errors.append(f"erro em get_order_stats_report: {exc}")
 
         positions = self._build_positions(open_positions, trailing_activated, peak_prices)
+        analytics = self._build_pnl_analytics(
+            exchange=exchange,
+            state_payload=state_payload,
+            errors=errors,
+            start_date=start_date,
+            end_date=end_date,
+        )
 
         longs = [pos for pos in positions if pos["side"] == "LONG"]
         shorts = [pos for pos in positions if pos["side"] == "SHORT"]
@@ -336,6 +590,7 @@ class DashboardDataCollector:
                 "api": retry_report,
                 "orders": order_report,
             },
+            "analytics": analytics,
             "errors": errors,
         }
 
@@ -529,15 +784,104 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
       text-align: right;
       margin-top: -2px;
     }
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .mini-stat {
+      padding: 10px;
+      border: 1px solid rgba(148, 180, 203, 0.20);
+      border-radius: 10px;
+      background: rgba(8, 18, 31, 0.35);
+    }
+    .mini-title {
+      color: var(--muted);
+      font-size: .78rem;
+      margin-bottom: 4px;
+    }
+    .mini-value {
+      font-weight: 700;
+      font-size: 1.1rem;
+      line-height: 1.1;
+    }
+    .mini-sub {
+      color: var(--muted);
+      font-size: .82rem;
+      margin-top: 2px;
+    }
+    .analytics-block {
+      display: grid;
+      grid-template-columns: 1.05fr .95fr;
+      gap: 12px;
+    }
+    .calendar-wrap {
+      display: grid;
+      gap: 6px;
+    }
+    .calendar-head {
+      display: grid;
+      grid-template-columns: repeat(7, minmax(0, 1fr));
+      gap: 6px;
+      color: var(--muted);
+      font-size: .78rem;
+      text-align: center;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+    }
+    .calendar-grid {
+      display: grid;
+      grid-template-columns: repeat(7, minmax(0, 1fr));
+      gap: 6px;
+    }
+    .calendar-cell {
+      min-height: 58px;
+      border-radius: 8px;
+      border: 1px solid rgba(148, 180, 203, 0.20);
+      padding: 6px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      background: rgba(148, 180, 203, 0.08);
+    }
+    .calendar-empty {
+      background: transparent;
+      border: 1px dashed rgba(148, 180, 203, 0.12);
+    }
+    .calendar-cell.pos { background: rgba(63, 226, 127, 0.16); border-color: rgba(63, 226, 127, 0.35); }
+    .calendar-cell.neg { background: rgba(255, 111, 97, 0.14); border-color: rgba(255, 111, 97, 0.35); }
+    .calendar-day { font-size: .84rem; color: var(--text); }
+    .calendar-pnl { font-size: .76rem; color: var(--muted); }
+    .chart-wrap {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+    .chart-svg {
+      width: 100%;
+      height: 230px;
+      border-radius: 10px;
+      background: rgba(8, 18, 31, 0.35);
+      border: 1px solid rgba(148, 180, 203, 0.20);
+    }
+    .chart-caption {
+      color: var(--muted);
+      font-size: .8rem;
+      margin-top: 6px;
+    }
     @media (max-width: 1080px) {
       .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .section { grid-template-columns: 1fr; }
+      .stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .analytics-block { grid-template-columns: 1fr; }
+      .chart-wrap { grid-template-columns: 1fr; }
     }
     @media (max-width: 640px) {
       body { padding: 12px; }
       .hero { flex-direction: column; align-items: flex-start; }
       .grid { grid-template-columns: 1fr; }
       th, td { padding: 10px 8px; font-size: .84rem; }
+      .stats-grid { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -553,6 +897,22 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
 
     <div id="errors" class="error-box"></div>
 
+    <section class="card" style="display:grid;gap:10px">
+      <div class="kpi-title">Período de Consulta</div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+        <button class="tag" id="preset-7d" type="button">7D</button>
+        <button class="tag" id="preset-1m" type="button">1M</button>
+        <button class="tag" id="preset-3m" type="button">3M</button>
+        <button class="tag" id="preset-1y" type="button">1Y</button>
+        <label class="muted" for="start-date">Início</label>
+        <input id="start-date" type="date" style="background:rgba(8,18,31,.55);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:6px 8px;" />
+        <label class="muted" for="end-date">Fim</label>
+        <input id="end-date" type="date" style="background:rgba(8,18,31,.55);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:6px 8px;" />
+        <button id="apply-range" type="button" class="tag">Aplicar</button>
+      </div>
+      <div id="range-label" class="muted">Período: --</div>
+    </section>
+
     <section class="grid">
       <article class="card">
         <div class="kpi-title">Saldo Carteira</div>
@@ -560,7 +920,7 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
         <div class="muted" id="available-balance">Disponível $0.00</div>
       </article>
       <article class="card">
-        <div class="kpi-title">P&L Diário</div>
+        <div class="kpi-title" id="period-pnl-title">P&L Período</div>
         <div class="kpi-value kpi-money" id="daily-total">$0.00</div>
         <div class="muted" id="daily-breakdown">Realizado/Funding/Comissão</div>
       </article>
@@ -570,7 +930,7 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
         <div class="muted" id="positions-count">0 posições abertas</div>
       </article>
       <article class="card">
-        <div class="kpi-title">Trades Fechados</div>
+        <div class="kpi-title" id="period-trades-title">Trades (Período)</div>
         <div class="kpi-value" id="closed-trades">0</div>
         <div class="muted" id="win-loss">Wins 0 | Losses 0</div>
       </article>
@@ -628,12 +988,70 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
       </div>
     </section>
 
+    <section class="analytics-block">
+      <article class="card">
+        <div class="kpi-title">Profit And Loss Analysis (30d)</div>
+        <div class="stats-grid">
+          <div class="mini-stat">
+            <div class="mini-title" id="mini-title-1">Período</div>
+            <div class="mini-value" id="stat-today">$0.00</div>
+            <div class="mini-sub" id="stat-today-pct">0.00%</div>
+          </div>
+          <div class="mini-stat">
+            <div class="mini-title" id="mini-title-2">Média / dia</div>
+            <div class="mini-value" id="stat-7d">$0.00</div>
+            <div class="mini-sub" id="stat-7d-pct">0.00%</div>
+          </div>
+          <div class="mini-stat">
+            <div class="mini-title" id="mini-title-3">Melhor dia</div>
+            <div class="mini-value" id="stat-30d">$0.00</div>
+            <div class="mini-sub" id="stat-30d-pct">0.00%</div>
+          </div>
+          <div class="mini-stat">
+            <div class="mini-title" id="mini-title-4">Lifetime</div>
+            <div class="mini-value" id="stat-life">$0.00</div>
+            <div class="mini-sub" id="stat-life-pct">0.00%</div>
+          </div>
+        </div>
+        <ul class="info-list" style="margin-top:10px">
+          <li><span>Total Profit</span><strong id="sum-profit">$0.00</strong></li>
+          <li><span>Total Loss</span><strong id="sum-loss">$0.00</strong></li>
+          <li><span>Winning Days</span><strong id="sum-win-days">0</strong></li>
+          <li><span>Losing Days</span><strong id="sum-loss-days">0</strong></li>
+          <li><span>Breakeven Days</span><strong id="sum-flat-days">0</strong></li>
+          <li><span>Profit/Loss Ratio</span><strong id="sum-ratio">-</strong></li>
+        </ul>
+      </article>
+
+      <article class="card calendar-wrap">
+        <div class="kpi-title">Daily PNL Calendar (<span id="calendar-month">----</span>)</div>
+        <div class="calendar-head">
+          <div>Seg</div><div>Ter</div><div>Qua</div><div>Qui</div><div>Sex</div><div>Sáb</div><div>Dom</div>
+        </div>
+        <div id="calendar-grid" class="calendar-grid"></div>
+      </article>
+    </section>
+
+    <section class="chart-wrap">
+      <article class="card">
+        <div class="kpi-title">Cumulative PNL (USD)</div>
+        <svg id="chart-cum-usd" class="chart-svg" viewBox="0 0 640 230" preserveAspectRatio="none"></svg>
+        <div class="chart-caption" id="chart-cum-usd-caption">Sem dados</div>
+      </article>
+      <article class="card">
+        <div class="kpi-title">Cumulative PNL %</div>
+        <svg id="chart-cum-pct" class="chart-svg" viewBox="0 0 640 230" preserveAspectRatio="none"></svg>
+        <div class="chart-caption" id="chart-cum-pct-caption">Sem dados</div>
+      </article>
+    </section>
+
     <div class="footer" id="footer">Aguardando atualização...</div>
   </div>
 
   <script>
     const REFRESH_SECONDS = __REFRESH_SECONDS__;
     const TOKEN_REQUIRED = __TOKEN_REQUIRED__;
+    const rangeState = { start: "", end: "" };
 
     function formatMoney(value, rate, decimals = 2) {
       const usd = Number(value || 0);
@@ -663,10 +1081,73 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
     function getApiUrl() {
       const params = new URLSearchParams(window.location.search);
       const token = params.get("token");
-      if (token) {
-        return `/api/dashboard?token=${encodeURIComponent(token)}`;
+      const q = new URLSearchParams();
+      if (token) q.set("token", token);
+      if (rangeState.start) q.set("start", rangeState.start);
+      if (rangeState.end) q.set("end", rangeState.end);
+      const qs = q.toString();
+      return qs ? `/api/dashboard?${qs}` : "/api/dashboard";
+    }
+
+    function toYmd(d) {
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, "0");
+      const day = String(d.getDate()).padStart(2, "0");
+      return `${y}-${m}-${day}`;
+    }
+
+    function shiftDays(base, delta) {
+      const d = new Date(base.getTime());
+      d.setDate(d.getDate() + delta);
+      return d;
+    }
+
+    function setRange(start, end) {
+      rangeState.start = start;
+      rangeState.end = end;
+      const startInput = document.getElementById("start-date");
+      const endInput = document.getElementById("end-date");
+      if (startInput) startInput.value = start;
+      if (endInput) endInput.value = end;
+      const label = document.getElementById("range-label");
+      if (label) label.textContent = `Período: ${start} → ${end}`;
+    }
+
+    function setupRangeControls() {
+      const end = new Date();
+      const today = toYmd(end);
+      setRange(toYmd(shiftDays(end, -29)), today); // padrão 30 dias
+
+      const query = new URLSearchParams(window.location.search);
+      const qStart = query.get("start");
+      const qEnd = query.get("end");
+      if (qStart && qEnd) {
+        setRange(qStart, qEnd);
       }
-      return "/api/dashboard";
+
+      const mapPreset = (days) => {
+        const e = new Date();
+        const s = shiftDays(e, -(days - 1));
+        setRange(toYmd(s), toYmd(e));
+        refreshDashboard();
+      };
+
+      document.getElementById("preset-7d").addEventListener("click", () => mapPreset(7));
+      document.getElementById("preset-1m").addEventListener("click", () => mapPreset(30));
+      document.getElementById("preset-3m").addEventListener("click", () => mapPreset(90));
+      document.getElementById("preset-1y").addEventListener("click", () => mapPreset(365));
+
+      document.getElementById("apply-range").addEventListener("click", () => {
+        const start = document.getElementById("start-date").value;
+        const endDate = document.getElementById("end-date").value;
+        if (!start || !endDate) return;
+        if (start <= endDate) {
+          setRange(start, endDate);
+        } else {
+          setRange(endDate, start);
+        }
+        refreshDashboard();
+      });
     }
 
     function setClassByValue(el, value) {
@@ -711,6 +1192,93 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
       setClassByValue(label, last);
     }
 
+    function renderCalendar(days, rate) {
+      const container = document.getElementById("calendar-grid");
+      container.innerHTML = "";
+
+      if (!Array.isArray(days) || days.length === 0) {
+        container.innerHTML = `<div class="calendar-cell calendar-empty" style="grid-column: span 7">Sem dados para calendário</div>`;
+        return;
+      }
+
+      const firstWeekday = Number(days[0].weekday || 0); // seg=0
+      for (let i = 0; i < firstWeekday; i += 1) {
+        const empty = document.createElement("div");
+        empty.className = "calendar-cell calendar-empty";
+        container.appendChild(empty);
+      }
+
+      days.forEach((item) => {
+        const pnl = Number(item.pnl || 0);
+        const cls = pnl > 0 ? "pos" : pnl < 0 ? "neg" : "";
+        const cell = document.createElement("div");
+        cell.className = `calendar-cell ${cls}`.trim();
+        cell.innerHTML = `
+          <div class="calendar-day">${Number(item.day || 0)}</div>
+          <div class="calendar-pnl">${formatMoney(pnl, rate, 2)}</div>
+        `;
+        container.appendChild(cell);
+      });
+    }
+
+    function drawLineChart(svgId, captionId, points, color, valueKey = "value", asPercent = false) {
+      const svg = document.getElementById(svgId);
+      const caption = document.getElementById(captionId);
+
+      if (!svg) return;
+      const width = 640;
+      const height = 230;
+      const padX = 28;
+      const padY = 20;
+
+      if (!Array.isArray(points) || points.length === 0) {
+        svg.innerHTML = "";
+        if (caption) caption.textContent = "Sem dados";
+        return;
+      }
+
+      const values = points.map((p) => Number((p && p[valueKey]) || 0));
+      const minV = Math.min(...values, 0);
+      const maxV = Math.max(...values, 0);
+      const span = Math.max(1e-9, maxV - minV);
+      const innerW = width - padX * 2;
+      const innerH = height - padY * 2;
+
+      const toX = (i) => padX + ((innerW * i) / Math.max(1, values.length - 1));
+      const toY = (v) => padY + (maxV - v) / span * innerH;
+
+      const yZero = toY(0);
+      let d = "";
+      values.forEach((v, i) => {
+        const x = toX(i);
+        const y = toY(v);
+        d += `${i === 0 ? "M" : "L"} ${x.toFixed(2)} ${y.toFixed(2)} `;
+      });
+
+      const lines = [];
+      for (let i = 0; i <= 4; i += 1) {
+        const y = padY + (innerH / 4) * i;
+        lines.push(`<line x1="${padX}" y1="${y}" x2="${width - padX}" y2="${y}" stroke="rgba(148,180,203,0.16)" stroke-width="1" />`);
+      }
+
+      svg.innerHTML = `
+        <rect x="0" y="0" width="${width}" height="${height}" fill="transparent" />
+        ${lines.join("")}
+        <line x1="${padX}" y1="${yZero.toFixed(2)}" x2="${width - padX}" y2="${yZero.toFixed(2)}" stroke="rgba(248,193,75,0.35)" stroke-width="1.2" />
+        <path d="${d.trim()}" fill="none" stroke="${color}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />
+      `;
+
+      const first = values[0];
+      const last = values[values.length - 1];
+      const delta = last - first;
+      const suffix = asPercent ? "%" : "";
+      const sign = delta > 0 ? "+" : "";
+      if (caption) {
+        caption.textContent = `Início ${first.toFixed(2)}${suffix} → Atual ${last.toFixed(2)}${suffix} | Δ ${sign}${delta.toFixed(2)}${suffix}`;
+        caption.className = `chart-caption ${delta >= 0 ? "good" : "bad"}`;
+      }
+    }
+
     async function refreshDashboard() {
       const params = new URLSearchParams(window.location.search);
       const token = params.get("token") || "";
@@ -738,14 +1306,17 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
         const api = health.api || {};
         const orders = health.orders || {};
         const risk = data.risk || {};
+        const analytics = data.analytics || {};
+        const analyticsPnl = analytics.pnl || {};
+        const analyticsSummary = analytics.summary || {};
         const positions = Array.isArray(data.positions) ? data.positions : [];
 
         const wallet = Number(account.wallet_balance || 0);
         const available = Number(account.available_balance || 0);
-        const dailyTotal = Number(daily.total || 0);
-        const dailyRealized = Number(daily.realized_pnl || 0);
-        const dailyFunding = Number(daily.funding_fee || 0);
-        const dailyCommission = Number(daily.commission || 0);
+        const periodNet = Number(analyticsSummary.net_after_costs_usd || 0);
+        const periodRealized = Number(analyticsSummary.realized_total_usd || 0);
+        const periodFunding = Number(analyticsSummary.funding_total_usd || 0);
+        const periodCommission = Number(analyticsSummary.commission_total_usd || 0);
         const openPnl = Number(account.unrealized_pnl || 0);
 
         const statusPill = document.getElementById("status-pill");
@@ -761,10 +1332,10 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
         document.getElementById("available-balance").textContent = `Disponível ${formatMoney(available, rate, 2)}`;
 
         const dailyEl = document.getElementById("daily-total");
-        dailyEl.textContent = formatMoney(dailyTotal, rate, 2);
-        setClassByValue(dailyEl, dailyTotal);
+        dailyEl.textContent = formatMoney(periodNet, rate, 2);
+        setClassByValue(dailyEl, periodNet);
         document.getElementById("daily-breakdown").textContent =
-          `Real: ${formatPlain(dailyRealized)} | Funding: ${formatPlain(dailyFunding)} | Comissão: ${formatPlain(dailyCommission)}`;
+          `Real: ${formatPlain(periodRealized)} | Funding: ${formatPlain(periodFunding)} | Comissão: ${formatPlain(periodCommission)}`;
 
         const openEl = document.getElementById("open-pnl");
         openEl.textContent = formatMoney(openPnl, rate, 2);
@@ -772,9 +1343,14 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
         document.getElementById("positions-count").textContent =
           `${positionsSummary.count || 0} abertas (${positionsSummary.long_count || 0} LONG / ${positionsSummary.short_count || 0} SHORT)`;
 
-        document.getElementById("closed-trades").textContent = String(trades.closed_trades_count || 0);
+        document.getElementById("closed-trades").textContent = String(analyticsSummary.trades_total_count || 0);
         document.getElementById("win-loss").textContent =
-          `Wins ${trades.trades_win_count || 0} | Losses ${trades.trades_loss_count || 0}`;
+          `Wins ${analyticsSummary.trades_win_count || 0} | Losses ${analyticsSummary.trades_loss_count || 0}`;
+
+        const periodStart = String(analytics.start_date || rangeState.start || "-");
+        const periodEnd = String(analytics.end_date || rangeState.end || "-");
+        document.getElementById("period-pnl-title").textContent = `P&L Período (${periodStart} → ${periodEnd})`;
+        document.getElementById("period-trades-title").textContent = `Trades (Período)`;
 
         document.getElementById("api-calls").textContent = String(api.calls || 0);
         document.getElementById("api-failures").textContent = String(api.failures || 0);
@@ -816,6 +1392,62 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
 
         renderHistory(trades.history_points || [], rate);
 
+        const periodUsd = Number(analyticsPnl.period_usd || 0);
+        const periodDays = Math.max(1, Number(analytics.window_days || 1));
+        const avgDayUsd = periodUsd / periodDays;
+        const dailySeries = Array.isArray(analytics.daily_series) ? analytics.daily_series : [];
+        const bestDay = dailySeries.reduce((acc, item) => {
+          const val = Number((item && item.pnl) || 0);
+          return val > acc.pnl ? { date: item.date || "-", pnl: val } : acc;
+        }, { date: "-", pnl: Number.NEGATIVE_INFINITY });
+        const worstDay = dailySeries.reduce((acc, item) => {
+          const val = Number((item && item.pnl) || 0);
+          return val < acc.pnl ? { date: item.date || "-", pnl: val } : acc;
+        }, { date: "-", pnl: Number.POSITIVE_INFINITY });
+
+        const bestDayUsd = (bestDay.pnl === Number.NEGATIVE_INFINITY) ? 0 : bestDay.pnl;
+        const worstDayUsd = (worstDay.pnl === Number.POSITIVE_INFINITY) ? 0 : worstDay.pnl;
+        const lifeUsd = Number(analyticsPnl.lifetime_usd || 0);
+
+        const statToday = document.getElementById("stat-today");
+        const stat7d = document.getElementById("stat-7d");
+        const stat30d = document.getElementById("stat-30d");
+        const statLife = document.getElementById("stat-life");
+
+        statToday.textContent = formatMoney(periodUsd, rate, 2);
+        stat7d.textContent = formatMoney(avgDayUsd, rate, 2);
+        stat30d.textContent = formatMoney(bestDayUsd, rate, 2);
+        statLife.textContent = formatMoney(lifeUsd, rate, 2);
+
+        setClassByValue(statToday, periodUsd);
+        setClassByValue(stat7d, avgDayUsd);
+        setClassByValue(stat30d, bestDayUsd);
+        setClassByValue(statLife, lifeUsd);
+
+        document.getElementById("mini-title-1").textContent = `Período (${periodDays}d)`;
+        document.getElementById("mini-title-2").textContent = "Média / dia";
+        document.getElementById("mini-title-3").textContent = "Melhor dia";
+        document.getElementById("mini-title-4").textContent = "Lifetime";
+
+        document.getElementById("stat-today-pct").textContent = `${Number(analyticsPnl.period_pct || 0).toFixed(2)}%`;
+        document.getElementById("stat-7d-pct").textContent = `${(avgDayUsd >= 0 ? "+" : "")}${avgDayUsd.toFixed(2)} USD/dia`;
+        document.getElementById("stat-30d-pct").textContent = `${bestDay.date || "-"} | pior: ${worstDayUsd.toFixed(2)} USD`;
+        document.getElementById("stat-life-pct").textContent = `${Number(analyticsPnl.lifetime_pct || 0).toFixed(2)}%`;
+
+        document.getElementById("sum-profit").textContent = formatMoney(analyticsSummary.total_profit_usd || 0, rate, 2);
+        document.getElementById("sum-loss").textContent = formatMoney(analyticsSummary.total_loss_usd || 0, rate, 2);
+        document.getElementById("sum-win-days").textContent = String(analyticsSummary.winning_days || 0);
+        document.getElementById("sum-loss-days").textContent = String(analyticsSummary.losing_days || 0);
+        document.getElementById("sum-flat-days").textContent = String(analyticsSummary.breakeven_days || 0);
+
+        const ratio = analyticsSummary.profit_loss_ratio;
+        document.getElementById("sum-ratio").textContent = (ratio === null || ratio === undefined) ? "-" : Number(ratio).toFixed(2);
+
+        document.getElementById("calendar-month").textContent = `${periodStart} → ${periodEnd}`;
+        renderCalendar(analytics.daily_series || [], rate);
+        drawLineChart("chart-cum-usd", "chart-cum-usd-caption", analytics.cumulative_usd || [], "#f8c14b", "value", false);
+        drawLineChart("chart-cum-pct", "chart-cum-pct-caption", analytics.cumulative_pct || [], "#47d3ff", "value", true);
+
         const errorList = Array.isArray(data.errors) ? data.errors : [];
         if (errorList.length > 0) {
           errorsEl.style.display = "block";
@@ -839,6 +1471,7 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
       errorsEl.textContent = "Token obrigatório. Abra a URL com ?token=SEU_TOKEN";
     }
 
+    setupRangeControls();
     refreshDashboard();
     setInterval(refreshDashboard, REFRESH_SECONDS * 1000);
   </script>
@@ -932,7 +1565,9 @@ def _build_handler(
                 return
 
             if path == "/api/dashboard":
-                payload = collector.collect()
+                start = (query.get("start") or [""])[0]
+                end = (query.get("end") or [""])[0]
+                payload = collector.collect(start_date_str=start, end_date_str=end)
                 self._write_json(HTTPStatus.OK, payload)
                 return
 
