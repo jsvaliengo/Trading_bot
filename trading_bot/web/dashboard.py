@@ -431,8 +431,10 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
     }
     .kpi-value {
       font-weight: 700;
-      font-size: clamp(1.2rem, 1rem + 1vw, 1.9rem);
-      line-height: 1.05;
+      font-size: clamp(1rem, 0.78rem + 0.72vw, 1.45rem);
+      line-height: 1.15;
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }
     .muted { color: var(--muted); }
     .good { color: var(--good); }
@@ -1003,4 +1005,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
