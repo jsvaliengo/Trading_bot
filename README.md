@@ -151,6 +151,12 @@ python -m trading_bot.core.bot
 python -m trading_bot.core.bot
 ```
 
+Em MAINNET sem terminal interativo (server/CI), defina antes:
+
+```bash
+TRADING_BOT_MAINNET_CONFIRM=eu_sei_o_risco
+```
+
 ---
 
 ## ✅ CI e Update Seguro no Servidor
@@ -171,6 +177,12 @@ Variáveis opcionais:
 
 ```bash
 SCREEN_NAME=bot PROJECT_DIR=/home/ubuntu/trading_bot TRADING_BOT_ENV=prod BOT_MODULE=trading_bot.core.bot ./scripts/update_server.sh
+```
+
+Se `USE_TESTNET=False`, garanta no `.env` do servidor:
+
+```bash
+TRADING_BOT_MAINNET_CONFIRM=eu_sei_o_risco
 ```
 
 Também foi adicionado CI no GitHub Actions em:
