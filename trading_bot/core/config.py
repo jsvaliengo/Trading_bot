@@ -67,6 +67,16 @@ def _env_optional_int(name: str) -> int | None:
         return None
 
 
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw.strip())
+    except ValueError:
+        return default
+
+
 @dataclass
 class TradingConfig:
     """
@@ -410,6 +420,12 @@ class TradingConfig:
     API_HEALTH_CRITICAL_MIN_ORDER_REJECTIONS: int = 2
     API_HEALTH_CRITICAL_MIN_LOOP_ERRORS: int = 1
 
+    # Relatório diário consolidado para decisão de risco/SL (Telegram)
+    DAILY_PERFORMANCE_REPORT_ENABLED: bool = _env_bool("TRADING_BOT_DAILY_REPORT_ENABLED", True)
+    DAILY_PERFORMANCE_REPORT_HOUR_BRT: int = _env_int("TRADING_BOT_DAILY_REPORT_HOUR_BRT", 23)
+    DAILY_PERFORMANCE_REPORT_MINUTE_BRT: int = _env_int("TRADING_BOT_DAILY_REPORT_MINUTE_BRT", 55)
+    DAILY_PERFORMANCE_REPORT_LOOKBACK_HOURS: int = _env_int("TRADING_BOT_DAILY_REPORT_LOOKBACK_HOURS", 24)
+
     # ============================================
     # AJUSTE AUTOMÁTICO DE CAPITAL (DEPÓSITO/SAQUE)
     # ============================================
@@ -684,6 +700,15 @@ class TradingConfig:
 
         if self.API_HEALTH_CRITICAL_MIN_LOOP_ERRORS < 1:
             errors.append("⚠️  ALERTA: API_HEALTH_CRITICAL_MIN_LOOP_ERRORS deve ser >= 1!")
+
+        if self.DAILY_PERFORMANCE_REPORT_HOUR_BRT < 0 or self.DAILY_PERFORMANCE_REPORT_HOUR_BRT > 23:
+            errors.append("⚠️  ALERTA: DAILY_PERFORMANCE_REPORT_HOUR_BRT deve estar entre 0 e 23!")
+
+        if self.DAILY_PERFORMANCE_REPORT_MINUTE_BRT < 0 or self.DAILY_PERFORMANCE_REPORT_MINUTE_BRT > 59:
+            errors.append("⚠️  ALERTA: DAILY_PERFORMANCE_REPORT_MINUTE_BRT deve estar entre 0 e 59!")
+
+        if self.DAILY_PERFORMANCE_REPORT_LOOKBACK_HOURS < 1 or self.DAILY_PERFORMANCE_REPORT_LOOKBACK_HOURS > 168:
+            errors.append("⚠️  ALERTA: DAILY_PERFORMANCE_REPORT_LOOKBACK_HOURS deve estar entre 1 e 168!")
 
         if self.CAPITAL_TRANSFER_MIN_ABS_USDT < 0:
             errors.append("⚠️  ALERTA: CAPITAL_TRANSFER_MIN_ABS_USDT deve ser >= 0!")

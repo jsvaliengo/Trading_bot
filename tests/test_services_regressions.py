@@ -99,3 +99,31 @@ def test_stop_force_reports_partial_close_failures():
     final_message = messages[-1]
     assert "FALHAS AO FECHAR POSIÇÕES" in final_message
     assert "1/2" in final_message
+
+
+def test_dailyreport_command_toggles_auto_and_sends_now():
+    handler = TelegramCommandHandler(token="token", chat_id="123")
+
+    calls = []
+    bot = SimpleNamespace(
+        send_daily_performance_report=lambda force=False: calls.append(force) or True
+    )
+    config = SimpleNamespace(
+        DAILY_PERFORMANCE_REPORT_ENABLED=True,
+        DAILY_PERFORMANCE_REPORT_HOUR_BRT=23,
+        DAILY_PERFORMANCE_REPORT_MINUTE_BRT=55,
+        DAILY_PERFORMANCE_REPORT_LOOKBACK_HOURS=24,
+    )
+    handler.set_bot_reference(bot, config)
+
+    messages = []
+    handler.send_message = lambda text: messages.append(text) or True
+
+    handler.cmd_dailyreport(["off"])
+    assert config.DAILY_PERFORMANCE_REPORT_ENABLED is False
+
+    handler.cmd_dailyreport(["on"])
+    assert config.DAILY_PERFORMANCE_REPORT_ENABLED is True
+
+    handler.cmd_dailyreport(["now"])
+    assert calls == [True]
