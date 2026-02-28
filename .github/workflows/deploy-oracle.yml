@@ -17,6 +17,9 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Start SSH agent
         uses: webfactory/ssh-agent@v0.9.0
         with:
@@ -33,6 +36,37 @@ jobs:
           PORT="${OCI_PORT:-22}"
           ssh-keyscan -p "$PORT" -H "$OCI_HOST" >> ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
+
+      - name: Sync project files to server
+        env:
+          OCI_HOST: ${{ secrets.OCI_HOST }}
+          OCI_USER: ${{ secrets.OCI_USER }}
+          OCI_PORT: ${{ secrets.OCI_PORT }}
+          OCI_PATH: ${{ secrets.OCI_PATH }}
+        run: |
+          set -euo pipefail
+          PORT="${OCI_PORT:-22}"
+          REMOTE_PATH="${OCI_PATH:-/home/ubuntu/trading_bot}"
+
+          # Expande ~/ para caminho absoluto.
+          if [[ "$REMOTE_PATH" == "~/"* ]]; then
+            REMOTE_PATH="/home/${OCI_USER}/${REMOTE_PATH#~/}"
+          fi
+
+          # Garante destino no servidor.
+          ssh -p "$PORT" "$OCI_USER@$OCI_HOST" "mkdir -p '$REMOTE_PATH'"
+
+          # Sincroniza código, preservando .env/runtime/venv do servidor.
+          rsync -az --delete \
+            --exclude ".git/" \
+            --exclude ".venv/" \
+            --exclude "venv/" \
+            --exclude "__pycache__/" \
+            --exclude ".pytest_cache/" \
+            --exclude ".env" \
+            --exclude "runtime/" \
+            -e "ssh -p $PORT" \
+            ./ "$OCI_USER@$OCI_HOST:$REMOTE_PATH/"
 
       - name: Deploy on server
         env:
