@@ -415,7 +415,12 @@ class DashboardDataCollector:
             },
         }
 
-    def collect(self, start_date_str: str = "", end_date_str: str = "") -> Dict[str, Any]:
+    def collect(
+        self,
+        start_date_str: str = "",
+        end_date_str: str = "",
+        include_analytics: bool = True,
+    ) -> Dict[str, Any]:
         now = datetime.now(timezone.utc)
         errors: List[str] = []
         now_brt = datetime.now(BRT).date()
@@ -516,13 +521,15 @@ class DashboardDataCollector:
                     errors.append(f"erro em get_order_stats_report: {exc}")
 
         positions = self._build_positions(open_positions, trailing_activated, peak_prices)
-        analytics = self._build_pnl_analytics(
-            exchange=exchange,
-            state_payload=state_payload,
-            errors=errors,
-            start_date=start_date,
-            end_date=end_date,
-        )
+        analytics: Dict[str, Any] = {}
+        if include_analytics:
+            analytics = self._build_pnl_analytics(
+                exchange=exchange,
+                state_payload=state_payload,
+                errors=errors,
+                start_date=start_date,
+                end_date=end_date,
+            )
 
         longs = [pos for pos in positions if pos["side"] == "LONG"]
         shorts = [pos for pos in positions if pos["side"] == "SHORT"]
@@ -909,8 +916,9 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
         <label class="muted" for="end-date">Fim</label>
         <input id="end-date" type="date" style="background:rgba(8,18,31,.55);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:6px 8px;" />
         <button id="apply-range" type="button" class="tag">Aplicar</button>
+        <button id="refresh-analytics" type="button" class="tag">Atualizar análise</button>
       </div>
-      <div id="range-label" class="muted">Período: --</div>
+      <div id="range-label" class="muted">Período: -- | clique em "Atualizar análise" para recalcular</div>
     </section>
 
     <section class="grid">
@@ -920,7 +928,7 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
         <div class="muted" id="available-balance">Disponível $0.00</div>
       </article>
       <article class="card">
-        <div class="kpi-title" id="period-pnl-title">P&L Período</div>
+        <div class="kpi-title" id="period-pnl-title">P&L Diário (tempo real)</div>
         <div class="kpi-value kpi-money" id="daily-total">$0.00</div>
         <div class="muted" id="daily-breakdown">Realizado/Funding/Comissão</div>
       </article>
@@ -930,7 +938,7 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
         <div class="muted" id="positions-count">0 posições abertas</div>
       </article>
       <article class="card">
-        <div class="kpi-title" id="period-trades-title">Trades (Período)</div>
+        <div class="kpi-title" id="period-trades-title">Trades (sessão)</div>
         <div class="kpi-value" id="closed-trades">0</div>
         <div class="muted" id="win-loss">Wins 0 | Losses 0</div>
       </article>
@@ -1052,6 +1060,7 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
     const REFRESH_SECONDS = __REFRESH_SECONDS__;
     const TOKEN_REQUIRED = __TOKEN_REQUIRED__;
     const rangeState = { start: "", end: "" };
+    let analyticsState = null;
 
     function formatMoney(value, rate, decimals = 2) {
       const usd = Number(value || 0);
@@ -1078,15 +1087,15 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
       return { "X-Auth-Token": token };
     }
 
-    function getApiUrl() {
+    function buildApiUrl(path, includeRange = false) {
       const params = new URLSearchParams(window.location.search);
       const token = params.get("token");
       const q = new URLSearchParams();
       if (token) q.set("token", token);
-      if (rangeState.start) q.set("start", rangeState.start);
-      if (rangeState.end) q.set("end", rangeState.end);
+      if (includeRange && rangeState.start) q.set("start", rangeState.start);
+      if (includeRange && rangeState.end) q.set("end", rangeState.end);
       const qs = q.toString();
-      return qs ? `/api/dashboard?${qs}` : "/api/dashboard";
+      return qs ? `${path}?${qs}` : path;
     }
 
     function toYmd(d) {
@@ -1110,7 +1119,7 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
       if (startInput) startInput.value = start;
       if (endInput) endInput.value = end;
       const label = document.getElementById("range-label");
-      if (label) label.textContent = `Período: ${start} → ${end}`;
+      if (label) label.textContent = `Período: ${start} → ${end} | clique em "Atualizar análise" para recalcular`;
     }
 
     function setupRangeControls() {
@@ -1129,7 +1138,6 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
         const e = new Date();
         const s = shiftDays(e, -(days - 1));
         setRange(toYmd(s), toYmd(e));
-        refreshDashboard();
       };
 
       document.getElementById("preset-7d").addEventListener("click", () => mapPreset(7));
@@ -1146,7 +1154,10 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
         } else {
           setRange(endDate, start);
         }
-        refreshDashboard();
+      });
+
+      document.getElementById("refresh-analytics").addEventListener("click", () => {
+        refreshAnalytics();
       });
     }
 
@@ -1279,10 +1290,131 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
       }
     }
 
+    function applyAnalyticsToUI(analytics, rate) {
+      if (!analytics || typeof analytics !== "object") return;
+      const analyticsPnl = analytics.pnl || {};
+      const analyticsSummary = analytics.summary || {};
+
+      const periodUsd = Number(analyticsPnl.period_usd || 0);
+      const periodDays = Math.max(1, Number(analytics.window_days || 1));
+      const avgDayUsd = periodUsd / periodDays;
+      const dailySeries = Array.isArray(analytics.daily_series) ? analytics.daily_series : [];
+      const bestDay = dailySeries.reduce((acc, item) => {
+        const val = Number((item && item.pnl) || 0);
+        return val > acc.pnl ? { date: item.date || "-", pnl: val } : acc;
+      }, { date: "-", pnl: Number.NEGATIVE_INFINITY });
+      const worstDay = dailySeries.reduce((acc, item) => {
+        const val = Number((item && item.pnl) || 0);
+        return val < acc.pnl ? { date: item.date || "-", pnl: val } : acc;
+      }, { date: "-", pnl: Number.POSITIVE_INFINITY });
+
+      const bestDayUsd = (bestDay.pnl === Number.NEGATIVE_INFINITY) ? 0 : bestDay.pnl;
+      const worstDayUsd = (worstDay.pnl === Number.POSITIVE_INFINITY) ? 0 : worstDay.pnl;
+      const lifeUsd = Number(analyticsPnl.lifetime_usd || 0);
+
+      const statToday = document.getElementById("stat-today");
+      const stat7d = document.getElementById("stat-7d");
+      const stat30d = document.getElementById("stat-30d");
+      const statLife = document.getElementById("stat-life");
+
+      statToday.textContent = formatMoney(periodUsd, rate, 2);
+      stat7d.textContent = formatMoney(avgDayUsd, rate, 2);
+      stat30d.textContent = formatMoney(bestDayUsd, rate, 2);
+      statLife.textContent = formatMoney(lifeUsd, rate, 2);
+
+      setClassByValue(statToday, periodUsd);
+      setClassByValue(stat7d, avgDayUsd);
+      setClassByValue(stat30d, bestDayUsd);
+      setClassByValue(statLife, lifeUsd);
+
+      document.getElementById("mini-title-1").textContent = `Período (${periodDays}d)`;
+      document.getElementById("mini-title-2").textContent = "Média / dia";
+      document.getElementById("mini-title-3").textContent = "Melhor dia";
+      document.getElementById("mini-title-4").textContent = "Lifetime";
+
+      document.getElementById("stat-today-pct").textContent = `${Number(analyticsPnl.period_pct || 0).toFixed(2)}%`;
+      document.getElementById("stat-7d-pct").textContent = `${(avgDayUsd >= 0 ? "+" : "")}${avgDayUsd.toFixed(2)} USD/dia`;
+      document.getElementById("stat-30d-pct").textContent = `${bestDay.date || "-"} | pior: ${worstDayUsd.toFixed(2)} USD`;
+      document.getElementById("stat-life-pct").textContent = `${Number(analyticsPnl.lifetime_pct || 0).toFixed(2)}%`;
+
+      document.getElementById("sum-profit").textContent = formatMoney(analyticsSummary.total_profit_usd || 0, rate, 2);
+      document.getElementById("sum-loss").textContent = formatMoney(analyticsSummary.total_loss_usd || 0, rate, 2);
+      document.getElementById("sum-win-days").textContent = String(analyticsSummary.winning_days || 0);
+      document.getElementById("sum-loss-days").textContent = String(analyticsSummary.losing_days || 0);
+      document.getElementById("sum-flat-days").textContent = String(analyticsSummary.breakeven_days || 0);
+      const ratio = analyticsSummary.profit_loss_ratio;
+      document.getElementById("sum-ratio").textContent = (ratio === null || ratio === undefined) ? "-" : Number(ratio).toFixed(2);
+
+      const periodStart = String(analytics.start_date || rangeState.start || "-");
+      const periodEnd = String(analytics.end_date || rangeState.end || "-");
+
+      document.getElementById("period-pnl-title").textContent = `P&L Período (${periodStart} → ${periodEnd})`;
+      document.getElementById("period-trades-title").textContent = "Trades (Período)";
+      const periodNet = Number(analyticsSummary.net_after_costs_usd || 0);
+      const periodRealized = Number(analyticsSummary.realized_total_usd || 0);
+      const periodFunding = Number(analyticsSummary.funding_total_usd || 0);
+      const periodCommission = Number(analyticsSummary.commission_total_usd || 0);
+      const dailyEl = document.getElementById("daily-total");
+      dailyEl.textContent = formatMoney(periodNet, rate, 2);
+      setClassByValue(dailyEl, periodNet);
+      document.getElementById("daily-breakdown").textContent =
+        `Real: ${formatPlain(periodRealized)} | Funding: ${formatPlain(periodFunding)} | Comissão: ${formatPlain(periodCommission)}`;
+
+      document.getElementById("closed-trades").textContent = String(analyticsSummary.trades_total_count || 0);
+      document.getElementById("win-loss").textContent =
+        `Wins ${analyticsSummary.trades_win_count || 0} | Losses ${analyticsSummary.trades_loss_count || 0}`;
+
+      document.getElementById("calendar-month").textContent = `${periodStart} → ${periodEnd}`;
+      renderCalendar(analytics.daily_series || [], rate);
+      drawLineChart("chart-cum-usd", "chart-cum-usd-caption", analytics.cumulative_usd || [], "#f8c14b", "value", false);
+      drawLineChart("chart-cum-pct", "chart-cum-pct-caption", analytics.cumulative_pct || [], "#47d3ff", "value", true);
+    }
+
+    async function refreshAnalytics() {
+      const params = new URLSearchParams(window.location.search);
+      const token = params.get("token") || "";
+      const apiUrl = buildApiUrl("/api/dashboard/analytics", true);
+      const errorsEl = document.getElementById("errors");
+      const button = document.getElementById("refresh-analytics");
+
+      try {
+        button.disabled = true;
+        button.textContent = "Atualizando...";
+
+        const response = await fetch(apiUrl, {
+          cache: "no-store",
+          headers: tokenHeaders(token)
+        });
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+
+        const data = await response.json();
+        const rate = Number((data.fx && data.fx.usd_brl) || 5.0);
+        analyticsState = data.analytics || null;
+        applyAnalyticsToUI(analyticsState, rate);
+
+        const errorList = Array.isArray(data.errors) ? data.errors : [];
+        if (errorList.length > 0) {
+          errorsEl.style.display = "block";
+          errorsEl.innerHTML = "<strong>Atenção:</strong><br>" + errorList.map(escapeHtml).join("<br>");
+        } else {
+          errorsEl.style.display = "none";
+          errorsEl.textContent = "";
+        }
+      } catch (err) {
+        errorsEl.style.display = "block";
+        errorsEl.textContent = `Erro ao atualizar análise: ${err}`;
+      } finally {
+        button.disabled = false;
+        button.textContent = "Atualizar análise";
+      }
+    }
+
     async function refreshDashboard() {
       const params = new URLSearchParams(window.location.search);
       const token = params.get("token") || "";
-      const apiUrl = getApiUrl();
+      const apiUrl = buildApiUrl("/api/dashboard", false);
       const errorsEl = document.getElementById("errors");
 
       try {
@@ -1306,17 +1438,14 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
         const api = health.api || {};
         const orders = health.orders || {};
         const risk = data.risk || {};
-        const analytics = data.analytics || {};
-        const analyticsPnl = analytics.pnl || {};
-        const analyticsSummary = analytics.summary || {};
         const positions = Array.isArray(data.positions) ? data.positions : [];
 
         const wallet = Number(account.wallet_balance || 0);
         const available = Number(account.available_balance || 0);
-        const periodNet = Number(analyticsSummary.net_after_costs_usd || 0);
-        const periodRealized = Number(analyticsSummary.realized_total_usd || 0);
-        const periodFunding = Number(analyticsSummary.funding_total_usd || 0);
-        const periodCommission = Number(analyticsSummary.commission_total_usd || 0);
+        const dailyNet = Number(daily.total || 0);
+        const dailyRealized = Number(daily.realized_pnl || 0);
+        const dailyFunding = Number(daily.funding_fee || 0);
+        const dailyCommission = Number(daily.commission || 0);
         const openPnl = Number(account.unrealized_pnl || 0);
 
         const statusPill = document.getElementById("status-pill");
@@ -1332,10 +1461,10 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
         document.getElementById("available-balance").textContent = `Disponível ${formatMoney(available, rate, 2)}`;
 
         const dailyEl = document.getElementById("daily-total");
-        dailyEl.textContent = formatMoney(periodNet, rate, 2);
-        setClassByValue(dailyEl, periodNet);
+        dailyEl.textContent = formatMoney(dailyNet, rate, 2);
+        setClassByValue(dailyEl, dailyNet);
         document.getElementById("daily-breakdown").textContent =
-          `Real: ${formatPlain(periodRealized)} | Funding: ${formatPlain(periodFunding)} | Comissão: ${formatPlain(periodCommission)}`;
+          `Real: ${formatPlain(dailyRealized)} | Funding: ${formatPlain(dailyFunding)} | Comissão: ${formatPlain(dailyCommission)}`;
 
         const openEl = document.getElementById("open-pnl");
         openEl.textContent = formatMoney(openPnl, rate, 2);
@@ -1343,14 +1472,9 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
         document.getElementById("positions-count").textContent =
           `${positionsSummary.count || 0} abertas (${positionsSummary.long_count || 0} LONG / ${positionsSummary.short_count || 0} SHORT)`;
 
-        document.getElementById("closed-trades").textContent = String(analyticsSummary.trades_total_count || 0);
+        document.getElementById("closed-trades").textContent = String(trades.closed_trades_count || 0);
         document.getElementById("win-loss").textContent =
-          `Wins ${analyticsSummary.trades_win_count || 0} | Losses ${analyticsSummary.trades_loss_count || 0}`;
-
-        const periodStart = String(analytics.start_date || rangeState.start || "-");
-        const periodEnd = String(analytics.end_date || rangeState.end || "-");
-        document.getElementById("period-pnl-title").textContent = `P&L Período (${periodStart} → ${periodEnd})`;
-        document.getElementById("period-trades-title").textContent = `Trades (Período)`;
+          `Wins ${trades.trades_win_count || 0} | Losses ${trades.trades_loss_count || 0}`;
 
         document.getElementById("api-calls").textContent = String(api.calls || 0);
         document.getElementById("api-failures").textContent = String(api.failures || 0);
@@ -1392,61 +1516,9 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
 
         renderHistory(trades.history_points || [], rate);
 
-        const periodUsd = Number(analyticsPnl.period_usd || 0);
-        const periodDays = Math.max(1, Number(analytics.window_days || 1));
-        const avgDayUsd = periodUsd / periodDays;
-        const dailySeries = Array.isArray(analytics.daily_series) ? analytics.daily_series : [];
-        const bestDay = dailySeries.reduce((acc, item) => {
-          const val = Number((item && item.pnl) || 0);
-          return val > acc.pnl ? { date: item.date || "-", pnl: val } : acc;
-        }, { date: "-", pnl: Number.NEGATIVE_INFINITY });
-        const worstDay = dailySeries.reduce((acc, item) => {
-          const val = Number((item && item.pnl) || 0);
-          return val < acc.pnl ? { date: item.date || "-", pnl: val } : acc;
-        }, { date: "-", pnl: Number.POSITIVE_INFINITY });
-
-        const bestDayUsd = (bestDay.pnl === Number.NEGATIVE_INFINITY) ? 0 : bestDay.pnl;
-        const worstDayUsd = (worstDay.pnl === Number.POSITIVE_INFINITY) ? 0 : worstDay.pnl;
-        const lifeUsd = Number(analyticsPnl.lifetime_usd || 0);
-
-        const statToday = document.getElementById("stat-today");
-        const stat7d = document.getElementById("stat-7d");
-        const stat30d = document.getElementById("stat-30d");
-        const statLife = document.getElementById("stat-life");
-
-        statToday.textContent = formatMoney(periodUsd, rate, 2);
-        stat7d.textContent = formatMoney(avgDayUsd, rate, 2);
-        stat30d.textContent = formatMoney(bestDayUsd, rate, 2);
-        statLife.textContent = formatMoney(lifeUsd, rate, 2);
-
-        setClassByValue(statToday, periodUsd);
-        setClassByValue(stat7d, avgDayUsd);
-        setClassByValue(stat30d, bestDayUsd);
-        setClassByValue(statLife, lifeUsd);
-
-        document.getElementById("mini-title-1").textContent = `Período (${periodDays}d)`;
-        document.getElementById("mini-title-2").textContent = "Média / dia";
-        document.getElementById("mini-title-3").textContent = "Melhor dia";
-        document.getElementById("mini-title-4").textContent = "Lifetime";
-
-        document.getElementById("stat-today-pct").textContent = `${Number(analyticsPnl.period_pct || 0).toFixed(2)}%`;
-        document.getElementById("stat-7d-pct").textContent = `${(avgDayUsd >= 0 ? "+" : "")}${avgDayUsd.toFixed(2)} USD/dia`;
-        document.getElementById("stat-30d-pct").textContent = `${bestDay.date || "-"} | pior: ${worstDayUsd.toFixed(2)} USD`;
-        document.getElementById("stat-life-pct").textContent = `${Number(analyticsPnl.lifetime_pct || 0).toFixed(2)}%`;
-
-        document.getElementById("sum-profit").textContent = formatMoney(analyticsSummary.total_profit_usd || 0, rate, 2);
-        document.getElementById("sum-loss").textContent = formatMoney(analyticsSummary.total_loss_usd || 0, rate, 2);
-        document.getElementById("sum-win-days").textContent = String(analyticsSummary.winning_days || 0);
-        document.getElementById("sum-loss-days").textContent = String(analyticsSummary.losing_days || 0);
-        document.getElementById("sum-flat-days").textContent = String(analyticsSummary.breakeven_days || 0);
-
-        const ratio = analyticsSummary.profit_loss_ratio;
-        document.getElementById("sum-ratio").textContent = (ratio === null || ratio === undefined) ? "-" : Number(ratio).toFixed(2);
-
-        document.getElementById("calendar-month").textContent = `${periodStart} → ${periodEnd}`;
-        renderCalendar(analytics.daily_series || [], rate);
-        drawLineChart("chart-cum-usd", "chart-cum-usd-caption", analytics.cumulative_usd || [], "#f8c14b", "value", false);
-        drawLineChart("chart-cum-pct", "chart-cum-pct-caption", analytics.cumulative_pct || [], "#47d3ff", "value", true);
+        if (analyticsState) {
+          applyAnalyticsToUI(analyticsState, rate);
+        }
 
         const errorList = Array.isArray(data.errors) ? data.errors : [];
         if (errorList.length > 0) {
@@ -1565,9 +1637,18 @@ def _build_handler(
                 return
 
             if path == "/api/dashboard":
+                payload = collector.collect(include_analytics=False)
+                self._write_json(HTTPStatus.OK, payload)
+                return
+
+            if path == "/api/dashboard/analytics":
                 start = (query.get("start") or [""])[0]
                 end = (query.get("end") or [""])[0]
-                payload = collector.collect(start_date_str=start, end_date_str=end)
+                payload = collector.collect(
+                    start_date_str=start,
+                    end_date_str=end,
+                    include_analytics=True,
+                )
                 self._write_json(HTTPStatus.OK, payload)
                 return
 
