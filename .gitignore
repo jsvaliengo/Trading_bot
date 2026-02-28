@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Virtualenv
+.venv/
+
+# Environment files (secrets)
+.env
+.env.local
+.env.*
+!.env.example
+
+# Runtime artifacts
+runtime/*.json
+runtime/*.lock
+runtime/*.log
