@@ -1,0 +1,20 @@
+# Requirements para o Bot de Trading
+# Instale com: pip install -r requirements.txt
+
+# Cliente Python para Binance (mais estável e amplamente usado)
+python-binance>=1.0.19
+
+# Computação numérica (para indicadores técnicos)
+numpy>=1.24.0
+
+# Manipulação de dados (opcional, mas útil)
+pandas>=2.0.0
+
+# Para variáveis de ambiente (opcional)
+python-dotenv>=1.0.0
+
+# Para notificações Telegram
+requests>=2.28.0
+
+# Para testes (opcional)
+pytest>=7.0.0

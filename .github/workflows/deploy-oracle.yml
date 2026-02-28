@@ -1,0 +1,49 @@
+name: Deploy Oracle
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: deploy-oracle-prod
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Start SSH agent
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.OCI_SSH_KEY }}
+
+      - name: Add Oracle host key
+        env:
+          OCI_HOST: ${{ secrets.OCI_HOST }}
+          OCI_PORT: ${{ secrets.OCI_PORT }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          PORT="${OCI_PORT:-22}"
+          ssh-keyscan -p "$PORT" -H "$OCI_HOST" >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Deploy on server
+        env:
+          OCI_HOST: ${{ secrets.OCI_HOST }}
+          OCI_USER: ${{ secrets.OCI_USER }}
+          OCI_PORT: ${{ secrets.OCI_PORT }}
+          OCI_PATH: ${{ secrets.OCI_PATH }}
+        run: |
+          set -euo pipefail
+          PORT="${OCI_PORT:-22}"
+          REMOTE_PATH="${OCI_PATH:-/home/ubuntu/trading_bot}"
+
+          ssh -p "$PORT" "$OCI_USER@$OCI_HOST" \
+            "cd '$REMOTE_PATH' && chmod +x scripts/update_server.sh && ./scripts/update_server.sh"
