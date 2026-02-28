@@ -12,12 +12,9 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from dataclasses import dataclass
-from typing import List, Dict
-import random
 
 # Importa configurações reais
-from trading_bot.core.config import config
+from trading_bot.core.config import config  # noqa: E402
 
 # Simula capital disponível
 CAPITAL_SIMULADO = 112.0
@@ -274,16 +271,16 @@ for symbol in selected:
     print(f"      LONG: ${long_size:.2f} | SHORT: ${short_size:.2f} | Total: ${total:.2f}")
 
 print("-" * 50)
-print(f"\n📊 TOTAIS:")
+print("\n📊 TOTAIS:")
 print(f"   • Total LONG: ${total_long:.2f}")
 print(f"   • Total SHORT: ${total_short:.2f}")
 print(f"   • Total GERAL: ${total_long + total_short:.2f}")
 print(f"   • Capital necessário (+10% fees): ${(total_long + total_short) * 1.1:.2f}")
 
 if CAPITAL_SIMULADO >= (total_long + total_short) * 1.1:
-    print(f"\n✅ Capital SUFICIENTE para todos os pares!")
+    print("\n✅ Capital SUFICIENTE para todos os pares!")
 else:
-    print(f"\n⚠️ Capital INSUFICIENTE! Alguns pares serão pulados.")
+    print("\n⚠️ Capital INSUFICIENTE! Alguns pares serão pulados.")
 
 # ============================================
 # 4. SIMULA CENÁRIOS DE TRAILING STOP
@@ -347,7 +344,7 @@ result = simulate_trailing(
     side="LONG",
     funding_rate=0.01    # Funding baixo
 )
-print(f"   Entrada: $600 | Pico: $604 | Atual: $602.50")
+print("   Entrada: $600 | Pico: $604 | Atual: $602.50")
 print(f"   Lucro: {result['profit_pct']:.2f}% = ${result['profit_usd']:.4f}")
 print(f"   Trailing ativado: {'✅' if result['activated'] else '❌'} (>= {config.TRAILING_ACTIVATION_PERCENT}%)")
 print(f"   Trailing stop em: ${result['trailing_stop']:.2f}")
@@ -367,7 +364,7 @@ result = simulate_trailing(
     side="LONG",
     funding_rate=0.05    # Funding ALTO - LONGs pagam
 )
-print(f"   Entrada: $150 | Pico: $151.50 | Atual: $151")
+print("   Entrada: $150 | Pico: $151.50 | Atual: $151")
 print(f"   Lucro: {result['profit_pct']:.2f}% = ${result['profit_usd']:.4f}")
 print(f"   Trailing ativado: {'✅' if result['activated'] else '❌'} (>= {config.TRAILING_ACTIVATION_PERCENT}%)")
 print(f"   Trailing stop em: ${result['trailing_stop']:.2f}")
@@ -387,7 +384,7 @@ result = simulate_trailing(
     side="LONG",
     funding_rate=0.01
 )
-print(f"   Entrada: $50000 | Pico: $50500 | Atual: $50400")
+print("   Entrada: $50000 | Pico: $50500 | Atual: $50400")
 print(f"   Lucro: {result['profit_pct']:.2f}% = ${result['profit_usd']:.4f}")
 print(f"   Trailing ativado: {'✅' if result['activated'] else '❌'} (>= {config.TRAILING_ACTIVATION_PERCENT}%)")
 print(f"   Trailing stop em: ${result['trailing_stop']:.2f}")

@@ -348,3 +348,83 @@ def test_setup_exchange_restores_open_positions_for_reentry_tracking(monkeypatch
     assert ok is True
     assert "ETHUSDT_LONG" in bot.known_positions
     assert bot.known_positions["ETHUSDT_LONG"]["quantity"] == 0.4
+
+
+def test_close_position_does_not_account_when_exchange_close_fails():
+    bot = _make_light_bot()
+
+    bot.exchange = SimpleNamespace(
+        get_current_price=lambda _symbol: 101.0,
+        close_position=lambda _symbol, _side: False,
+    )
+    bot.get_taker_fee_rate = lambda: 0.0005
+    bot.risk_manager = SimpleNamespace(update_pnl=MagicMock())
+    bot.telegram = SimpleNamespace(send_position_closed=MagicMock(return_value=True))
+
+    bot.closed_trades_count = 0
+    bot.daily_realized_pnl = 0.0
+    bot.total_pnl = 0.0
+    bot.trades_win_count = 0
+    bot.trades_loss_count = 0
+    bot.trades_win_total = 0.0
+    bot.trades_loss_total = 0.0
+    bot.total_fees_paid = 0.0
+    bot.trades_by_symbol = {}
+    bot.pnl_by_symbol = {}
+
+    pos = {
+        "symbol": "ETHUSDT",
+        "side": "LONG",
+        "entry_price": 100.0,
+        "quantity": 0.5,
+        "leverage": 20,
+    }
+
+    closed = bot._close_position_with_notification(pos, "Take Profit")
+
+    assert closed is False
+    assert bot.closed_trades_count == 0
+    assert bot.daily_realized_pnl == 0.0
+    assert bot.total_pnl == 0.0
+    assert bot.trades_win_count == 0
+    assert bot.trades_loss_count == 0
+    assert bot.trades_win_total == 0.0
+    assert bot.trades_loss_total == 0.0
+    assert bot.total_fees_paid == 0.0
+    assert bot.trades_by_symbol == {}
+    assert bot.pnl_by_symbol == {}
+    bot.risk_manager.update_pnl.assert_not_called()
+    bot.telegram.send_position_closed.assert_not_called()
+
+
+def test_check_global_stop_loss_ignores_invalid_initial_capital():
+    bot = _make_light_bot()
+
+    bot.exchange = SimpleNamespace(
+        get_account_info=lambda: {"wallet_balance": 100.0, "unrealized_pnl": -5.0},
+        get_daily_pnl_from_binance=lambda: {"total": -10.0},
+    )
+    bot.initial_capital = 0.0
+
+    assert bot.check_global_stop_loss() is False
+
+
+def test_execute_global_stop_loss_handles_invalid_initial_capital():
+    bot = _make_light_bot()
+
+    bot.exchange = SimpleNamespace(
+        get_open_positions=lambda: [],
+        get_account_info=lambda: {"wallet_balance": 120.0, "unrealized_pnl": -8.0},
+        get_daily_pnl_from_binance=lambda: {"total": -12.0},
+    )
+    bot.telegram = SimpleNamespace(send_global_stop_loss_alert=MagicMock())
+    bot.save_state = MagicMock(return_value=True)
+    bot.initial_capital = 0.0
+    bot.running = True
+
+    bot.execute_global_stop_loss()
+
+    assert bot.running is False
+    assert bot.telegram.send_global_stop_loss_alert.call_count == 1
+    call_kwargs = bot.telegram.send_global_stop_loss_alert.call_args.kwargs
+    assert call_kwargs["initial_capital"] == 120.0

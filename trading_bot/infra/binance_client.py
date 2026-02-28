@@ -13,7 +13,6 @@ import time
 import threading
 from typing import Any, Callable, Dict, List, Optional
 from binance.client import Client
-from binance.enums import *
 from binance.exceptions import BinanceAPIException, BinanceRequestException
 from ..core.config import config
 
@@ -734,21 +733,6 @@ class BinanceConnection:
                 'favorable_side': 'NEUTRAL'
             }
     
-    def get_all_funding_rates(self, symbols: list) -> dict:
-        """
-        Busca o funding rate de múltiplos pares de uma vez.
-        
-        Args:
-            symbols: Lista de pares (ex: ['BTCUSDT', 'ETHUSDT'])
-        
-        Returns:
-            Dict com symbol -> funding_info
-        """
-        result = {}
-        for symbol in symbols:
-            result[symbol] = self.get_funding_rate(symbol)
-        return result
-    
     def get_commission_rates(self, symbol: str = "BTCUSDT") -> Dict:
         """
         Busca as taxas de comissão do usuário diretamente da API da Binance.
@@ -1070,53 +1054,6 @@ class BinanceConnection:
             )
             return None
     
-    def place_limit_order(
-        self,
-        symbol: str,
-        side: str,
-        position_side: str,
-        quantity: float,
-        price: float
-    ) -> Optional[Dict]:
-        """
-        Coloca uma ordem limitada.
-        Útil para DCA com preços específicos.
-        """
-        self._record_order_stat(symbol, attempts=1)
-        try:
-            info = self.get_symbol_info(symbol)
-            qty_precision = info.get('quantityPrecision', 3)
-            price_precision = info.get('pricePrecision', 2)
-            
-            formatted_qty = round(quantity, qty_precision)
-            formatted_price = round(price, price_precision)
-            
-            order = self._api_call(
-                "futures_create_order_limit",
-                self.client.futures_create_order,
-                symbol=symbol,
-                side=side,
-                positionSide=position_side,
-                type='LIMIT',
-                quantity=formatted_qty,
-                price=formatted_price,
-                timeInForce='GTC',  # Good Till Cancel
-                allow_timeout_retry=False
-            )
-            
-            logger.info(f"📋 Ordem limitada: {side} {position_side} {formatted_qty} {symbol} @ ${formatted_price}")
-            self._record_order_stat(symbol, successes=1)
-            return order
-            
-        except Exception as e:
-            logger.error(f"Erro ao enviar ordem limitada: {e}")
-            self._record_order_stat(
-                symbol,
-                failures=1,
-                rejections=1 if self._is_order_rejection(e) else 0
-            )
-            return None
-    
     def set_stop_loss_take_profit(
         self,
         symbol: str,
@@ -1173,24 +1110,6 @@ class BinanceConnection:
             logger.error(f"Erro ao definir SL/TP: {e}")
             return False
     
-    def cancel_all_orders(self, symbol: str) -> bool:
-        """
-        Cancela todas as ordens abertas de um símbolo.
-        """
-        try:
-            self._api_call(
-                "futures_cancel_all_open_orders",
-                self.client.futures_cancel_all_open_orders,
-                symbol=symbol,
-                allow_timeout_retry=False
-            )
-            logger.info(f"🗑️  Ordens canceladas: {symbol}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Erro ao cancelar ordens: {e}")
-            return False
-    
     def close_position(self, symbol: str, position_side: str) -> bool:
         """
         Fecha uma posição inteira a mercado.
@@ -1221,11 +1140,3 @@ class BinanceConnection:
         except Exception as e:
             logger.error(f"Erro ao fechar posição: {e}")
             return False
-
-
-# Função helper para criar conexão facilmente
-def create_connection() -> BinanceConnection:
-    """
-    Cria e retorna uma conexão configurada com a Binance.
-    """
-    return BinanceConnection()

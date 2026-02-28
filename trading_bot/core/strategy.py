@@ -50,20 +50,6 @@ class TechnicalAnalysis:
     """
     
     @staticmethod
-    def calculate_sma(prices: List[float], period: int) -> float:
-        """
-        Calcula a Média Móvel Simples (SMA).
-        
-        A SMA suaviza os preços para identificar tendências.
-        Se o preço está ACIMA da SMA = tendência de alta.
-        Se o preço está ABAIXO da SMA = tendência de baixa.
-        """
-        if len(prices) < period:
-            return prices[-1] if prices else 0
-        
-        return sum(prices[-period:]) / period
-    
-    @staticmethod
     def calculate_ema(prices: List[float], period: int) -> float:
         """
         Calcula a Média Móvel Exponencial (EMA).
@@ -211,8 +197,6 @@ class HedgeStrategy:
         
         # Extrai os preços de fechamento
         closes = [k['close'] for k in klines]
-        highs = [k['high'] for k in klines]
-        lows = [k['low'] for k in klines]
         current_price = closes[-1]
         
         # Calcula indicadores
@@ -331,7 +315,7 @@ class HedgeStrategy:
         min_required = total_needed * 1.1
         
         if available_capital < min_required:
-            logger.warning(f"⚠️ Capital insuficiente para hedge completo")
+            logger.warning("⚠️ Capital insuficiente para hedge completo")
             logger.warning(f"   Disponível: ${available_capital:.2f} | Necessário: ${min_required:.2f}")
             logger.warning(f"   (LONG ${long_size:.2f} + SHORT ${short_size:.2f} + 10% fees)")
             return (0.0, 0.0)  # Retorna zero para pular este trade
@@ -449,11 +433,6 @@ class HedgeStrategy:
         # Analisa o mercado
         signal = self.analyze_market(klines)
         
-        # Se neutro, pode optar por não operar
-        # (descomente a linha abaixo para ser mais conservador)
-        # if signal == Signal.NEUTRAL:
-        #     return None
-        
         # Preço atual
         entry_price = klines[-1]['close']
         
@@ -523,10 +502,6 @@ class RiskManager:
         """Atualiza o P&L diário."""
         self.daily_pnl += pnl
     
-    def reset_daily_pnl(self):
-        """Reseta o P&L diário (chamar no início de cada dia)."""
-        self.daily_pnl = 0.0
-    
     def can_open_position(self, current_positions: int) -> bool:
         """
         Verifica se pode abrir nova posição.
@@ -547,35 +522,3 @@ class RiskManager:
             return False
         
         return True
-    
-    def calculate_position_risk(
-        self, 
-        position_size: float, 
-        stop_loss_percent: float
-    ) -> float:
-        """
-        Calcula o risco em dólares de uma posição.
-        """
-        return position_size * (stop_loss_percent / 100)
-    
-    def should_close_position(
-        self, 
-        unrealized_pnl: float, 
-        entry_price: float
-    ) -> Tuple[bool, str]:
-        """
-        Verifica se deve fechar uma posição baseado em regras de risco.
-        
-        Retorna: (deve_fechar, razão)
-        """
-        # Perda muito grande
-        max_loss = self.initial_capital * (self.config.STOP_LOSS_PERCENT / 100)
-        if unrealized_pnl < -max_loss:
-            return (True, "Stop Loss atingido")
-        
-        # Lucro bom
-        target_profit = self.initial_capital * (self.config.TAKE_PROFIT_PERCENT / 100)
-        if unrealized_pnl > target_profit:
-            return (True, "Take Profit atingido")
-        
-        return (False, "")

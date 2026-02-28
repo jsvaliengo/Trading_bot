@@ -14,8 +14,8 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from trading_bot.core.config import config
-from trading_bot.infra.binance_client import BinanceConnection
+from trading_bot.core.config import config  # noqa: E402
+from trading_bot.infra.binance_client import BinanceConnection  # noqa: E402
 
 
 def test_connection():
@@ -28,7 +28,7 @@ def test_connection():
     print()
     
     # Mostra configuração
-    print(f"📋 Configuração:")
+    print("📋 Configuração:")
     print(f"   • Testnet: {'Sim' if config.USE_TESTNET else 'Não (MAINNET)'}")
     print(f"   • Capital configurado: ${config.TOTAL_CAPITAL}")
     print(f"   • Alavancagem: {config.LEVERAGE}x")

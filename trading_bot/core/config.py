@@ -605,13 +605,6 @@ class TradingConfig:
             'coins': coins
         }
     
-    def get_position_size(self) -> float:
-        """
-        Calcula o tamanho da posição baseado no capital e configurações.
-        Retorna o valor em USDT para cada trade.
-        """
-        return self.TOTAL_CAPITAL * self.MAX_POSITION_PERCENT
-    
     def validate(self) -> bool:
         """
         Valida se as configurações fazem sentido.

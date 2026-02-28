@@ -13,6 +13,7 @@ SCREEN_NAME="${SCREEN_NAME:-bot}"
 BOT_MODULE="${BOT_MODULE:-trading_bot.core.bot}"
 BOT_PROCESS_PATTERN="${BOT_PROCESS_PATTERN:-python.*-m[[:space:]]+${BOT_MODULE//./\\.}}"
 PYTHON_BIN="${PYTHON_BIN:-$VENV_DIR/bin/python}"
+SKIP_GIT_PULL="${SKIP_GIT_PULL:-0}"
 
 log() {
   printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
@@ -22,7 +23,9 @@ cd "$PROJECT_DIR"
 
 log "Projeto: $PROJECT_DIR"
 
-if [[ -d .git ]]; then
+if [[ "$SKIP_GIT_PULL" == "1" || "$SKIP_GIT_PULL" == "true" ]]; then
+  log "SKIP_GIT_PULL ativo. Pulando git pull."
+elif [[ -d .git ]]; then
   log "Atualizando código (git pull --ff-only)..."
   git pull --ff-only
 else

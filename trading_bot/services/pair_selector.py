@@ -260,35 +260,6 @@ class PairSelector:
         
         return final_score
     
-    def filter_pairs(self, all_pairs: List[str]) -> List[str]:
-        """
-        Filtra pares que não atendem aos critérios mínimos.
-        """
-        filtered = []
-        
-        for symbol in all_pairs:
-            metrics = self.get_pair_metrics(symbol)
-            
-            if not metrics:
-                continue
-            
-            # Aplica filtros mínimos
-            if metrics['volume_24h'] < self.config.MIN_VOLUME_24H_USD:
-                logger.debug(f"❌ {symbol}: Volume baixo ${metrics['volume_24h']/1e6:.1f}M")
-                continue
-            
-            if metrics['spread_percent'] > self.config.MAX_SPREAD_PERCENT:
-                logger.debug(f"❌ {symbol}: Spread alto {metrics['spread_percent']:.3f}%")
-                continue
-            
-            if metrics['volatility'] < self.config.MIN_VOLATILITY_PERCENT:
-                logger.debug(f"❌ {symbol}: Volatilidade baixa {metrics['volatility']:.2f}%")
-                continue
-            
-            filtered.append(symbol)
-        
-        return filtered
-    
     def calculate_pair_capital_needed(self, min_notional: float) -> float:
         """
         Calcula quanto capital é necessário para operar um par em hedge.
@@ -297,6 +268,38 @@ class PairSelector:
         Ex: $5 × 1.25 × 2 × 1.10 = $13.75
         """
         return min_notional * self.SAFETY_MARGIN * 2 * self.FEE_MARGIN
+
+    def _estimate_fixed_pair_capital_needed(self, symbol: str) -> float:
+        """
+        Estima capital necessário para um par fixo.
+
+        Tenta usar métricas completas; se falhar, usa get_symbol_info;
+        no pior caso usa mínimo conservador de $5.
+        """
+        min_notional = None
+
+        metrics = self.get_pair_metrics(symbol)
+        if metrics:
+            try:
+                min_notional = float(metrics.get('min_notional', 0) or 0)
+            except (TypeError, ValueError):
+                min_notional = None
+
+        if min_notional is None or min_notional <= 0:
+            try:
+                info = self.exchange.get_symbol_info(symbol) or {}
+                min_notional = float(info.get('minNotional', 0) or 0)
+            except Exception as e:
+                logger.warning(f"⚠️ Falha ao obter minNotional de {symbol}: {e}")
+                min_notional = None
+
+        if min_notional is None or min_notional <= 0:
+            min_notional = 5.0
+            logger.warning(
+                f"⚠️ Usando minNotional fallback para par fixo {symbol}: ${min_notional:.2f}"
+            )
+
+        return self.calculate_pair_capital_needed(min_notional)
     
     def select_best_pairs(self, available_capital: float = None) -> Tuple[List[str], Dict]:
         """
@@ -316,7 +319,8 @@ class PairSelector:
         if available_capital is None:
             try:
                 available_capital = self.exchange.get_available_balance()
-            except:
+            except Exception as e:
+                logger.warning(f"⚠️ Falha ao obter saldo disponível da exchange: {e}")
                 available_capital = 100.0  # Fallback
         
         logger.info(f"💰 Capital disponível: ${available_capital:.2f}")
@@ -394,16 +398,27 @@ class PairSelector:
         # ============================================
         # 4. SELECIONA PARES CONSIDERANDO CAPITAL
         # ============================================
-        selected_pairs = list(self.config.FIXED_PAIRS)  # Começa com os fixos
+        selected_pairs = []  # Começa com os fixos (deduplicados)
         capital_used = 0.0
-        
-        # Calcula capital usado pelos pares fixos
+
+        # Calcula capital usado pelos pares fixos de forma explícita
+        fixed_capital_needed = {}
         for symbol in self.config.FIXED_PAIRS:
-            if symbol in pair_scores:
-                capital_used += pair_scores[symbol]['capital_needed']
-        
+            if symbol in selected_pairs:
+                continue
+            pair_capital_needed = self._estimate_fixed_pair_capital_needed(symbol)
+            fixed_capital_needed[symbol] = pair_capital_needed
+            selected_pairs.append(symbol)
+            capital_used += pair_capital_needed
+
+        if capital_used > available_capital:
+            logger.warning(
+                f"⚠️ Pares fixos consomem mais capital que o disponível: "
+                f"${capital_used:.2f} > ${available_capital:.2f}"
+            )
+
         # Número máximo de pares dinâmicos
-        max_dynamic = self.config.MAX_TRADING_PAIRS - len(self.config.FIXED_PAIRS)
+        max_dynamic = max(0, self.config.MAX_TRADING_PAIRS - len(selected_pairs))
         selected_count = 0
         
         logger.info(f"📊 Selecionando até {max_dynamic} pares dinâmicos...")
@@ -435,7 +450,9 @@ class PairSelector:
         if self.config.FIXED_PAIRS:
             logger.info("📌 FIXOS:")
             for symbol in self.config.FIXED_PAIRS:
-                logger.info(f"   • {symbol}")
+                logger.info(
+                    f"   • {symbol}: precisa ${fixed_capital_needed.get(symbol, 0.0):.2f}"
+                )
         
         logger.info(f"🔄 DINÂMICOS ({selected_count}/{max_dynamic}):")
         for symbol in selected_pairs:
@@ -470,10 +487,3 @@ class PairSelector:
         
         return elapsed >= interval
     
-    def get_pair_info(self, symbol: str) -> Dict:
-        """
-        Retorna informações sobre um par específico.
-        """
-        if symbol in self.pair_scores:
-            return self.pair_scores[symbol]
-        return None

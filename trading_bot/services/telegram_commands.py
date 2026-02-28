@@ -14,7 +14,7 @@ import logging
 import threading
 import time
 from datetime import datetime, timezone
-from typing import Callable, Dict, Any, Optional
+from typing import Callable, Dict
 import requests
 
 logger = logging.getLogger(__name__)
@@ -60,6 +60,8 @@ class TelegramCommandHandler:
             '/pause': self.cmd_pause,
             '/resume': self.cmd_resume,
             '/status': self.cmd_status,
+            '/portfolio': self.cmd_portfolio,
+            '/trades': self.cmd_trades,
             '/lockinfo': self.cmd_lockinfo,
             '/apihealth': self.cmd_apihealth,
             '/config': self.cmd_config,
@@ -277,21 +279,47 @@ class TelegramCommandHandler:
             
             # Fecha posições
             positions = self.bot.exchange.get_open_positions()
+            total_positions = len(positions)
+            closed_count = 0
+            failures = []
+
             for pos in positions:
+                symbol = pos.get('symbol', 'UNKNOWN')
+                side = pos.get('side', 'UNKNOWN')
+                qty = pos.get('quantity', 0)
                 try:
-                    symbol = pos['symbol']
-                    side = pos['side']
-                    qty = pos['quantity']
-                    
                     if side == 'LONG':
-                        self.bot.exchange.place_market_order(symbol, 'SELL', 'LONG', qty)
+                        result = self.bot.exchange.place_market_order(symbol, 'SELL', 'LONG', qty)
                     else:
-                        self.bot.exchange.place_market_order(symbol, 'BUY', 'SHORT', qty)
-                except:
-                    pass
+                        result = self.bot.exchange.place_market_order(symbol, 'BUY', 'SHORT', qty)
+
+                    if result:
+                        closed_count += 1
+                    else:
+                        failures.append(f"{side} {symbol}: retorno vazio da exchange")
+                except Exception as e:
+                    failures.append(f"{side} {symbol}: {e}")
+                    logger.error(f"Erro ao fechar posição via /stop force ({side} {symbol}): {e}")
             
             self.bot.running = False
-            self.send_message("✅ Bot parado e posições fechadas!")
+            if total_positions == 0:
+                self.send_message("✅ Bot parado. Não havia posições abertas para fechar.")
+            elif failures:
+                preview = "\n".join([f"• {item}" for item in failures[:5]])
+                if len(failures) > 5:
+                    preview += f"\n• ... e mais {len(failures) - 5} falha(s)"
+                self.send_message(
+                    f"⚠️ <b>BOT PARADO COM FALHAS AO FECHAR POSIÇÕES</b>\n\n"
+                    f"✅ Fechadas: <code>{closed_count}/{total_positions}</code>\n"
+                    f"❌ Falhas: <code>{len(failures)}</code>\n\n"
+                    f"<b>Detalhes:</b>\n{preview}\n\n"
+                    f"Use /positions para verificar se ainda há posições abertas."
+                )
+            else:
+                self.send_message(
+                    f"✅ Bot parado e posições fechadas com sucesso "
+                    f"(<code>{closed_count}/{total_positions}</code>)."
+                )
         else:
             try:
                 self.bot.save_state()
@@ -499,6 +527,42 @@ class TelegramCommandHandler:
 
         except Exception as e:
             self.send_message(f"❌ Erro ao gerar API health: {e}")
+
+    def cmd_portfolio(self, args: list):
+        """Envia evolução da carteira sob demanda."""
+        if self.bot is None:
+            self.send_message("❌ Bot não configurado")
+            return
+
+        try:
+            if not hasattr(self.bot, 'send_portfolio_evolution'):
+                self.send_message("⚠️ Esta versão do bot não suporta /portfolio.")
+                return
+            self.bot.send_portfolio_evolution()
+        except Exception as e:
+            self.send_message(f"❌ Erro ao gerar evolução da carteira: {e}")
+
+    def cmd_trades(self, args: list):
+        """Envia relatório de trades sob demanda."""
+        if self.bot is None:
+            self.send_message("❌ Bot não configurado")
+            return
+
+        try:
+            if not hasattr(self.bot, 'send_trades_report'):
+                self.send_message("⚠️ Esta versão do bot não suporta /trades.")
+                return
+
+            total_trades = int(getattr(self.bot, 'trades_win_count', 0)) + int(
+                getattr(self.bot, 'trades_loss_count', 0)
+            )
+            if total_trades == 0:
+                self.send_message("ℹ️ Sem trades fechados para relatório no momento.")
+                return
+
+            self.bot.send_trades_report()
+        except Exception as e:
+            self.send_message(f"❌ Erro ao gerar relatório de trades: {e}")
     
     def cmd_positions(self, args: list):
         """Mostra posições abertas."""
@@ -541,7 +605,7 @@ class TelegramCommandHandler:
                 message += f"   P&L: {pnl_emoji} <code>{self._format_usd_brl(pnl, 2, True)}</code>\n"
             
             total_emoji = "🟢" if total_unrealized >= 0 else "🔴"
-            message += f"\n━━━━━━━━━━━━━━━━━━━━━\n"
+            message += "\n━━━━━━━━━━━━━━━━━━━━━\n"
             message += f"<b>Total:</b> {total_emoji} <code>{self._format_usd_brl(total_unrealized, 2, True)}</code>"
             
             self.send_message(message)
@@ -921,6 +985,8 @@ class TelegramCommandHandler:
 
 <b>📊 INFORMAÇÕES:</b>
 /status - Status completo
+/portfolio - Evolução da carteira
+/trades - Relatório de trades
 /lockinfo - Status do lock
 /apihealth - Saúde operacional
 /config - Ver configurações

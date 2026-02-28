@@ -23,11 +23,11 @@ import shutil
 import fcntl
 import threading
 from datetime import datetime
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, Tuple
 
 from .config import config
 from ..infra.binance_client import BinanceConnection
-from .strategy import HedgeStrategy, RiskManager, Signal
+from .strategy import HedgeStrategy, RiskManager
 from ..services.notifications import TelegramNotifier
 from ..services.pair_selector import PairSelector
 from ..services.telegram_commands import TelegramCommandHandler
@@ -84,7 +84,11 @@ class TradingBot:
         
         # Valida configurações
         logger.info("📋 Validando configurações...")
-        config.validate()
+        if not config.validate():
+            logger.error("❌ Configuração inválida. Inicialização abortada.")
+            raise ValueError(
+                "Configuração inválida. Corrija os alertas exibidos antes de iniciar o bot."
+            )
         
         # Inicializa componentes
         logger.info("🔌 Conectando à Binance...")
@@ -453,46 +457,6 @@ class TradingBot:
 
         return (True, ", ".join(reasons[:4]))
 
-    def _maybe_send_critical_health_alert(self, now_monotonic: float) -> bool:
-        """
-        Dispara alerta crítico imediato com cooldown quando detectar incidente.
-        """
-        if not bool(getattr(config, "API_HEALTH_CRITICAL_ALERTS_ENABLED", True)):
-            return False
-
-        if now_monotonic < self._next_critical_health_alert_time:
-            return False
-
-        if not hasattr(self, 'exchange') or not hasattr(self.exchange, 'get_retry_stats_report'):
-            return False
-
-        try:
-            api_report = self.exchange.get_retry_stats_report(reset=False)
-            order_report = (
-                self.exchange.get_order_stats_report(reset=False)
-                if hasattr(self.exchange, 'get_order_stats_report')
-                else self._empty_order_stats_report()
-            )
-            runtime_report = self.get_runtime_stats_report(reset=False)
-
-            is_critical, reason = self._evaluate_critical_health_issue(
-                api_report=api_report,
-                order_report=order_report,
-                runtime_report=runtime_report
-            )
-            if not is_critical:
-                return False
-
-            logger.warning(f"🚨 ALERTA CRÍTICO DETECTADO: {reason}")
-            sent = self.send_api_health_report(force=True, trigger_reason=reason)
-            cooldown = max(1, int(getattr(config, "API_HEALTH_CRITICAL_COOLDOWN_SECONDS", 300)))
-            self._next_critical_health_alert_time = now_monotonic + cooldown
-            return sent
-
-        except Exception as e:
-            logger.warning(f"⚠️ Falha ao avaliar alerta crítico de health: {e}")
-            return False
-    
     def save_state(self):
         """
         Salva o estado atual do bot em um arquivo JSON.
@@ -593,7 +557,7 @@ class TradingBot:
                 self.trades_win_total = 0.0
                 self.trades_loss_total = 0.0
                 self.total_fees_paid = 0.0  # Reseta taxas também
-                logger.info(f"📅 Novo dia UTC! P&L diário e estatísticas resetados.")
+                logger.info("📅 Novo dia UTC! P&L diário e estatísticas resetados.")
             
             # Carrega o start_time original
             start_time_str = state.get('start_time')
@@ -695,7 +659,7 @@ class TradingBot:
         
         # Mostra configuração de capital por trade (baseado no saldo ATUAL)
         trade_value = current_balance * config.MAX_POSITION_PERCENT
-        logger.info(f"📊 Sistema de capital flexível:")
+        logger.info("📊 Sistema de capital flexível:")
         logger.info(f"   • Saldo atual: ${current_balance:.2f}")
         logger.info(f"   • Por trade: {config.MAX_POSITION_PERCENT * 100:.0f}% = ${trade_value:.2f} (ou mínimo da moeda)")
         logger.info(f"   • Alavancagem: {config.LEVERAGE}x")
@@ -1088,7 +1052,7 @@ class TradingBot:
             
             if old_strategy is None or old_strategy['capital_range'] != new_strategy['capital_range']:
                 # Mudou de faixa! Atualiza
-                logger.info(f"📊 MUDANÇA DE FAIXA DETECTADA!")
+                logger.info("📊 MUDANÇA DE FAIXA DETECTADA!")
                 if old_strategy:
                     logger.info(f"   Anterior: {old_strategy['capital_range']} ({old_strategy['num_coins']} moedas)")
                 logger.info(f"   Nova: {new_strategy['capital_range']} ({new_strategy['num_coins']} moedas)")
@@ -1157,17 +1121,6 @@ class TradingBot:
         for symbol, min_val in pairs_with_min:
             logger.info(f"   • {symbol}: mínimo ${min_val:.2f}")
     
-    def get_pairs_sorted_by_min_notional(self) -> List[Tuple[str, float]]:
-        """
-        Retorna os pares de trading ordenados pelo valor mínimo (menor primeiro).
-        Usa o cache criado no início para evitar chamadas repetidas à API.
-        """
-        # Se não tem cache, cria
-        if not hasattr(self, 'sorted_pairs') or not self.sorted_pairs:
-            self.cache_pairs_min_notional()
-        
-        return self.sorted_pairs
-    
     def update_trading_pairs(self):
         """
         Atualiza a lista de pares de trading usando seleção inteligente.
@@ -1216,7 +1169,11 @@ class TradingBot:
             for pos in positions:
                 if pos['symbol'] in removed_pairs:
                     logger.info(f"🔴 Fechando posição em {pos['symbol']} (par removido)")
-                    self._close_position_with_notification(pos, "Par removido da lista")
+                    closed = self._close_position_with_notification(pos, "Par removido da lista")
+                    if not closed:
+                        logger.warning(
+                            f"⚠️ Falha ao fechar posição de {pos['symbol']} durante remoção de par."
+                        )
         
         # Atualiza configuração
         config.TRADING_PAIRS = selected_pairs
@@ -1235,7 +1192,7 @@ class TradingBot:
             self.exchange.set_leverage(symbol, config.LEVERAGE)
         
         # Notifica no Telegram
-        msg = f"🔄 <b>ATUALIZAÇÃO DE PARES</b>\n\n"
+        msg = "🔄 <b>ATUALIZAÇÃO DE PARES</b>\n\n"
         msg += f"📌 <b>Fixos:</b> {', '.join(config.FIXED_PAIRS)}\n"
         msg += f"🔄 <b>Dinâmicos:</b> {', '.join([p for p in config.TRADING_PAIRS if p not in config.FIXED_PAIRS])}\n\n"
         
@@ -1386,7 +1343,7 @@ class TradingBot:
             # Calcula o breakeven (taxa de abrir + fechar)
             breakeven = (rates['taker_rate'] * 2) * 100  # Em percentual
             
-            logger.info(f"💰 Taxas de comissão atualizadas:")
+            logger.info("💰 Taxas de comissão atualizadas:")
             logger.info(f"   • Maker: {rates['maker_percent']:.4f}%")
             logger.info(f"   • Taker: {rates['taker_percent']:.4f}%")
             logger.info(f"   • Breakeven (abrir + fechar): {breakeven:.4f}%")
@@ -1426,7 +1383,7 @@ class TradingBot:
         # VERIFICA META DIÁRIA
         # ============================================
         if self.check_daily_targets():
-            logger.info(f"⏸️  Meta diária atingida - não abrindo novas posições")
+            logger.info("⏸️  Meta diária atingida - não abrindo novas posições")
             return False
         
         logger.info(f"🔍 Analisando {symbol}...")
@@ -1666,7 +1623,7 @@ class TradingBot:
                     'last_seen': datetime.now()
                 }
                 
-                logger.info(f"✅ LONG aberto com sucesso!")
+                logger.info("✅ LONG aberto com sucesso!")
                 logger.info(f"   {long_qty:.4f} {symbol} @ ${price:.4f}")
                 logger.info(f"   Order Size: ${order_size} | TP: ${setup.take_profit:.4f}")
                 
@@ -1742,7 +1699,7 @@ class TradingBot:
                     'last_seen': datetime.now()
                 }
                 
-                logger.info(f"✅ SHORT aberto com sucesso!")
+                logger.info("✅ SHORT aberto com sucesso!")
                 logger.info(f"   {short_qty:.4f} {symbol} @ ${price:.4f}")
                 logger.info(f"   Order Size: ${order_size} | TP: ${short_tp:.4f}")
                 
@@ -1857,11 +1814,20 @@ class TradingBot:
             if profit_pct >= config.TAKE_PROFIT_PERCENT:
                 logger.info(f"🎯 Take Profit atingido! {profit_pct:.2f}% >= {config.TAKE_PROFIT_PERCENT}%")
                 pos['current_price'] = current_price
-                self._close_position_with_notification(pos, f"Take Profit ({config.TAKE_PROFIT_PERCENT}%)")
-                self._clear_trailing_data(position_key)
-                # Remove do known_positions
-                if position_key in self.known_positions:
-                    del self.known_positions[position_key]
+                closed = self._close_position_with_notification(
+                    pos,
+                    f"Take Profit ({config.TAKE_PROFIT_PERCENT}%)"
+                )
+                if closed:
+                    self._clear_trailing_data(position_key)
+                    # Remove do known_positions
+                    if position_key in self.known_positions:
+                        del self.known_positions[position_key]
+                else:
+                    logger.warning(
+                        f"⚠️ Fechamento não confirmado para {position_key} em Take Profit. "
+                        "Mantendo rastreamento da posição."
+                    )
                 continue
             
             # ============================================
@@ -1879,11 +1845,17 @@ class TradingBot:
                 
                 if should_close:
                     pos['current_price'] = current_price
-                    self._close_position_with_notification(pos, reason)
-                    self._clear_trailing_data(position_key)
-                    # Remove do known_positions
-                    if position_key in self.known_positions:
-                        del self.known_positions[position_key]
+                    closed = self._close_position_with_notification(pos, reason)
+                    if closed:
+                        self._clear_trailing_data(position_key)
+                        # Remove do known_positions
+                        if position_key in self.known_positions:
+                            del self.known_positions[position_key]
+                    else:
+                        logger.warning(
+                            f"⚠️ Fechamento não confirmado para {position_key} via trailing. "
+                            "Mantendo rastreamento da posição."
+                        )
                     continue
             
             # ============================================
@@ -1893,11 +1865,20 @@ class TradingBot:
                 # Verifica se o prejuízo excede o limite
                 if profit_pct <= -config.STOP_LOSS_PERCENT:
                     pos['current_price'] = current_price
-                    self._close_position_with_notification(pos, f"Stop Loss ({config.STOP_LOSS_PERCENT}%)")
-                    self._clear_trailing_data(position_key)
-                    # Remove do known_positions
-                    if position_key in self.known_positions:
-                        del self.known_positions[position_key]
+                    closed = self._close_position_with_notification(
+                        pos,
+                        f"Stop Loss ({config.STOP_LOSS_PERCENT}%)"
+                    )
+                    if closed:
+                        self._clear_trailing_data(position_key)
+                        # Remove do known_positions
+                        if position_key in self.known_positions:
+                            del self.known_positions[position_key]
+                    else:
+                        logger.warning(
+                            f"⚠️ Fechamento não confirmado para {position_key} via stop loss. "
+                            "Mantendo rastreamento da posição."
+                        )
                     continue
         
         logger.info(f"💵 P&L Total não realizado: ${total_pnl:.2f}")
@@ -1926,8 +1907,6 @@ class TradingBot:
                 # Pega o mais recente (último fechamento)
                 latest = income_list[-1]
                 pnl_gross = float(latest.get('income', 0))
-                trade_time = latest.get('time', 0)
-                
                 # Calcula taxas
                 taker_fee_rate = self.get_taker_fee_rate()
                 notional = entry_price * quantity
@@ -1936,7 +1915,7 @@ class TradingBot:
                 # P&L líquido
                 pnl_net = pnl_gross - total_fees
                 
-                logger.info(f"📊 P&L encontrado na Binance:")
+                logger.info("📊 P&L encontrado na Binance:")
                 logger.info(f"   P&L Bruto: ${pnl_gross:.4f}")
                 logger.info(f"   Taxas: ${total_fees:.4f}")
                 logger.info(f"   P&L Líquido: ${pnl_net:.4f}")
@@ -2137,27 +2116,39 @@ class TradingBot:
         if position_key in self.trailing_activated:
             del self.trailing_activated[position_key]
     
-    def _close_position_with_notification(self, pos: dict, reason: str):
+    def _close_position_with_notification(self, pos: dict, reason: str) -> bool:
         """
         Fecha uma posição e envia notificação com P&L líquido.
         Também atualiza o contador de trades fechados e o P&L diário.
-        
+
         IMPORTANTE: O P&L é calculado com base nos preços REAIS de entrada e saída,
         não no unrealized_pnl que pode estar desatualizado.
+
+        Returns:
+            True se o fechamento foi confirmado; False caso contrário.
         """
         symbol = pos['symbol']
         side = pos['side']
         entry_price = pos['entry_price']
         quantity = pos['quantity']
-        leverage = pos.get('leverage', config.LEVERAGE)
-        
         logger.info(f"🚨 Fechando posição: {reason}")
         
         # Pega o preço atual ANTES de fechar (será o preço de saída aproximado)
         current_price = self.exchange.get_current_price(symbol)
         
-        # Fecha a posição
-        self.exchange.close_position(symbol, side)
+        # Fecha a posição e só contabiliza se o fechamento for confirmado
+        try:
+            close_success = self.exchange.close_position(symbol, side)
+        except Exception as e:
+            logger.error(f"❌ Exceção ao fechar posição {side} {symbol}: {e}")
+            return False
+
+        if not close_success:
+            logger.error(
+                f"❌ Falha ao fechar posição {side} {symbol}. "
+                "Nenhuma estatística/P&L será contabilizada."
+            )
+            return False
         
         # ============================================
         # CALCULA P&L REAL BASEADO NOS PREÇOS
@@ -2186,7 +2177,7 @@ class TradingBot:
         # P&L líquido (descontando taxas)
         pnl_net = pnl_gross - total_fees
         
-        logger.info(f"📊 Cálculo P&L:")
+        logger.info("📊 Cálculo P&L:")
         logger.info(f"   Entrada: ${entry_price:.4f} | Saída: ${current_price:.4f}")
         logger.info(f"   Quantidade: {quantity:.6f} | Nocional: ${notional_value:.2f}")
         logger.info(f"   Variação: {price_change_pct*100:.2f}% | P&L Bruto: ${pnl_gross:.4f}")
@@ -2257,6 +2248,8 @@ class TradingBot:
             logger.info(f"✅ Notificação Telegram enviada para trade #{self.closed_trades_count}")
         else:
             logger.error(f"❌ FALHA ao enviar notificação Telegram para trade #{self.closed_trades_count}")
+
+        return True
     
     def check_global_stop_loss(self) -> bool:
         """
@@ -2269,15 +2262,27 @@ class TradingBot:
         """
         # Busca informações REAIS da conta Binance
         account_info = self.exchange.get_account_info()
-        current_balance = account_info['wallet_balance']
         total_unrealized = account_info['unrealized_pnl']
         
         # Busca P&L diário REAL da Binance
         daily_pnl = self.exchange.get_daily_pnl_from_binance()
         total_pnl = daily_pnl['total'] + total_unrealized
         
+        # Proteção contra capital inicial inválido (evita divisão por zero)
+        try:
+            initial_capital = float(self.initial_capital or 0.0)
+        except (TypeError, ValueError):
+            initial_capital = 0.0
+
+        if initial_capital <= 0:
+            logger.warning(
+                "⚠️ Stop Loss Global desativado neste ciclo: "
+                f"initial_capital inválido ({self.initial_capital})."
+            )
+            return False
+
         # Calcula a perda percentual
-        loss_percent = abs(total_pnl / self.initial_capital * 100) if total_pnl < 0 else 0
+        loss_percent = abs(total_pnl / initial_capital * 100) if total_pnl < 0 else 0
         
         # Verifica se atingiu o limite
         if loss_percent >= config.GLOBAL_STOP_LOSS_PERCENT:
@@ -2305,16 +2310,35 @@ class TradingBot:
         
         daily_pnl = self.exchange.get_daily_pnl_from_binance()
         total_pnl = daily_pnl['total'] + total_unrealized
-        loss_percent = abs(total_pnl / self.initial_capital * 100) if total_pnl < 0 else 0
-        
+
+        # Proteção contra capital inicial inválido (evita divisão por zero)
+        try:
+            initial_capital = float(self.initial_capital or 0.0)
+        except (TypeError, ValueError):
+            initial_capital = 0.0
+
+        if initial_capital <= 0:
+            logger.warning(
+                "⚠️ initial_capital inválido durante Stop Loss Global. "
+                "Usando saldo atual como base de referência para cálculo de perda."
+            )
+            initial_capital = max(1.0, float(current_balance))
+
+        loss_percent = abs(total_pnl / initial_capital * 100) if total_pnl < 0 else 0
+
         # Fecha todas as posições
         for pos in positions:
             logger.warning(f"Fechando {pos['side']} {pos['symbol']}...")
-            self._close_position_with_notification(pos, "Stop Loss Global")
+            closed = self._close_position_with_notification(pos, "Stop Loss Global")
+            if not closed:
+                logger.error(
+                    f"❌ Não foi possível confirmar fechamento de {pos['side']} {pos['symbol']} "
+                    "durante Stop Loss Global."
+                )
         
         # Envia notificação no Telegram
         self.telegram.send_global_stop_loss_alert(
-            initial_capital=self.initial_capital,
+            initial_capital=initial_capital,
             current_balance=current_balance,
             total_pnl=total_pnl,
             loss_percent=loss_percent
@@ -2817,9 +2841,6 @@ class TradingBot:
         # (baseadas no CHECK_INTERVAL configurado manualmente)
         base_interval = max(1, int(config.CHECK_INTERVAL))
         terminal_status_interval = base_interval * 3
-        telegram_status_interval = base_interval * config.TELEGRAM_STATUS_INTERVAL
-        portfolio_report_interval = base_interval * 18
-        trades_report_interval = base_interval * 30
         state_save_interval = base_interval * 30
         commission_update_interval = base_interval * 360
         pair_update_interval = base_interval * 2160
@@ -2832,16 +2853,11 @@ class TradingBot:
         next_analysis_step_time = now
 
         next_terminal_status_time = now + terminal_status_interval
-        next_telegram_status_time = now + telegram_status_interval
-        next_portfolio_report_time = now + portfolio_report_interval
-        next_trades_report_time = now + trades_report_interval
         next_state_save_time = now + state_save_interval
         next_commission_update_time = now + commission_update_interval
         next_pair_update_time = now + pair_update_interval
         next_deposit_check_time = now + deposit_check_interval
         next_strategy_check_time = now + strategy_check_interval
-        api_health_telegram_interval = max(1, int(config.API_HEALTH_TELEGRAM_INTERVAL_SECONDS))
-        next_api_health_telegram_time = now + api_health_telegram_interval
 
         analysis_cycle_active = False
         analysis_symbols = []
@@ -2866,6 +2882,9 @@ class TradingBot:
             "🎮 <b>COMANDOS TELEGRAM ATIVOS</b>\n\n"
             "Use /help para ver todos os comandos.\n"
             "Use /status para ver status a qualquer momento.\n"
+            "Use /portfolio para evolução da carteira.\n"
+            "Use /trades para relatório de trades.\n"
+            "Use /apihealth para relatório de saúde.\n"
             "Use /pause para pausar o bot.\n"
             "Use /stop para parar o bot."
         )
@@ -2918,23 +2937,12 @@ class TradingBot:
                     # Snapshot periódico da carteira
                     self.take_portfolio_snapshot()
 
-                    # Status no terminal / Telegram
+                    # Status periódico somente no terminal
                     if now >= next_terminal_status_time:
-                        send_telegram = now >= next_telegram_status_time
-                        self.print_status(send_telegram=send_telegram)
+                        self.print_status(send_telegram=False)
                         next_terminal_status_time = now + terminal_status_interval
-                        if send_telegram:
-                            next_telegram_status_time = now + telegram_status_interval
 
                     # Relatórios e manutenção periódica
-                    if now >= next_portfolio_report_time:
-                        self.send_portfolio_evolution()
-                        next_portfolio_report_time = now + portfolio_report_interval
-
-                    if now >= next_trades_report_time:
-                        self.send_trades_report()
-                        next_trades_report_time = now + trades_report_interval
-
                     if now >= next_state_save_time:
                         self.save_state()
                         next_state_save_time = now + state_save_interval
@@ -2965,15 +2973,6 @@ class TradingBot:
                         duration_seconds=monitor_duration,
                         target_interval_seconds=monitor_interval
                     )
-
-                    health_now = time.monotonic()
-                    critical_alert_sent = self._maybe_send_critical_health_alert(health_now)
-                    if critical_alert_sent:
-                        # Após alerta crítico, abre nova janela para o próximo report periódico
-                        next_api_health_telegram_time = health_now + api_health_telegram_interval
-                    elif health_now >= next_api_health_telegram_time:
-                        self.send_api_health_report()
-                        next_api_health_telegram_time = health_now + api_health_telegram_interval
 
                 # ============================================
                 # CICLO LENTO: ANÁLISE DE ENTRADAS
@@ -3143,10 +3142,10 @@ def main():
     """)
     
     # Mostra configurações
-    print(f"📋 Configurações:")
+    print("📋 Configurações:")
     print(f"   • Ambiente: {config.APP_ENV}")
     print(f"   • Runtime: {config.RUNTIME_DIR}")
-    print(f"   • Capital: DINÂMICO (saldo da carteira de futuros)")
+    print("   • Capital: DINÂMICO (saldo da carteira de futuros)")
     print(f"   • Alavancagem: {config.LEVERAGE}x")
     print(f"   • Testnet: {'Sim' if config.USE_TESTNET else 'NÃO (DINHEIRO REAL!)'}")
     print(f"   • Pares: {', '.join(config.TRADING_PAIRS)}")
