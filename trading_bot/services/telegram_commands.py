@@ -469,6 +469,13 @@ class TelegramCommandHandler:
    • Ativação: <code>{self.config.TRAILING_ACTIVATION_PERCENT}%</code>
    • Distância: <code>{self.config.TRAILING_DISTANCE_PERCENT}%</code>
 
+🚀 <b>DOUBLE FIRST:</b>
+   • LONG: <code>{'ON' if self.config.DOUBLE_FIRST_LONG_ENABLED else 'OFF'}</code>
+   • SHORT: <code>{'ON' if self.config.DOUBLE_FIRST_SHORT_ENABLED else 'OFF'}</code>
+   • Multiplicador: <code>{self.config.DOUBLE_FIRST_MULTIPLIER:.2f}x</code>
+   • Cap de margem: <code>{self._format_usd_brl(self.config.DOUBLE_FIRST_MAX_MARGIN_USDT, 2, False) if self.config.DOUBLE_FIRST_MAX_MARGIN_USDT > 0 else 'sem limite'}</code>
+   • Escopo: <code>{self.config.DOUBLE_FIRST_SCOPE}</code>
+
 🎯 <b>METAS DIÁRIAS:</b> {'Ativas' if self.config.USE_DAILY_TARGETS else 'Desativadas'}
 {strategy_info}
 ━━━━━━━━━━━━━━━━━━━━━

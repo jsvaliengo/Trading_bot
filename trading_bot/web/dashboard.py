@@ -607,7 +607,7 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Trading Bot Dashboard</title>
+  <title>Painel do Bot de Trading</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
@@ -914,7 +914,7 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
   <div class="wrap">
     <header class="hero">
       <div>
-        <h1>Trading Bot Monitor</h1>
+        <h1>Painel do Bot de Trading</h1>
         <p>Acompanhamento em tempo real das operações, risco e saúde do bot.</p>
       </div>
       <div class="pill" id="status-pill">Carregando...</div>
@@ -946,19 +946,19 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
         <div class="muted" id="available-balance">Disponível $0.00</div>
       </article>
       <article class="card">
-        <div class="kpi-title" id="period-pnl-title">P&L Diário (tempo real)</div>
+        <div class="kpi-title" id="period-pnl-title">Resultado Diário (tempo real)</div>
         <div class="kpi-value kpi-money" id="daily-total">$0.00</div>
         <div class="muted" id="daily-breakdown">Realizado/Funding/Comissão</div>
       </article>
       <article class="card">
-        <div class="kpi-title">P&L Aberto</div>
+        <div class="kpi-title">Resultado em Aberto</div>
         <div class="kpi-value kpi-money" id="open-pnl">$0.00</div>
         <div class="muted" id="positions-count">0 posições abertas</div>
       </article>
       <article class="card">
-        <div class="kpi-title" id="period-trades-title">Trades (sessão)</div>
+        <div class="kpi-title" id="period-trades-title">Operações (sessão)</div>
         <div class="kpi-value" id="closed-trades">0</div>
-        <div class="muted" id="win-loss">Wins 0 | Losses 0</div>
+        <div class="muted" id="win-loss">Vitórias 0 | Derrotas 0</div>
       </article>
     </section>
 
@@ -971,10 +971,10 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
               <th>Lado</th>
               <th>Qtd</th>
               <th>Entrada</th>
-              <th>Mark</th>
-              <th>P&L</th>
+              <th>Preço de Marcação</th>
+              <th>Resultado</th>
               <th>ROI</th>
-              <th>Trailing</th>
+              <th>Stop Móvel</th>
             </tr>
           </thead>
           <tbody id="positions-body">
@@ -985,38 +985,38 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
 
       <div class="panel-grid">
         <article class="card">
-          <div class="kpi-title">Saúde Operacional</div>
-          <ul class="info-list">
-            <li><span>API Calls</span><strong id="api-calls">0</strong></li>
-            <li><span>API Falhas</span><strong id="api-failures">0</strong></li>
-            <li><span>API Retries</span><strong id="api-retries">0</strong></li>
-            <li><span>Ordens Falhas</span><strong id="order-failures">0</strong></li>
-            <li><span>Ordens Rejeições</span><strong id="order-rejections">0</strong></li>
-          </ul>
+          <div class="kpi-title">Evolução (realizado)</div>
+          <div id="history-label" class="muted">Sem histórico</div>
+          <div id="history-bars" class="bar-row"></div>
         </article>
 
         <article class="card">
           <div class="kpi-title">Risco</div>
           <ul class="info-list">
-            <li><span>Stop Loss</span><strong id="risk-sl">-</strong></li>
-            <li><span>Take Profit</span><strong id="risk-tp">-</strong></li>
-            <li><span>Trailing</span><strong id="risk-trailing">-</strong></li>
-            <li><span>Trailing ativos</span><strong id="risk-trailing-active">0</strong></li>
+            <li><span>Stop de Perda</span><strong id="risk-sl">-</strong></li>
+            <li><span>Realização de Lucro (TP)</span><strong id="risk-tp">-</strong></li>
+            <li><span>Stop Móvel</span><strong id="risk-trailing">-</strong></li>
+            <li><span>Stops Móveis ativos</span><strong id="risk-trailing-active">0</strong></li>
             <li><span>Notional aberto</span><strong id="risk-notional">$0.00</strong></li>
           </ul>
         </article>
 
         <article class="card">
-          <div class="kpi-title">Evolução (realizado)</div>
-          <div id="history-label" class="muted">Sem histórico</div>
-          <div id="history-bars" class="bar-row"></div>
+          <div class="kpi-title">Saúde Operacional</div>
+          <ul class="info-list">
+            <li><span>Chamadas de API</span><strong id="api-calls">0</strong></li>
+            <li><span>Falhas de API</span><strong id="api-failures">0</strong></li>
+            <li><span>Retentativas de API</span><strong id="api-retries">0</strong></li>
+            <li><span>Falhas em ordens</span><strong id="order-failures">0</strong></li>
+            <li><span>Rejeições em ordens</span><strong id="order-rejections">0</strong></li>
+          </ul>
         </article>
       </div>
     </section>
 
     <section class="analytics-block">
       <article class="card">
-        <div class="kpi-title">Profit And Loss Analysis (30d)</div>
+        <div class="kpi-title">Análise de Lucro e Prejuízo (30d)</div>
         <div class="stats-grid">
           <div class="mini-stat">
             <div class="mini-title" id="mini-title-1">Período</div>
@@ -1034,23 +1034,23 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
             <div class="mini-sub" id="stat-30d-pct">0.00%</div>
           </div>
           <div class="mini-stat">
-            <div class="mini-title" id="mini-title-4">Lifetime</div>
+            <div class="mini-title" id="mini-title-4">Acumulado</div>
             <div class="mini-value" id="stat-life">$0.00</div>
             <div class="mini-sub" id="stat-life-pct">0.00%</div>
           </div>
         </div>
         <ul class="info-list" style="margin-top:10px">
-          <li><span>Total Profit</span><strong id="sum-profit">$0.00</strong></li>
-          <li><span>Total Loss</span><strong id="sum-loss">$0.00</strong></li>
-          <li><span>Winning Days</span><strong id="sum-win-days">0</strong></li>
-          <li><span>Losing Days</span><strong id="sum-loss-days">0</strong></li>
-          <li><span>Breakeven Days</span><strong id="sum-flat-days">0</strong></li>
-          <li><span>Profit/Loss Ratio</span><strong id="sum-ratio">-</strong></li>
+          <li><span>Lucro Total</span><strong id="sum-profit">$0.00</strong></li>
+          <li><span>Prejuízo Total</span><strong id="sum-loss">$0.00</strong></li>
+          <li><span>Dias Positivos</span><strong id="sum-win-days">0</strong></li>
+          <li><span>Dias Negativos</span><strong id="sum-loss-days">0</strong></li>
+          <li><span>Dias no Zero a Zero</span><strong id="sum-flat-days">0</strong></li>
+          <li><span>Relação Lucro/Prejuízo</span><strong id="sum-ratio">-</strong></li>
         </ul>
       </article>
 
       <article class="card calendar-wrap">
-        <div class="kpi-title">Daily PNL Calendar (<span id="calendar-month">----</span>)</div>
+        <div class="kpi-title">Calendário de Resultado Diário (<span id="calendar-month">----</span>)</div>
         <div class="calendar-head">
           <div>Seg</div><div>Ter</div><div>Qua</div><div>Qui</div><div>Sex</div><div>Sáb</div><div>Dom</div>
         </div>
@@ -1060,12 +1060,12 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
 
     <section class="chart-wrap">
       <article class="card">
-        <div class="kpi-title">Cumulative PNL (USD)</div>
+        <div class="kpi-title">Resultado Acumulado (USD)</div>
         <svg id="chart-cum-usd" class="chart-svg" viewBox="0 0 640 230" preserveAspectRatio="none"></svg>
         <div class="chart-caption" id="chart-cum-usd-caption">Sem dados</div>
       </article>
       <article class="card">
-        <div class="kpi-title">Cumulative PNL %</div>
+        <div class="kpi-title">Resultado Acumulado %</div>
         <svg id="chart-cum-pct" class="chart-svg" viewBox="0 0 640 230" preserveAspectRatio="none"></svg>
         <div class="chart-caption" id="chart-cum-pct-caption">Sem dados</div>
       </article>
@@ -1230,7 +1230,7 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
       hideHistoryTooltip();
 
       if (!Array.isArray(points) || points.length === 0) {
-        label.textContent = "Sem snapshots no state file";
+        label.textContent = "Sem snapshots no arquivo de estado";
         return;
       }
 
@@ -1248,7 +1248,7 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
           ? "linear-gradient(180deg, rgba(63,226,127,0.92), rgba(63,226,127,0.2))"
           : "linear-gradient(180deg, rgba(255,111,97,0.92), rgba(255,111,97,0.2))";
 
-        let when = "Snapshot";
+        let when = "Registro";
         if (p && p.timestamp) {
           const dt = new Date(String(p.timestamp));
           if (!Number.isNaN(dt.getTime())) {
@@ -1304,7 +1304,7 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
       color,
       valueKey = "value",
       asPercent = false,
-      seriesLabel = "Cumulative PNL"
+      seriesLabel = "Resultado Acumulado"
     ) {
       const svg = document.getElementById(svgId);
       const caption = document.getElementById(captionId);
@@ -1497,7 +1497,7 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
       document.getElementById("mini-title-1").textContent = `Período (${periodDays}d)`;
       document.getElementById("mini-title-2").textContent = "Média / dia";
       document.getElementById("mini-title-3").textContent = "Melhor dia";
-      document.getElementById("mini-title-4").textContent = "Lifetime";
+      document.getElementById("mini-title-4").textContent = "Acumulado";
 
       document.getElementById("stat-today-pct").textContent = `${Number(analyticsPnl.period_pct || 0).toFixed(2)}%`;
       document.getElementById("stat-7d-pct").textContent = `${(avgDayUsd >= 0 ? "+" : "")}${avgDayUsd.toFixed(2)} USD/dia`;
@@ -1515,8 +1515,8 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
       const periodStart = String(analytics.start_date || rangeState.start || "-");
       const periodEnd = String(analytics.end_date || rangeState.end || "-");
 
-      document.getElementById("period-pnl-title").textContent = `P&L Período (${periodStart} → ${periodEnd})`;
-      document.getElementById("period-trades-title").textContent = "Trades (Período)";
+      document.getElementById("period-pnl-title").textContent = `Resultado no Período (${periodStart} → ${periodEnd})`;
+      document.getElementById("period-trades-title").textContent = "Operações (Período)";
       const periodNet = Number(analyticsSummary.net_after_costs_usd || 0);
       const periodRealized = Number(analyticsSummary.realized_total_usd || 0);
       const periodFunding = Number(analyticsSummary.funding_total_usd || 0);
@@ -1529,7 +1529,7 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
 
       document.getElementById("closed-trades").textContent = String(analyticsSummary.trades_total_count || 0);
       document.getElementById("win-loss").textContent =
-        `Wins ${analyticsSummary.trades_win_count || 0} | Losses ${analyticsSummary.trades_loss_count || 0}`;
+        `Vitórias ${analyticsSummary.trades_win_count || 0} | Derrotas ${analyticsSummary.trades_loss_count || 0}`;
 
       document.getElementById("calendar-month").textContent = `${periodStart} → ${periodEnd}`;
       renderCalendar(analytics.daily_series || [], rate);
@@ -1540,7 +1540,7 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
         "#f8c14b",
         "value",
         false,
-        "Cumulative PNL"
+        "Resultado Acumulado"
       );
       drawLineChart(
         "chart-cum-pct",
@@ -1549,7 +1549,7 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
         "#47d3ff",
         "value",
         true,
-        "Cumulative PNL %"
+        "Resultado Acumulado %"
       );
     }
 
@@ -1653,11 +1653,11 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
         openEl.textContent = formatMoney(openPnl, rate, 2);
         setClassByValue(openEl, openPnl);
         document.getElementById("positions-count").textContent =
-          `${positionsSummary.count || 0} abertas (${positionsSummary.long_count || 0} LONG / ${positionsSummary.short_count || 0} SHORT)`;
+          `${positionsSummary.count || 0} abertas (${positionsSummary.long_count || 0} compradas / ${positionsSummary.short_count || 0} vendidas)`;
 
         document.getElementById("closed-trades").textContent = String(trades.closed_trades_count || 0);
         document.getElementById("win-loss").textContent =
-          `Wins ${trades.trades_win_count || 0} | Losses ${trades.trades_loss_count || 0}`;
+          `Vitórias ${trades.trades_win_count || 0} | Derrotas ${trades.trades_loss_count || 0}`;
 
         document.getElementById("api-calls").textContent = String(api.calls || 0);
         document.getElementById("api-failures").textContent = String(api.failures || 0);
@@ -1666,7 +1666,7 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
         document.getElementById("order-rejections").textContent = String(orders.rejections || 0);
 
         document.getElementById("risk-sl").textContent =
-          `${risk.stop_loss_enabled ? "ON" : "OFF"} (${Number(risk.stop_loss_percent || 0).toFixed(2)}%)`;
+          `${risk.stop_loss_enabled ? "ATIVO" : "INATIVO"} (${Number(risk.stop_loss_percent || 0).toFixed(2)}%)`;
         document.getElementById("risk-tp").textContent = `${Number(risk.take_profit_percent || 0).toFixed(2)}%`;
         document.getElementById("risk-trailing").textContent =
           `${Number(risk.trailing_activation_percent || 0).toFixed(2)} / ${Number(risk.trailing_distance_percent || 0).toFixed(2)}%`;
@@ -1682,16 +1682,17 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
             const roi = Number(pos.roi_percent || 0);
             const side = String(pos.side || "");
             const sideClass = side === "LONG" ? "long" : "short";
+            const sideLabel = side === "LONG" ? "COMPRA" : side === "SHORT" ? "VENDA" : side;
             return `
               <tr>
                 <td><strong>${escapeHtml(pos.symbol || "-")}</strong></td>
-                <td><span class="tag ${sideClass}">${escapeHtml(side)}</span></td>
+                <td><span class="tag ${sideClass}">${escapeHtml(sideLabel)}</span></td>
                 <td>${Number(pos.quantity || 0).toFixed(4)}</td>
                 <td>${Number(pos.entry_price || 0).toFixed(5)}</td>
                 <td>${Number(pos.mark_price || 0).toFixed(5)}</td>
                 <td class="${pnl >= 0 ? "good" : "bad"}">${formatMoney(pnl, rate, 2)}</td>
                 <td class="${roi >= 0 ? "good" : "bad"}">${roi.toFixed(2)}%</td>
-                <td>${pos.trailing_active ? "ON" : "OFF"}</td>
+                <td>${pos.trailing_active ? "ATIVO" : "INATIVO"}</td>
               </tr>
             `;
           }).join("");
@@ -1713,7 +1714,7 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
         }
 
         document.getElementById("footer").textContent =
-          `Atualizado: ${new Date().toLocaleString("pt-BR")} | refresh ${REFRESH_SECONDS}s | env ${env.app_env || "-"}`;
+          `Atualizado: ${new Date().toLocaleString("pt-BR")} | atualização ${REFRESH_SECONDS}s | ambiente ${env.app_env || "-"}`;
       } catch (err) {
         errorsEl.style.display = "block";
         errorsEl.textContent = `Erro ao carregar dashboard: ${err}`;

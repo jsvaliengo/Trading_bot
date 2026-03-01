@@ -77,6 +77,16 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return float(raw.strip())
+    except ValueError:
+        return default
+
+
 @dataclass
 class TradingConfig:
     """
@@ -280,6 +290,16 @@ class TradingConfig:
     # ============================================
     # Ativa a estratégia automática baseada no capital
     USE_BINANCE_STRATEGY: bool = True
+
+    # Double First: dobra a primeira entrada por direção.
+    # Escopo:
+    # - global: primeira LONG e primeira SHORT do bot inteiro
+    # - symbol: primeira LONG e primeira SHORT por símbolo
+    DOUBLE_FIRST_LONG_ENABLED: bool = _env_bool("TRADING_BOT_DOUBLE_FIRST_LONG_ENABLED", False)
+    DOUBLE_FIRST_SHORT_ENABLED: bool = _env_bool("TRADING_BOT_DOUBLE_FIRST_SHORT_ENABLED", False)
+    DOUBLE_FIRST_MULTIPLIER: float = _env_float("TRADING_BOT_DOUBLE_FIRST_MULTIPLIER", 2.0)
+    DOUBLE_FIRST_MAX_MARGIN_USDT: float = _env_float("TRADING_BOT_DOUBLE_FIRST_MAX_MARGIN_USDT", 0.0)
+    DOUBLE_FIRST_SCOPE: str = os.getenv("TRADING_BOT_DOUBLE_FIRST_SCOPE", "global").strip().lower() or "global"
     
     # Faixas de capital e configurações
     # Formato: (capital_min, capital_max, order_size, stop_loss, num_coins)
@@ -715,6 +735,15 @@ class TradingConfig:
 
         if self.DAILY_PERFORMANCE_REPORT_LOOKBACK_HOURS < 1 or self.DAILY_PERFORMANCE_REPORT_LOOKBACK_HOURS > 168:
             errors.append("⚠️  ALERTA: DAILY_PERFORMANCE_REPORT_LOOKBACK_HOURS deve estar entre 1 e 168!")
+
+        if self.DOUBLE_FIRST_SCOPE not in {"global", "symbol"}:
+            errors.append("⚠️  ALERTA: DOUBLE_FIRST_SCOPE deve ser 'global' ou 'symbol'!")
+
+        if self.DOUBLE_FIRST_MULTIPLIER < 1.0 or self.DOUBLE_FIRST_MULTIPLIER > 10.0:
+            errors.append("⚠️  ALERTA: DOUBLE_FIRST_MULTIPLIER deve estar entre 1.0 e 10.0!")
+
+        if self.DOUBLE_FIRST_MAX_MARGIN_USDT < 0:
+            errors.append("⚠️  ALERTA: DOUBLE_FIRST_MAX_MARGIN_USDT deve ser >= 0!")
 
         if self.DASHBOARD_PORT < 1 or self.DASHBOARD_PORT > 65535:
             errors.append("⚠️  ALERTA: DASHBOARD_PORT deve estar entre 1 e 65535!")

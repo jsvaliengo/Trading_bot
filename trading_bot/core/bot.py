@@ -176,6 +176,12 @@ class TradingBot:
         # Usado para detectar quando a Binance fecha posições via SL/TP
         # Chave: "symbol_side" (ex: "ETHUSDT_LONG"), Valor: dict com info da posição
         self.known_positions = {}
+
+        # Controle de uso da regra "Double First" (primeira entrada dobrada)
+        # Chaves:
+        # - escopo global: LONG / SHORT
+        # - escopo symbol: SYMBOL_LONG / SYMBOL_SHORT
+        self.double_first_used = {}
         
         # Cache de taxas de comissão (busca da API da Binance)
         # Atualizado periodicamente para refletir mudanças (VIP, BNB, etc)
@@ -478,7 +484,7 @@ class TradingBot:
                 })
             
             state = {
-                'version': '1.3',  # Inclui rastreamento de transferências de capital
+                'version': '1.4',  # Inclui rastreamento Double First + transferências de capital
                 'saved_at': datetime.now().isoformat(),
                 'start_time': self.start_time.isoformat() if isinstance(self.start_time, datetime) else self.start_time,
                 'initial_capital': self.initial_capital,  # Capital inicial (atualiza com depósitos)
@@ -497,6 +503,7 @@ class TradingBot:
                 'trade_history': self.trade_history,
                 'peak_prices': self.peak_prices,
                 'trailing_activated': self.trailing_activated,
+                'double_first_used': self.double_first_used,
                 'last_daily_performance_report_date': self.last_daily_performance_report_date,
                 'last_transfer_check_ts_ms': int(self.last_transfer_check_ts_ms or 0),
                 'processed_transfer_ids': self.processed_transfer_ids[-max(100, int(config.CAPITAL_TRANSFER_TRACKED_IDS_LIMIT)):]
@@ -537,6 +544,9 @@ class TradingBot:
             self.trade_history = state.get('trade_history', [])
             self.peak_prices = state.get('peak_prices', {})
             self.trailing_activated = state.get('trailing_activated', {})
+            self.double_first_used = self._normalize_double_first_state(
+                state.get('double_first_used', {})
+            )
             self.last_daily_performance_report_date = str(
                 state.get('last_daily_performance_report_date', '') or ''
             )
@@ -599,6 +609,8 @@ class TradingBot:
             logger.info(f"   • Trades fechados: {self.closed_trades_count}")
             logger.info(f"   • P&L Total: ${self.total_pnl:.2f}")
             logger.info(f"   • Snapshots no histórico: {len(self.portfolio_history)}")
+            if self.double_first_used:
+                logger.info(f"   • Double First usados: {len(self.double_first_used)}")
             
             return True
             
@@ -606,6 +618,116 @@ class TradingBot:
             logger.error(f"❌ Erro ao carregar estado: {e}")
             logger.info("🔄 Iniciando com valores padrão.")
             return False
+
+    def _normalize_double_first_state(self, raw_state) -> Dict[str, bool]:
+        """
+        Normaliza o estado da regra Double First carregado do JSON.
+        Aceita dict/list legados e mantém apenas chaves válidas.
+        """
+        normalized: Dict[str, bool] = {}
+
+        if isinstance(raw_state, dict):
+            items = raw_state.items()
+        elif isinstance(raw_state, list):
+            items = [(item, True) for item in raw_state]
+        else:
+            return normalized
+
+        for key, enabled in items:
+            if not enabled:
+                continue
+            normalized_key = str(key).strip().upper()
+            if not normalized_key:
+                continue
+            if normalized_key in {"LONG", "SHORT"}:
+                normalized[normalized_key] = True
+                continue
+            if normalized_key.endswith("_LONG") or normalized_key.endswith("_SHORT"):
+                normalized[normalized_key] = True
+
+        return normalized
+
+    def _double_first_scope(self) -> str:
+        scope = str(getattr(config, "DOUBLE_FIRST_SCOPE", "global") or "global").strip().lower()
+        return scope if scope in {"global", "symbol"} else "global"
+
+    @staticmethod
+    def _normalize_position_side(side: str) -> str:
+        return "SHORT" if str(side).upper() == "SHORT" else "LONG"
+
+    def _is_double_first_enabled(self, side: str) -> bool:
+        normalized_side = self._normalize_position_side(side)
+        if normalized_side == "LONG":
+            return bool(getattr(config, "DOUBLE_FIRST_LONG_ENABLED", False))
+        return bool(getattr(config, "DOUBLE_FIRST_SHORT_ENABLED", False))
+
+    def _double_first_state_key(self, symbol: str, side: str) -> str:
+        normalized_side = self._normalize_position_side(side)
+        if self._double_first_scope() == "symbol":
+            return f"{str(symbol).upper()}_{normalized_side}"
+        return normalized_side
+
+    def _apply_double_first_order_size(self, symbol: str, side: str, order_size: float) -> Tuple[float, bool, str]:
+        """
+        Aplica o multiplicador de "Double First" quando elegível.
+        Retorna (novo_order_size, aplicado, state_key).
+        A marcação como "usado" deve acontecer apenas após a ordem abrir com sucesso.
+        """
+        try:
+            base_order_size = float(order_size)
+        except Exception:
+            return order_size, False, ""
+
+        if base_order_size <= 0:
+            return base_order_size, False, ""
+
+        if not hasattr(self, "double_first_used") or not isinstance(self.double_first_used, dict):
+            self.double_first_used = {}
+
+        normalized_side = self._normalize_position_side(side)
+        if not self._is_double_first_enabled(normalized_side):
+            return base_order_size, False, ""
+
+        multiplier = float(getattr(config, "DOUBLE_FIRST_MULTIPLIER", 1.0) or 1.0)
+        if multiplier <= 1.0:
+            return base_order_size, False, ""
+
+        state_key = self._double_first_state_key(symbol, normalized_side)
+        if bool(self.double_first_used.get(state_key)):
+            return base_order_size, False, ""
+
+        doubled_order_size = base_order_size * multiplier
+        max_margin = float(getattr(config, "DOUBLE_FIRST_MAX_MARGIN_USDT", 0.0) or 0.0)
+        if max_margin > 0:
+            doubled_order_size = min(doubled_order_size, max_margin)
+
+        if doubled_order_size <= base_order_size:
+            return base_order_size, False, ""
+
+        return doubled_order_size, True, state_key
+
+    def _mark_double_first_used(
+        self,
+        state_key: str,
+        symbol: str,
+        side: str,
+        base_order_size: float,
+        applied_order_size: float,
+    ) -> None:
+        if not state_key:
+            return
+        if not hasattr(self, "double_first_used") or not isinstance(self.double_first_used, dict):
+            self.double_first_used = {}
+
+        self.double_first_used[state_key] = True
+        logger.info(
+            "🚀 Double First confirmado em %s %s: $%.2f → $%.2f (escopo=%s)",
+            str(symbol).upper(),
+            self._normalize_position_side(side),
+            float(base_order_size),
+            float(applied_order_size),
+            self._double_first_scope(),
+        )
     
     def _signal_handler(self, signum, frame):
         """
@@ -1552,6 +1674,9 @@ class TradingBot:
                 # Usa o tamanho do setup (cálculo antigo)
                 order_size = setup.long_size if open_long else setup.short_size
 
+            base_order_size = float(order_size)
+            trade_side = "LONG" if open_long else "SHORT"
+
             # Ajuste automático do order_size (margem) para cumprir minNotional
             if order_size < min_margin_needed:
                 logger.info(
@@ -1560,6 +1685,12 @@ class TradingBot:
                     f"(minNotional ${min_notional:.2f}, {leverage:g}x)"
                 )
                 order_size = min_margin_needed
+
+            order_size, double_first_applied, double_first_state_key = self._apply_double_first_order_size(
+                symbol=symbol,
+                side=trade_side,
+                order_size=order_size,
+            )
             
             # ============================================
             # ABRE LONG (se sinal é BUY/STRONG_BUY)
@@ -1589,6 +1720,15 @@ class TradingBot:
                     logger.error("❌ Falha ao abrir posição LONG")
                     return False
 
+                if double_first_applied:
+                    self._mark_double_first_used(
+                        state_key=double_first_state_key,
+                        symbol=symbol,
+                        side="LONG",
+                        base_order_size=base_order_size,
+                        applied_order_size=order_size,
+                    )
+
                 # Define apenas TP para o LONG (SL é gerenciado pelo Trailing Stop do bot)
                 self.exchange.set_stop_loss_take_profit(
                     symbol=symbol,
@@ -1616,6 +1756,7 @@ class TradingBot:
                     'entry_price': price,
                     'stop_loss': None,  # Gerenciado pelo bot
                     'take_profit': setup.take_profit,
+                    'double_first': bool(double_first_applied),
                 }
                 self.trade_history.append(trade_record)
                 
@@ -1631,7 +1772,13 @@ class TradingBot:
                 
                 logger.info("✅ LONG aberto com sucesso!")
                 logger.info(f"   {long_qty:.4f} {symbol} @ ${price:.4f}")
-                logger.info(f"   Order Size: ${order_size} | TP: ${setup.take_profit:.4f}")
+                if double_first_applied:
+                    logger.info(
+                        f"   Order Size: ${order_size} (double first aplicado sobre ${base_order_size:.2f}) | "
+                        f"TP: ${setup.take_profit:.4f}"
+                    )
+                else:
+                    logger.info(f"   Order Size: ${order_size} | TP: ${setup.take_profit:.4f}")
                 
                 return True
             
@@ -1663,6 +1810,15 @@ class TradingBot:
                     logger.error("❌ Falha ao abrir posição SHORT")
                     return False
 
+                if double_first_applied:
+                    self._mark_double_first_used(
+                        state_key=double_first_state_key,
+                        symbol=symbol,
+                        side="SHORT",
+                        base_order_size=base_order_size,
+                        applied_order_size=order_size,
+                    )
+
                 # Define apenas TP para o SHORT (SL é gerenciado pelo Trailing Stop do bot)
                 # Para SHORT: TP é abaixo do preço
                 short_tp = price * (1 - config.TAKE_PROFIT_PERCENT / 100)
@@ -1692,6 +1848,7 @@ class TradingBot:
                     'entry_price': price,
                     'stop_loss': None,  # Gerenciado pelo bot
                     'take_profit': short_tp,
+                    'double_first': bool(double_first_applied),
                 }
                 self.trade_history.append(trade_record)
                 
@@ -1707,7 +1864,13 @@ class TradingBot:
                 
                 logger.info("✅ SHORT aberto com sucesso!")
                 logger.info(f"   {short_qty:.4f} {symbol} @ ${price:.4f}")
-                logger.info(f"   Order Size: ${order_size} | TP: ${short_tp:.4f}")
+                if double_first_applied:
+                    logger.info(
+                        f"   Order Size: ${order_size} (double first aplicado sobre ${base_order_size:.2f}) | "
+                        f"TP: ${short_tp:.4f}"
+                    )
+                else:
+                    logger.info(f"   Order Size: ${order_size} | TP: ${short_tp:.4f}")
                 
                 return True
             
