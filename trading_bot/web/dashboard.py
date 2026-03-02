@@ -268,12 +268,20 @@ class DashboardDataCollector:
         errors: List[str],
         start_date: date,
         end_date: date,
+        daily_snapshot: Dict[str, Any] | None = None,
+        snapshot_date: date | None = None,
     ) -> Dict[str, Any]:
         total_days = max(1, (end_date - start_date).days + 1)
-        day_net: Dict[str, float] = defaultdict(float)
+        day_breakdown: Dict[str, Dict[str, float]] = defaultdict(
+            lambda: {"realized": 0.0, "commission": 0.0, "funding": 0.0}
+        )
+        funding_received_by_symbol: Dict[str, float] = defaultdict(float)
+        funding_paid_by_symbol: Dict[str, float] = defaultdict(float)
         realized_total = 0.0
         commission_total = 0.0
         funding_total = 0.0
+        funding_received_total = 0.0
+        funding_paid_total = 0.0
         trades_win_count = 0
         trades_loss_count = 0
         trades_breakeven_count = 0
@@ -304,8 +312,9 @@ class DashboardDataCollector:
                             continue
 
                         day_key = day_local.strftime("%Y-%m-%d")
-                        day_net[day_key] += amount
+                        bucket = day_breakdown[day_key]
                         if income_type == "REALIZED_PNL":
+                            bucket["realized"] += amount
                             realized_total += amount
                             if amount > 0:
                                 trades_win_count += 1
@@ -314,24 +323,58 @@ class DashboardDataCollector:
                             else:
                                 trades_breakeven_count += 1
                         elif income_type == "COMMISSION":
+                            bucket["commission"] += amount
                             commission_total += amount
                         elif income_type == "FUNDING_FEE":
+                            bucket["funding"] += amount
                             funding_total += amount
+                            symbol = str(item.get("symbol") or "OUTROS")
+                            if amount >= 0:
+                                funding_received_total += amount
+                                funding_received_by_symbol[symbol] += amount
+                            else:
+                                paid_abs = abs(amount)
+                                funding_paid_total += paid_abs
+                                funding_paid_by_symbol[symbol] += paid_abs
                     except Exception:
                         continue
             except Exception as exc:
                 errors.append(f"erro em get_income_history (analytics): {exc}")
 
+        # Para o dia corrente, prioriza o snapshot diário direto da Binance
+        # para evitar divergências por paginação/cache do income_history.
+        if isinstance(daily_snapshot, dict) and snapshot_date is not None:
+            snapshot_key = snapshot_date.strftime("%Y-%m-%d")
+            if start_date <= snapshot_date <= end_date:
+                snapshot_realized = _to_float(daily_snapshot.get("realized_pnl"), 0.0)
+                snapshot_commission = _to_float(daily_snapshot.get("commission"), 0.0)
+                snapshot_funding = _to_float(daily_snapshot.get("funding_fee"), 0.0)
+                day_breakdown[snapshot_key] = {
+                    "realized": snapshot_realized,
+                    "commission": snapshot_commission,
+                    "funding": snapshot_funding,
+                }
+
         trailing_days: List[Dict[str, Any]] = []
         for offset in range(total_days):
             day = start_date + timedelta(days=offset)
             key = day.strftime("%Y-%m-%d")
+            bucket = day_breakdown.get(key, {"realized": 0.0, "commission": 0.0, "funding": 0.0})
+            day_realized = _to_float(bucket.get("realized"), 0.0)
+            day_commission = _to_float(bucket.get("commission"), 0.0)
+            day_funding = _to_float(bucket.get("funding"), 0.0)
+            day_net = day_realized + day_commission + day_funding
             trailing_days.append(
                 {
                     "date": key,
                     "day": day.day,
                     "weekday": day.weekday(),  # segunda=0
-                    "pnl": round(day_net.get(key, 0.0), 8),
+                    # Valor exibido no calendário: realizado diário (alinhado à visão de Daily PNL)
+                    "pnl": round(day_realized, 8),
+                    # Breakdown para hover e análises avançadas
+                    "pnl_net": round(day_net, 8),
+                    "commission": round(day_commission, 8),
+                    "funding": round(day_funding, 8),
                 }
             )
 
@@ -342,16 +385,64 @@ class DashboardDataCollector:
         for day_num in range(1, days_in_month + 1):
             day = month_start.replace(day=day_num)
             key = day.strftime("%Y-%m-%d")
+            bucket = day_breakdown.get(key, {"realized": 0.0, "commission": 0.0, "funding": 0.0})
+            day_realized = _to_float(bucket.get("realized"), 0.0)
+            day_commission = _to_float(bucket.get("commission"), 0.0)
+            day_funding = _to_float(bucket.get("funding"), 0.0)
+            day_net = day_realized + day_commission + day_funding
             month_days.append(
                 {
                     "date": key,
                     "day": day_num,
                     "weekday": day.weekday(),
-                    "pnl": round(day_net.get(key, 0.0), 8),
+                    "pnl": round(day_realized, 8),
+                    "pnl_net": round(day_net, 8),
+                    "commission": round(day_commission, 8),
+                    "funding": round(day_funding, 8),
                 }
             )
 
-        pnl_period = sum(item["pnl"] for item in trailing_days)
+        pnl_period_net = sum(_to_float(item.get("pnl_net"), 0.0) for item in trailing_days)
+        realized_total = sum(_to_float(item.get("pnl"), 0.0) for item in trailing_days)
+        commission_total = sum(_to_float(item.get("commission"), 0.0) for item in trailing_days)
+        funding_total = sum(_to_float(item.get("funding"), 0.0) for item in trailing_days)
+        funding_daily_series = [
+            {"date": item["date"], "value": round(_to_float(item.get("funding"), 0.0), 8)}
+            for item in trailing_days
+        ]
+
+        def _allocation_rows(by_symbol: Dict[str, float], max_items: int = 5) -> List[Dict[str, Any]]:
+            rows = [(symbol, value) for symbol, value in by_symbol.items() if value > 0]
+            if not rows:
+                return []
+            rows.sort(key=lambda pair: pair[1], reverse=True)
+            total = sum(value for _, value in rows)
+            if total <= 0:
+                return []
+
+            out: List[Dict[str, Any]] = []
+            other_total = 0.0
+            for idx, (symbol, value) in enumerate(rows):
+                if idx < max_items:
+                    out.append(
+                        {
+                            "symbol": symbol,
+                            "value": round(value, 8),
+                            "pct": round((value / total) * 100.0, 6),
+                        }
+                    )
+                else:
+                    other_total += value
+
+            if other_total > 0:
+                out.append(
+                    {
+                        "symbol": "OUTROS",
+                        "value": round(other_total, 8),
+                        "pct": round((other_total / total) * 100.0, 6),
+                    }
+                )
+            return out
 
         initial_capital = _to_float(state_payload.get("initial_capital"), 0.0)
         lifetime_usd = _to_float(state_payload.get("total_pnl"), 0.0)
@@ -361,9 +452,9 @@ class DashboardDataCollector:
                 return 0.0
             return (value / initial_capital) * 100.0
 
-        positive_days = [item["pnl"] for item in trailing_days if item["pnl"] > 0]
-        negative_days = [item["pnl"] for item in trailing_days if item["pnl"] < 0]
-        breakeven_days = [item["pnl"] for item in trailing_days if item["pnl"] == 0]
+        positive_days = [_to_float(item.get("pnl_net"), 0.0) for item in trailing_days if _to_float(item.get("pnl_net"), 0.0) > 0]
+        negative_days = [_to_float(item.get("pnl_net"), 0.0) for item in trailing_days if _to_float(item.get("pnl_net"), 0.0) < 0]
+        breakeven_days = [_to_float(item.get("pnl_net"), 0.0) for item in trailing_days if _to_float(item.get("pnl_net"), 0.0) == 0]
 
         total_profit = sum(positive_days)
         total_loss = sum(negative_days)
@@ -375,7 +466,7 @@ class DashboardDataCollector:
         cumulative_pct: List[Dict[str, Any]] = []
         running = 0.0
         for item in trailing_days:
-            running += item["pnl"]
+            running += _to_float(item.get("pnl_net"), 0.0)
             cumulative_usd.append({"date": item["date"], "value": round(running, 8)})
             cumulative_pct.append({"date": item["date"], "value": round(_pct(running), 8)})
 
@@ -391,7 +482,7 @@ class DashboardDataCollector:
             "summary": {
                 "total_profit_usd": total_profit,
                 "total_loss_usd": total_loss,
-                "net_period_usd": pnl_period,
+                "net_period_usd": pnl_period_net,
                 "winning_days": len(positive_days),
                 "losing_days": len(negative_days),
                 "breakeven_days": len(breakeven_days),
@@ -408,10 +499,18 @@ class DashboardDataCollector:
                 "trades_total_count": trades_win_count + trades_loss_count + trades_breakeven_count,
             },
             "pnl": {
-                "period_usd": pnl_period,
-                "period_pct": _pct(pnl_period),
+                "period_usd": pnl_period_net,
+                "period_pct": _pct(pnl_period_net),
                 "lifetime_usd": lifetime_usd,
                 "lifetime_pct": _pct(lifetime_usd),
+            },
+            "funding": {
+                "total_usd": funding_total,
+                "received_total_usd": funding_received_total,
+                "paid_total_usd": funding_paid_total,
+                "daily_series": funding_daily_series,
+                "received_allocation": _allocation_rows(funding_received_by_symbol),
+                "paid_allocation": _allocation_rows(funding_paid_by_symbol),
             },
         }
 
@@ -529,6 +628,8 @@ class DashboardDataCollector:
                 errors=errors,
                 start_date=start_date,
                 end_date=end_date,
+                daily_snapshot=daily_pnl,
+                snapshot_date=now_brt,
             )
 
         longs = [pos for pos in positions if pos["side"] == "LONG"]
@@ -794,6 +895,22 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
       max-width: 260px;
       white-space: nowrap;
     }
+    .calendar-tooltip {
+      position: fixed;
+      z-index: 1000;
+      pointer-events: none;
+      background: rgba(46, 57, 74, 0.96);
+      color: #ecf3fa;
+      border: 1px solid rgba(148, 180, 203, 0.28);
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-size: .86rem;
+      line-height: 1.35;
+      box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+      display: none;
+      max-width: 280px;
+      white-space: normal;
+    }
     .error-box {
       background: rgba(255, 111, 97, 0.10);
       border: 1px solid rgba(255, 111, 97, 0.35);
@@ -868,6 +985,7 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
       flex-direction: column;
       justify-content: space-between;
       background: rgba(148, 180, 203, 0.08);
+      cursor: pointer;
     }
     .calendar-empty {
       background: transparent;
@@ -879,7 +997,7 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
     .calendar-pnl { font-size: .76rem; color: var(--muted); }
     .chart-wrap {
       display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
       gap: 12px;
     }
     .chart-svg {
@@ -894,12 +1012,111 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
       font-size: .8rem;
       margin-top: 6px;
     }
+    .funding-block {
+      display: grid;
+      gap: 10px;
+    }
+    .funding-summary-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .funding-note {
+      font-size: .82rem;
+      margin-top: -2px;
+    }
+    .funding-charts-grid {
+      display: grid;
+      grid-template-columns: 1.1fr .9fr;
+      gap: 12px;
+    }
+    .funding-paid-card {
+      grid-column: 1 / 2;
+    }
+    .donut-wrap {
+      display: grid;
+      grid-template-columns: 170px minmax(0, 1fr);
+      gap: 12px;
+      align-items: center;
+    }
+    .donut-svg {
+      width: 170px;
+      height: 170px;
+      justify-self: center;
+    }
+    .donut-center {
+      font-weight: 700;
+      font-size: .78rem;
+      fill: #d9e9f6;
+      text-anchor: middle;
+    }
+    .donut-center-sub {
+      font-size: .66rem;
+      fill: var(--muted);
+      text-anchor: middle;
+    }
+    .donut-legend {
+      display: grid;
+      gap: 6px;
+      align-content: start;
+    }
+    .legend-item {
+      display: grid;
+      grid-template-columns: 10px 1fr;
+      gap: 8px;
+      align-items: start;
+      font-size: .83rem;
+      color: var(--muted);
+      border-bottom: 1px dashed rgba(148, 180, 203, 0.18);
+      padding-bottom: 4px;
+    }
+    .legend-swatch {
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      margin-top: 4px;
+    }
+    .legend-main {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      color: var(--text);
+      font-weight: 600;
+    }
+    .legend-sub {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      font-size: .78rem;
+      color: var(--muted);
+      margin-top: 2px;
+    }
+    .funding-tooltip {
+      position: fixed;
+      z-index: 1001;
+      pointer-events: none;
+      background: rgba(46, 57, 74, 0.96);
+      color: #ecf3fa;
+      border: 1px solid rgba(148, 180, 203, 0.28);
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-size: .86rem;
+      line-height: 1.35;
+      box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+      display: none;
+      max-width: 280px;
+      white-space: normal;
+    }
     @media (max-width: 1080px) {
       .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .section { grid-template-columns: 1fr; }
       .stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .analytics-block { grid-template-columns: 1fr; }
       .chart-wrap { grid-template-columns: 1fr; }
+      .funding-summary-grid { grid-template-columns: 1fr; }
+      .funding-charts-grid { grid-template-columns: 1fr; }
+      .funding-paid-card { grid-column: auto; }
+      .donut-wrap { grid-template-columns: 1fr; }
     }
     @media (max-width: 640px) {
       body { padding: 12px; }
@@ -1071,6 +1288,52 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
       </article>
     </section>
 
+    <section class="card funding-block">
+      <div class="kpi-title">Funding & Transações (Período)</div>
+      <div class="funding-summary-grid">
+        <div class="mini-stat">
+          <div class="mini-title">Funding Líquido</div>
+          <div class="mini-value" id="funding-total-net">$0.00</div>
+          <div class="mini-sub">Recebido - Pago</div>
+        </div>
+        <div class="mini-stat">
+          <div class="mini-title">Funding Recebido</div>
+          <div class="mini-value" id="funding-total-received">$0.00</div>
+          <div class="mini-sub">Soma de créditos</div>
+        </div>
+        <div class="mini-stat">
+          <div class="mini-title">Funding Pago</div>
+          <div class="mini-value" id="funding-total-paid">$0.00</div>
+          <div class="mini-sub">Soma de débitos</div>
+        </div>
+      </div>
+      <div class="muted funding-note">*Dados de funding do período selecionado.</div>
+
+      <div class="funding-charts-grid">
+        <article class="card">
+          <div class="kpi-title">Funding Diário</div>
+          <svg id="chart-funding-daily" class="chart-svg" viewBox="0 0 640 230" preserveAspectRatio="none"></svg>
+          <div class="chart-caption" id="chart-funding-daily-caption">Sem dados</div>
+        </article>
+
+        <article class="card">
+          <div class="kpi-title">Alocação de Funding Recebido</div>
+          <div class="donut-wrap">
+            <svg id="chart-funding-received" class="donut-svg" viewBox="0 0 170 170" preserveAspectRatio="xMidYMid meet"></svg>
+            <div id="legend-funding-received" class="donut-legend"></div>
+          </div>
+        </article>
+
+        <article class="card funding-paid-card">
+          <div class="kpi-title">Alocação de Funding Pago</div>
+          <div class="donut-wrap">
+            <svg id="chart-funding-paid" class="donut-svg" viewBox="0 0 170 170" preserveAspectRatio="xMidYMid meet"></svg>
+            <div id="legend-funding-paid" class="donut-legend"></div>
+          </div>
+        </article>
+      </div>
+    </section>
+
     <div class="footer" id="footer">Aguardando atualização...</div>
   </div>
 
@@ -1223,6 +1486,342 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
       if (tip) tip.style.display = "none";
     }
 
+    function ensureCalendarTooltip() {
+      let tip = document.getElementById("calendar-tooltip");
+      if (!tip) {
+        tip = document.createElement("div");
+        tip.id = "calendar-tooltip";
+        tip.className = "calendar-tooltip";
+        document.body.appendChild(tip);
+      }
+      return tip;
+    }
+
+    function showCalendarTooltip(evt, payload, rate) {
+      const tip = ensureCalendarTooltip();
+      const pnl = Number((payload && payload.pnl) || 0);
+      const pnlNet = Number((payload && payload.pnl_net) || 0);
+      const commission = Number((payload && payload.commission) || 0);
+      const funding = Number((payload && payload.funding) || 0);
+      const cumulativeUsd = Number((payload && payload.cumulative_usd) || 0);
+      const cumulativePct = Number((payload && payload.cumulative_pct) || 0);
+      const dayDate = String((payload && payload.date) || "-");
+
+      const cumulativePctText = `${cumulativePct >= 0 ? "+" : ""}${cumulativePct.toFixed(2)}%`;
+      tip.innerHTML = `
+        <div style="font-weight:700;margin-bottom:6px">${escapeHtml(dayDate)}</div>
+        <div>Resultado Diário (Binance): <strong>${escapeHtml(formatMoney(pnlNet, rate, 2))}</strong></div>
+        <div>Trades Realizados: <strong>${escapeHtml(formatMoney(pnl, rate, 2))}</strong></div>
+        <div>Comissão: <strong>${escapeHtml(formatMoney(commission, rate, 2))}</strong></div>
+        <div>Funding: <strong>${escapeHtml(formatMoney(funding, rate, 2))}</strong></div>
+        <div>Acumulado (líquido): <strong>${escapeHtml(formatMoney(cumulativeUsd, rate, 2))}</strong></div>
+        <div>Acumulado %: <strong>${escapeHtml(cumulativePctText)}</strong></div>
+      `;
+      tip.style.display = "block";
+
+      const pad = 12;
+      const rect = tip.getBoundingClientRect();
+      let x = evt.clientX + 16;
+      let y = evt.clientY - rect.height - 16;
+      if (x + rect.width + pad > window.innerWidth) x = evt.clientX - rect.width - 16;
+      if (x < pad) x = pad;
+      if (y < pad) y = evt.clientY + 20;
+      tip.style.left = `${x}px`;
+      tip.style.top = `${y}px`;
+    }
+
+    function hideCalendarTooltip() {
+      const tip = document.getElementById("calendar-tooltip");
+      if (tip) tip.style.display = "none";
+    }
+
+    function ensureFundingTooltip() {
+      let tip = document.getElementById("funding-tooltip");
+      if (!tip) {
+        tip = document.createElement("div");
+        tip.id = "funding-tooltip";
+        tip.className = "funding-tooltip";
+        document.body.appendChild(tip);
+      }
+      return tip;
+    }
+
+    function showFundingTooltip(evt, htmlContent) {
+      const tip = ensureFundingTooltip();
+      tip.innerHTML = htmlContent;
+      tip.style.display = "block";
+
+      const pad = 12;
+      const rect = tip.getBoundingClientRect();
+      let x = evt.clientX + 14;
+      let y = evt.clientY - rect.height - 14;
+      if (x + rect.width + pad > window.innerWidth) x = evt.clientX - rect.width - 14;
+      if (x < pad) x = pad;
+      if (y < pad) y = evt.clientY + 20;
+      tip.style.left = `${x}px`;
+      tip.style.top = `${y}px`;
+    }
+
+    function hideFundingTooltip() {
+      const tip = document.getElementById("funding-tooltip");
+      if (tip) tip.style.display = "none";
+    }
+
+    function drawFundingDailyChart(svgId, captionId, points, rate) {
+      const svg = document.getElementById(svgId);
+      const caption = document.getElementById(captionId);
+      if (!svg) return;
+
+      if (!Array.isArray(points) || points.length === 0) {
+        svg.innerHTML = "";
+        if (caption) caption.textContent = "Sem dados";
+        return;
+      }
+
+      const width = 640;
+      const height = 230;
+      const padX = 28;
+      const padY = 18;
+      const values = points.map((p) => Number((p && p.value) || 0));
+      const minV = Math.min(...values, 0);
+      const maxV = Math.max(...values, 0);
+      const span = Math.max(1e-9, maxV - minV);
+      const innerW = width - padX * 2;
+      const innerH = height - padY * 2;
+      const yZero = padY + ((maxV - 0) / span) * innerH;
+      const slot = innerW / Math.max(1, points.length);
+      const barW = Math.max(3, Math.min(16, slot * 0.66));
+
+      const toY = (v) => padY + ((maxV - v) / span) * innerH;
+      const lines = [];
+      for (let i = 0; i <= 4; i += 1) {
+        const y = padY + (innerH / 4) * i;
+        lines.push(`<line x1="${padX}" y1="${y}" x2="${width - padX}" y2="${y}" stroke="rgba(148,180,203,0.16)" stroke-width="1" />`);
+      }
+
+      svg.innerHTML = `
+        <rect x="0" y="0" width="${width}" height="${height}" fill="transparent" />
+        ${lines.join("")}
+        <line x1="${padX}" y1="${yZero.toFixed(2)}" x2="${width - padX}" y2="${yZero.toFixed(2)}" stroke="rgba(148,180,203,0.26)" stroke-width="1.2" />
+      `;
+
+      const ns = "http://www.w3.org/2000/svg";
+      points.forEach((item, idx) => {
+        const value = Number((item && item.value) || 0);
+        const xCenter = padX + slot * idx + slot / 2;
+        const yVal = toY(value);
+        const y = value >= 0 ? yVal : yZero;
+        const h = Math.max(1, Math.abs(yZero - yVal));
+        const color = value >= 0 ? "#3fe27f" : "#ff6f61";
+
+        const rect = document.createElementNS(ns, "rect");
+        rect.setAttribute("x", String(xCenter - barW / 2));
+        rect.setAttribute("y", String(y));
+        rect.setAttribute("width", String(barW));
+        rect.setAttribute("height", String(h));
+        rect.setAttribute("rx", "2.5");
+        rect.setAttribute("fill", color);
+        rect.setAttribute("fill-opacity", "0.9");
+        rect.style.cursor = "pointer";
+
+        const dateText = String((item && item.date) || "-");
+        const tooltipHtml = `
+          <div style="font-weight:700;margin-bottom:6px">${escapeHtml(dateText)}</div>
+          <div>Funding diário: <strong>${escapeHtml(formatMoney(value, rate, 2))}</strong></div>
+        `;
+        rect.addEventListener("mouseenter", (evt) => showFundingTooltip(evt, tooltipHtml));
+        rect.addEventListener("mousemove", (evt) => showFundingTooltip(evt, tooltipHtml));
+        rect.addEventListener("mouseleave", () => hideFundingTooltip());
+
+        svg.appendChild(rect);
+      });
+
+      const total = values.reduce((acc, v) => acc + v, 0);
+      const received = values.filter((v) => v > 0).reduce((acc, v) => acc + v, 0);
+      const paid = Math.abs(values.filter((v) => v < 0).reduce((acc, v) => acc + v, 0));
+      if (caption) {
+        caption.textContent = `Total ${formatMoney(total, rate, 2)} | Recebido ${formatMoney(received, rate, 2)} | Pago ${formatMoney(-paid, rate, 2)}`;
+        caption.className = `chart-caption ${total >= 0 ? "good" : "bad"}`;
+      }
+    }
+
+    function _polar(cx, cy, r, angle) {
+      return {
+        x: cx + (r * Math.cos(angle)),
+        y: cy + (r * Math.sin(angle)),
+      };
+    }
+
+    function _donutArcPath(cx, cy, rOuter, rInner, start, end) {
+      const startOuter = _polar(cx, cy, rOuter, start);
+      const endOuter = _polar(cx, cy, rOuter, end);
+      const endInner = _polar(cx, cy, rInner, end);
+      const startInner = _polar(cx, cy, rInner, start);
+      const largeArc = (end - start) > Math.PI ? 1 : 0;
+      return [
+        `M ${startOuter.x} ${startOuter.y}`,
+        `A ${rOuter} ${rOuter} 0 ${largeArc} 1 ${endOuter.x} ${endOuter.y}`,
+        `L ${endInner.x} ${endInner.y}`,
+        `A ${rInner} ${rInner} 0 ${largeArc} 0 ${startInner.x} ${startInner.y}`,
+        "Z",
+      ].join(" ");
+    }
+
+    function drawFundingDonut(svgId, legendId, rows, rate, centerLabel) {
+      const svg = document.getElementById(svgId);
+      const legend = document.getElementById(legendId);
+      if (!svg || !legend) return;
+
+      const data = Array.isArray(rows) ? rows.filter((r) => Number((r && r.value) || 0) > 0) : [];
+      const total = data.reduce((acc, row) => acc + Number(row.value || 0), 0);
+      const palette = ["#2f8fff", "#f8c14b", "#3fe27f", "#ff9f40", "#b084ff", "#9aa8b8"];
+      const cx = 85;
+      const cy = 85;
+      const rOuter = 72;
+      const rInner = 44;
+
+      svg.innerHTML = "";
+      legend.innerHTML = "";
+      hideFundingTooltip();
+
+      const ns = "http://www.w3.org/2000/svg";
+      const bgRing = document.createElementNS(ns, "circle");
+      bgRing.setAttribute("cx", String(cx));
+      bgRing.setAttribute("cy", String(cy));
+      bgRing.setAttribute("r", String((rOuter + rInner) / 2));
+      bgRing.setAttribute("fill", "none");
+      bgRing.setAttribute("stroke", "rgba(148,180,203,0.22)");
+      bgRing.setAttribute("stroke-width", String(rOuter - rInner));
+      svg.appendChild(bgRing);
+
+      if (data.length > 0 && total > 0) {
+        const baseStart = -Math.PI / 2;
+        let start = baseStart;
+
+        if (data.length === 1) {
+          const row = data[0];
+          const color = palette[0];
+          const ring = document.createElementNS(ns, "circle");
+          ring.setAttribute("cx", String(cx));
+          ring.setAttribute("cy", String(cy));
+          ring.setAttribute("r", String((rOuter + rInner) / 2));
+          ring.setAttribute("fill", "none");
+          ring.setAttribute("stroke", color);
+          ring.setAttribute("stroke-width", String(rOuter - rInner));
+          ring.style.cursor = "pointer";
+          const tooltipHtml = `
+            <div style="font-weight:700;margin-bottom:6px">${escapeHtml(String(row.symbol || "OUTROS"))}</div>
+            <div>Participação: <strong>100.00%</strong></div>
+            <div>Valor: <strong>${escapeHtml(formatMoney(Number(row.value || 0), rate, 2))}</strong></div>
+          `;
+          ring.addEventListener("mouseenter", (evt) => showFundingTooltip(evt, tooltipHtml));
+          ring.addEventListener("mousemove", (evt) => showFundingTooltip(evt, tooltipHtml));
+          ring.addEventListener("mouseleave", () => hideFundingTooltip());
+          svg.appendChild(ring);
+        } else {
+          data.forEach((row, idx) => {
+            const value = Number(row.value || 0);
+            const frac = value / total;
+            const end = idx === data.length - 1 ? (baseStart + (2 * Math.PI)) : (start + (2 * Math.PI * frac));
+            const color = palette[idx % palette.length];
+            const path = document.createElementNS(ns, "path");
+            path.setAttribute("d", _donutArcPath(cx, cy, rOuter, rInner, start, end));
+            path.setAttribute("fill", color);
+            path.style.cursor = "pointer";
+
+            const label = String(row.symbol || "OUTROS");
+            const pct = Number(row.pct || 0);
+            const tooltipHtml = `
+              <div style="font-weight:700;margin-bottom:6px">${escapeHtml(label)}</div>
+              <div>Participação: <strong>${pct.toFixed(2)}%</strong></div>
+              <div>Valor: <strong>${escapeHtml(formatMoney(value, rate, 2))}</strong></div>
+            `;
+            path.addEventListener("mouseenter", (evt) => showFundingTooltip(evt, tooltipHtml));
+            path.addEventListener("mousemove", (evt) => showFundingTooltip(evt, tooltipHtml));
+            path.addEventListener("mouseleave", () => hideFundingTooltip());
+            svg.appendChild(path);
+            start = end;
+          });
+        }
+
+        legend.innerHTML = data.map((row, idx) => {
+          const color = palette[idx % palette.length];
+          const pct = Number(row.pct || 0);
+          const value = Number(row.value || 0);
+          return `
+            <div class="legend-item">
+              <span class="legend-swatch" style="background:${color}"></span>
+              <div>
+                <div class="legend-main"><span>${escapeHtml(String(row.symbol || "OUTROS"))}</span><span>${pct.toFixed(2)}%</span></div>
+                <div class="legend-sub"><span>${escapeHtml(formatMoney(value, rate, 2))}</span></div>
+              </div>
+            </div>
+          `;
+        }).join("");
+      } else {
+        legend.innerHTML = `<div class="muted">Sem dados no período.</div>`;
+      }
+
+      const centerMain = document.createElementNS(ns, "text");
+      centerMain.setAttribute("x", String(cx));
+      centerMain.setAttribute("y", String(cy - 3));
+      centerMain.setAttribute("class", "donut-center");
+      centerMain.textContent = `${total.toFixed(2)} USD`;
+
+      const centerSub = document.createElementNS(ns, "text");
+      centerSub.setAttribute("x", String(cx));
+      centerSub.setAttribute("y", String(cy + 14));
+      centerSub.setAttribute("class", "donut-center-sub");
+      centerSub.textContent = centerLabel;
+
+      svg.appendChild(centerMain);
+      svg.appendChild(centerSub);
+    }
+
+    function renderFundingSection(funding, rate) {
+      const data = (funding && typeof funding === "object") ? funding : {};
+      const total = Number(data.total_usd || 0);
+      const received = Number(data.received_total_usd || 0);
+      const paidAbs = Number(data.paid_total_usd || 0);
+
+      const totalEl = document.getElementById("funding-total-net");
+      const receivedEl = document.getElementById("funding-total-received");
+      const paidEl = document.getElementById("funding-total-paid");
+      if (totalEl) {
+        totalEl.textContent = formatMoney(total, rate, 2);
+        setClassByValue(totalEl, total);
+      }
+      if (receivedEl) {
+        receivedEl.textContent = formatMoney(received, rate, 2);
+        setClassByValue(receivedEl, received);
+      }
+      if (paidEl) {
+        paidEl.textContent = formatMoney(-paidAbs, rate, 2);
+        setClassByValue(paidEl, -paidAbs);
+      }
+
+      drawFundingDailyChart(
+        "chart-funding-daily",
+        "chart-funding-daily-caption",
+        data.daily_series || [],
+        rate,
+      );
+      drawFundingDonut(
+        "chart-funding-received",
+        "legend-funding-received",
+        data.received_allocation || [],
+        rate,
+        "Recebido",
+      );
+      drawFundingDonut(
+        "chart-funding-paid",
+        "legend-funding-paid",
+        data.paid_allocation || [],
+        rate,
+        "Pago",
+      );
+    }
+
     function renderHistory(points, rate) {
       const bars = document.getElementById("history-bars");
       const label = document.getElementById("history-label");
@@ -1268,14 +1867,28 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
       setClassByValue(label, last);
     }
 
-    function renderCalendar(days, rate) {
+    function renderCalendar(days, rate, cumulativeUsdSeries = [], cumulativePctSeries = []) {
       const container = document.getElementById("calendar-grid");
       container.innerHTML = "";
+      hideCalendarTooltip();
 
       if (!Array.isArray(days) || days.length === 0) {
         container.innerHTML = `<div class="calendar-cell calendar-empty" style="grid-column: span 7">Sem dados para calendário</div>`;
         return;
       }
+
+      const cumulativeUsdMap = new Map(
+        (Array.isArray(cumulativeUsdSeries) ? cumulativeUsdSeries : []).map((item) => [
+          String((item && item.date) || ""),
+          Number((item && item.value) || 0),
+        ])
+      );
+      const cumulativePctMap = new Map(
+        (Array.isArray(cumulativePctSeries) ? cumulativePctSeries : []).map((item) => [
+          String((item && item.date) || ""),
+          Number((item && item.value) || 0),
+        ])
+      );
 
       const firstWeekday = Number(days[0].weekday || 0); // seg=0
       for (let i = 0; i < firstWeekday; i += 1) {
@@ -1285,14 +1898,33 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
       }
 
       days.forEach((item) => {
-        const pnl = Number(item.pnl || 0);
-        const cls = pnl > 0 ? "pos" : pnl < 0 ? "neg" : "";
+        const pnlDisplay = Number(item.pnl_net || item.pnl || 0);
+        const cls = pnlDisplay > 0 ? "pos" : pnlDisplay < 0 ? "neg" : "";
         const cell = document.createElement("div");
         cell.className = `calendar-cell ${cls}`.trim();
         cell.innerHTML = `
           <div class="calendar-day">${Number(item.day || 0)}</div>
-          <div class="calendar-pnl">${formatMoney(pnl, rate, 2)}</div>
+          <div class="calendar-pnl">${formatMoney(pnlDisplay, rate, 2)}</div>
         `;
+        cell.addEventListener("mouseenter", (evt) => showCalendarTooltip(evt, {
+          date: item.date,
+          pnl: item.pnl,
+          pnl_net: item.pnl_net,
+          commission: item.commission,
+          funding: item.funding,
+          cumulative_usd: cumulativeUsdMap.get(String(item.date || "")) || 0,
+          cumulative_pct: cumulativePctMap.get(String(item.date || "")) || 0,
+        }, rate));
+        cell.addEventListener("mousemove", (evt) => showCalendarTooltip(evt, {
+          date: item.date,
+          pnl: item.pnl,
+          pnl_net: item.pnl_net,
+          commission: item.commission,
+          funding: item.funding,
+          cumulative_usd: cumulativeUsdMap.get(String(item.date || "")) || 0,
+          cumulative_pct: cumulativePctMap.get(String(item.date || "")) || 0,
+        }, rate));
+        cell.addEventListener("mouseleave", () => hideCalendarTooltip());
         container.appendChild(cell);
       });
     }
@@ -1467,11 +2099,11 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
       const avgDayUsd = periodUsd / periodDays;
       const dailySeries = Array.isArray(analytics.daily_series) ? analytics.daily_series : [];
       const bestDay = dailySeries.reduce((acc, item) => {
-        const val = Number((item && item.pnl) || 0);
+        const val = Number((item && (item.pnl_net || item.pnl)) || 0);
         return val > acc.pnl ? { date: item.date || "-", pnl: val } : acc;
       }, { date: "-", pnl: Number.NEGATIVE_INFINITY });
       const worstDay = dailySeries.reduce((acc, item) => {
-        const val = Number((item && item.pnl) || 0);
+        const val = Number((item && (item.pnl_net || item.pnl)) || 0);
         return val < acc.pnl ? { date: item.date || "-", pnl: val } : acc;
       }, { date: "-", pnl: Number.POSITIVE_INFINITY });
 
@@ -1532,7 +2164,12 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
         `Vitórias ${analyticsSummary.trades_win_count || 0} | Derrotas ${analyticsSummary.trades_loss_count || 0}`;
 
       document.getElementById("calendar-month").textContent = `${periodStart} → ${periodEnd}`;
-      renderCalendar(analytics.daily_series || [], rate);
+      renderCalendar(
+        analytics.daily_series || [],
+        rate,
+        analytics.cumulative_usd || [],
+        analytics.cumulative_pct || [],
+      );
       drawLineChart(
         "chart-cum-usd",
         "chart-cum-usd-caption",
@@ -1551,6 +2188,8 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
         true,
         "Resultado Acumulado %"
       );
+
+      renderFundingSection(analytics.funding || {}, rate);
     }
 
     async function refreshAnalytics() {
