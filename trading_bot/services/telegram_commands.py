@@ -409,8 +409,8 @@ class TelegramCommandHandler:
             # Posições abertas
             positions = self.bot.exchange.get_open_positions()
             
-            # P&L
-            pnl_emoji = "🟢" if self.bot.daily_realized_pnl >= 0 else "🔴"
+            # P&L acumulado (realizado total desde o início da sessão)
+            pnl_emoji = "🟢" if self.bot.total_pnl >= 0 else "🔴"
             
             message = f"""
 📊 <b>STATUS DO BOT</b>
@@ -423,7 +423,7 @@ class TelegramCommandHandler:
    • Não Realizado: <code>{self._format_usd_brl(unrealized, 2, True)}</code>
 
 📈 <b>PERFORMANCE:</b>
-   • P&L Diário: {pnl_emoji} <code>{self._format_usd_brl(self.bot.daily_realized_pnl, 2, True)}</code>
+   • P&L Total Realizado: {pnl_emoji} <code>{self._format_usd_brl(self.bot.total_pnl, 2, True)}</code>
    • Trades: <code>{total_trades}</code>
    • Win Rate: <code>{win_rate:.1f}%</code>
 

@@ -120,6 +120,9 @@ def test_dashboard_collector_includes_trailing_flags_from_state(tmp_path):
     assert len(data["analytics"]["month_days"]) >= 28
     assert len(data["analytics"]["cumulative_usd"]) == 30
     assert "period_usd" in data["analytics"]["pnl"]
+    assert "funding" in data["analytics"]
+    assert "daily_series" in data["analytics"]["funding"]
+    assert len(data["analytics"]["funding"]["daily_series"]) == 30
 
 
 def test_dashboard_collector_respects_custom_date_range(tmp_path):
