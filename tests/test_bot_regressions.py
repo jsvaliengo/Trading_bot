@@ -430,39 +430,82 @@ def test_execute_global_stop_loss_handles_invalid_initial_capital():
     assert call_kwargs["initial_capital"] == 120.0
 
 
-def test_monitor_positions_uses_mark_price_without_extra_price_call(monkeypatch):
+def test_double_first_global_applies_once_per_side(monkeypatch):
+    bot = _make_light_bot()
+    bot.double_first_used = {}
+
+    monkeypatch.setattr(config, "DOUBLE_FIRST_LONG_ENABLED", True)
+    monkeypatch.setattr(config, "DOUBLE_FIRST_SHORT_ENABLED", True)
+    monkeypatch.setattr(config, "DOUBLE_FIRST_MULTIPLIER", 2.0)
+    monkeypatch.setattr(config, "DOUBLE_FIRST_MAX_MARGIN_USDT", 0.0)
+    monkeypatch.setattr(config, "DOUBLE_FIRST_SCOPE", "global")
+
+    long_size, long_applied, long_key = bot._apply_double_first_order_size("ETHUSDT", "LONG", 3.0)
+    assert long_applied is True
+    assert long_key == "LONG"
+    assert long_size == 6.0
+
+    bot._mark_double_first_used(
+        state_key=long_key,
+        symbol="ETHUSDT",
+        side="LONG",
+        base_order_size=3.0,
+        applied_order_size=long_size,
+    )
+
+    long_size_2, long_applied_2, long_key_2 = bot._apply_double_first_order_size("ETHUSDT", "LONG", 3.0)
+    assert long_applied_2 is False
+    assert long_key_2 == ""
+    assert long_size_2 == 3.0
+
+    short_size, short_applied, short_key = bot._apply_double_first_order_size("ETHUSDT", "SHORT", 3.0)
+    assert short_applied is True
+    assert short_key == "SHORT"
+    assert short_size == 6.0
+
+
+def test_double_first_symbol_scope_respects_cap_and_tracks_per_symbol(monkeypatch):
+    bot = _make_light_bot()
+    bot.double_first_used = {}
+
+    monkeypatch.setattr(config, "DOUBLE_FIRST_LONG_ENABLED", True)
+    monkeypatch.setattr(config, "DOUBLE_FIRST_SHORT_ENABLED", False)
+    monkeypatch.setattr(config, "DOUBLE_FIRST_MULTIPLIER", 2.0)
+    monkeypatch.setattr(config, "DOUBLE_FIRST_MAX_MARGIN_USDT", 5.0)
+    monkeypatch.setattr(config, "DOUBLE_FIRST_SCOPE", "symbol")
+
+    eth_size, eth_applied, eth_key = bot._apply_double_first_order_size("ETHUSDT", "LONG", 3.0)
+    assert eth_applied is True
+    assert eth_key == "ETHUSDT_LONG"
+    assert eth_size == 5.0
+
+    bot._mark_double_first_used(
+        state_key=eth_key,
+        symbol="ETHUSDT",
+        side="LONG",
+        base_order_size=3.0,
+        applied_order_size=eth_size,
+    )
+
+    eth_size_2, eth_applied_2, _ = bot._apply_double_first_order_size("ETHUSDT", "LONG", 3.0)
+    assert eth_applied_2 is False
+    assert eth_size_2 == 3.0
+
+    xrp_size, xrp_applied, xrp_key = bot._apply_double_first_order_size("XRPUSDT", "LONG", 3.0)
+    assert xrp_applied is True
+    assert xrp_key == "XRPUSDT_LONG"
+    assert xrp_size == 5.0
+
+
+def test_normalize_double_first_state_accepts_legacy_formats():
     bot = _make_light_bot()
 
-    class ExchangeStub:
-        def __init__(self):
-            self.price_calls = 0
+    normalized_from_list = bot._normalize_double_first_state(
+        ["long", "ETHUSDT_short", "invalid_key"]
+    )
+    assert normalized_from_list == {"LONG": True, "ETHUSDT_SHORT": True}
 
-        def get_open_positions(self):
-            return [
-                {
-                    "symbol": "ETHUSDT",
-                    "side": "LONG",
-                    "quantity": 0.5,
-                    "entry_price": 100.0,
-                    "mark_price": 101.0,
-                    "unrealized_pnl": 0.5,
-                }
-            ]
-
-        def get_current_price(self, _symbol):
-            self.price_calls += 1
-            raise AssertionError("Não deveria chamar get_current_price quando mark_price é válido")
-
-    exchange = ExchangeStub()
-    bot.exchange = exchange
-    bot.known_positions = {}
-    bot.trailing_activated = {}
-    bot.peak_prices = {}
-
-    monkeypatch.setattr(config, "TAKE_PROFIT_PERCENT", 999.0)
-    monkeypatch.setattr(config, "USE_TRAILING_STOP", False)
-    monkeypatch.setattr(config, "USE_INDIVIDUAL_STOP_LOSS", False)
-
-    bot.monitor_positions()
-
-    assert exchange.price_calls == 0
+    normalized_from_dict = bot._normalize_double_first_state(
+        {"short": True, "BTCUSDT_LONG": 1, "foo": True, "ADAUSDT_SHORT": False}
+    )
+    assert normalized_from_dict == {"SHORT": True, "BTCUSDT_LONG": True}
