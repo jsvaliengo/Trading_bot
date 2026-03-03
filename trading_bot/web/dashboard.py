@@ -150,6 +150,9 @@ class DashboardDataCollector:
         self._income_cache_payload: List[Dict[str, Any]] = []
         self._income_cache_at: datetime | None = None
         self._income_cache_key: tuple[int, int] | None = None
+        self._daily_pnl_cache_payload: Dict[str, Any] | None = None
+        self._daily_pnl_cache_at: datetime | None = None
+        self._daily_pnl_cache_date: date | None = None
 
     def _get_exchange(self):
         if self._exchange is not None:
@@ -161,6 +164,45 @@ class DashboardDataCollector:
             logger.error("Falha ao iniciar cliente Binance no dashboard: %s", exc)
             self._exchange = None
         return self._exchange
+
+    def _get_daily_pnl_snapshot(
+        self,
+        exchange: Any,
+        now_utc: datetime,
+        now_brt: date,
+        errors: List[str],
+        cache_ttl_seconds: int,
+    ) -> Dict[str, Any]:
+        default_payload = {
+            "realized_pnl": 0.0,
+            "funding_fee": 0.0,
+            "commission": 0.0,
+            "total": 0.0,
+            "income_count": 0,
+            "income_types": [],
+        }
+
+        if self._daily_pnl_cache_payload is not None and self._daily_pnl_cache_date == now_brt:
+            if self._daily_pnl_cache_at is not None:
+                elapsed = (now_utc - self._daily_pnl_cache_at).total_seconds()
+                if elapsed < cache_ttl_seconds:
+                    return dict(self._daily_pnl_cache_payload)
+
+        try:
+            payload = exchange.get_daily_pnl_from_binance()
+            if isinstance(payload, dict):
+                self._daily_pnl_cache_payload = dict(payload)
+            else:
+                self._daily_pnl_cache_payload = dict(default_payload)
+            self._daily_pnl_cache_at = now_utc
+            self._daily_pnl_cache_date = now_brt
+        except Exception as exc:
+            errors.append(f"erro em get_daily_pnl_from_binance: {exc}")
+            if self._daily_pnl_cache_payload is not None and self._daily_pnl_cache_date == now_brt:
+                return dict(self._daily_pnl_cache_payload)
+            return dict(default_payload)
+
+        return dict(self._daily_pnl_cache_payload or default_payload)
 
     def _build_positions(
         self,
@@ -597,10 +639,14 @@ class DashboardDataCollector:
             except Exception as exc:
                 errors.append(f"erro em get_account_info: {exc}")
 
-            try:
-                daily_pnl = exchange.get_daily_pnl_from_binance()
-            except Exception as exc:
-                errors.append(f"erro em get_daily_pnl_from_binance: {exc}")
+            daily_cache_ttl_seconds = 30 if include_analytics else 180
+            daily_pnl = self._get_daily_pnl_snapshot(
+                exchange=exchange,
+                now_utc=now,
+                now_brt=now_brt,
+                errors=errors,
+                cache_ttl_seconds=daily_cache_ttl_seconds,
+            )
 
             try:
                 open_positions = exchange.get_open_positions()

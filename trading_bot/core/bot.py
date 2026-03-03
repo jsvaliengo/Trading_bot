@@ -1963,8 +1963,22 @@ class TradingBot:
                 pnl_by_symbol_current[symbol] = 0
             pnl_by_symbol_current[symbol] += pnl
             
-            # Pega o preço atual
-            current_price = self.exchange.get_current_price(symbol)
+            # Prioriza mark_price já retornado em get_open_positions para reduzir chamadas na API.
+            try:
+                current_price = float(pos.get('mark_price', 0) or 0)
+            except (TypeError, ValueError):
+                current_price = 0.0
+
+            if current_price <= 0:
+                try:
+                    current_price = self.exchange.get_current_price(symbol)
+                except Exception as e:
+                    logger.warning(f"⚠️ Falha ao obter preço atual de {symbol}: {e}")
+                    continue
+
+            if not current_price or current_price <= 0:
+                logger.warning(f"⚠️ Preço atual inválido para {symbol}. Pulando monitoramento deste ciclo.")
+                continue
             
             # Chave única para esta posição
             position_key = f"{symbol}_{side}"
