@@ -428,3 +428,41 @@ def test_execute_global_stop_loss_handles_invalid_initial_capital():
     assert bot.telegram.send_global_stop_loss_alert.call_count == 1
     call_kwargs = bot.telegram.send_global_stop_loss_alert.call_args.kwargs
     assert call_kwargs["initial_capital"] == 120.0
+
+
+def test_monitor_positions_uses_mark_price_without_extra_price_call(monkeypatch):
+    bot = _make_light_bot()
+
+    class ExchangeStub:
+        def __init__(self):
+            self.price_calls = 0
+
+        def get_open_positions(self):
+            return [
+                {
+                    "symbol": "ETHUSDT",
+                    "side": "LONG",
+                    "quantity": 0.5,
+                    "entry_price": 100.0,
+                    "mark_price": 101.0,
+                    "unrealized_pnl": 0.5,
+                }
+            ]
+
+        def get_current_price(self, _symbol):
+            self.price_calls += 1
+            raise AssertionError("Não deveria chamar get_current_price quando mark_price é válido")
+
+    exchange = ExchangeStub()
+    bot.exchange = exchange
+    bot.known_positions = {}
+    bot.trailing_activated = {}
+    bot.peak_prices = {}
+
+    monkeypatch.setattr(config, "TAKE_PROFIT_PERCENT", 999.0)
+    monkeypatch.setattr(config, "USE_TRAILING_STOP", False)
+    monkeypatch.setattr(config, "USE_INDIVIDUAL_STOP_LOSS", False)
+
+    bot.monitor_positions()
+
+    assert exchange.price_calls == 0

@@ -5,6 +5,7 @@ Ajuste os parâmetros abaixo de acordo com seu perfil de risco.
 IMPORTANTE: Nunca compartilhe suas API keys!
 """
 
+import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,6 +15,9 @@ try:
     from dotenv import load_dotenv
 except Exception:  # pragma: no cover - fallback se dotenv não estiver instalado
     load_dotenv = None
+
+
+logger = logging.getLogger(__name__)
 
 
 def _load_environment():
@@ -635,7 +639,7 @@ class TradingConfig:
         errors = []
         
         if self.LEVERAGE > 20:
-            errors.append("⚠️  ALERTA: Alavancagem acima de 10x é muito arriscada!")
+            errors.append("⚠️  ALERTA: Alavancagem acima de 20x é muito arriscada!")
         
         if self.MAX_POSITION_PERCENT > 0.10:
             errors.append("⚠️  ALERTA: Posição maior que 10% do capital é arriscada!")
@@ -732,7 +736,7 @@ class TradingConfig:
             errors.append("⚠️  ALERTA: LOOP_OVERRUN_FACTOR deve ser >= 1.0!")
         
         for error in errors:
-            print(error)
+            logger.warning(error)
         
         return len(errors) == 0
 

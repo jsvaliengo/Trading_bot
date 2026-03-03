@@ -127,3 +127,50 @@ def test_dailyreport_command_toggles_auto_and_sends_now():
 
     handler.cmd_dailyreport(["now"])
     assert calls == [True]
+
+
+def test_start_does_not_fake_restart_when_process_is_stopped():
+    handler = TelegramCommandHandler(token="token", chat_id="123")
+
+    bot = SimpleNamespace(running=False, paused=True)
+    handler.set_bot_reference(bot, SimpleNamespace())
+
+    messages = []
+    handler.send_message = lambda text: messages.append(text) or True
+
+    handler.cmd_start([])
+
+    assert bot.running is False
+    assert bot.paused is True
+    assert messages
+    assert "não reinicia o processo" in messages[-1]
+
+
+def test_closeall_reports_partial_failures():
+    handler = TelegramCommandHandler(token="token", chat_id="123")
+
+    class ExchangeStub:
+        def get_open_positions(self):
+            return [
+                {"symbol": "ETHUSDT", "side": "LONG", "quantity": 0.1},
+                {"symbol": "XRPUSDT", "side": "SHORT", "quantity": 5.0},
+            ]
+
+        def place_market_order(self, symbol, side, position_side, quantity):
+            if symbol == "ETHUSDT":
+                return {"orderId": 1}
+            return None
+
+    bot = SimpleNamespace(exchange=ExchangeStub())
+    handler.set_bot_reference(bot, SimpleNamespace())
+
+    messages = []
+    handler.send_message = lambda text: messages.append(text) or True
+
+    handler.cmd_close_all(["confirm"])
+
+    assert len(messages) >= 2
+    final_message = messages[-1]
+    assert "FECHAMENTO PARCIAL" in final_message
+    assert "1/2" in final_message
+    assert "Falhas" in final_message

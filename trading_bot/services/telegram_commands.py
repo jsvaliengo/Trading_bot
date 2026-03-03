@@ -245,20 +245,29 @@ class TelegramCommandHandler:
     # ============================================
     
     def cmd_start(self, args: list):
-        """Inicia o bot."""
+        """Retoma o bot quando estiver pausado (processo já em execução)."""
         if self.bot is None:
             self.send_message("❌ Bot não configurado")
             return
-        
+
         if self.bot.running and not getattr(self.bot, 'paused', False):
             self.send_message("⚠️ Bot já está rodando!")
             return
-        
-        self.bot.running = True
+
+        # Evita falso positivo: mudar running=True aqui NÃO reinicia o loop principal.
+        # O processo precisa ser iniciado por supervisor/screen/systemd/GitHub Actions.
+        if not self.bot.running:
+            self.send_message(
+                "⚠️ <b>BOT PARADO</b>\n\n"
+                "O comando <code>/start</code> não reinicia o processo do bot.\n"
+                "Inicie no servidor (screen/systemd/deploy) e depois use /status."
+            )
+            return
+
+        # Se chegou aqui, está em execução mas pausado -> retoma.
         self.bot.paused = False
-        
         self.send_message(
-            "🚀 <b>BOT INICIADO</b>\n\n"
+            "▶️ <b>BOT RETOMADO</b>\n\n"
             "• Análise de mercado: <b>ativa</b>\n"
             "• Abertura de posições: <b>liberada</b>\n\n"
             "Bot operando! Use /status para acompanhar."
@@ -330,7 +339,8 @@ class TelegramCommandHandler:
             self.send_message(
                 "🛑 <b>BOT PARADO</b>\n\n"
                 "⚠️ Posições abertas foram MANTIDAS.\n\n"
-                "Use <code>/stop force</code> para fechar todas as posições."
+                "Use <code>/stop force</code> para fechar todas as posições.\n"
+                "Para voltar a operar, reinicie o processo do bot no servidor."
             )
     
     def cmd_pause(self, args: list):
@@ -363,7 +373,7 @@ class TelegramCommandHandler:
             return
         
         if not self.bot.running:
-            self.send_message("⚠️ Bot não está rodando! Use /start")
+            self.send_message("⚠️ Bot não está rodando! Reinicie o processo no servidor e depois use /status")
             return
         
         if not getattr(self.bot, 'paused', False):
@@ -960,14 +970,14 @@ class TelegramCommandHandler:
         if self.bot is None:
             self.send_message("❌ Bot não configurado")
             return
-        
+
         try:
             positions = self.bot.exchange.get_open_positions()
-            
+
             if not positions:
                 self.send_message("📍 Nenhuma posição aberta para fechar.")
                 return
-            
+
             # Pede confirmação
             if not args or args[0].lower() != 'confirm':
                 self.send_message(
@@ -976,17 +986,17 @@ class TelegramCommandHandler:
                     f"Para confirmar, use:\n<code>/closeall confirm</code>"
                 )
                 return
-            
+
             self.send_message(f"🔄 Fechando {len(positions)} posições...")
-            
+
             closed_count = 0
-            
+            failures = []
+
             for pos in positions:
+                symbol = pos.get('symbol', 'UNKNOWN')
+                side = pos.get('side', 'UNKNOWN')
+                qty = pos.get('quantity', 0)
                 try:
-                    symbol = pos['symbol']
-                    side = pos['side']
-                    qty = pos['quantity']
-                    
                     # Fecha a posição
                     if side == 'LONG':
                         result = self.bot.exchange.place_market_order(
@@ -1002,19 +1012,36 @@ class TelegramCommandHandler:
                             position_side='SHORT',
                             quantity=qty
                         )
-                    
+
                     if result:
                         closed_count += 1
-                        
+                    else:
+                        failures.append(f"{side} {symbol}: retorno vazio da exchange")
+
                 except Exception as e:
-                    logger.error(f"Erro ao fechar {pos['symbol']}: {e}")
-            
-            self.send_message(
-                f"✅ <b>POSIÇÕES FECHADAS</b>\n\n"
-                f"   Fechadas: <code>{closed_count}/{len(positions)}</code>\n\n"
-                f"Use /balance para ver o resultado."
-            )
-            
+                    failures.append(f"{side} {symbol}: {e}")
+                    logger.error(f"Erro ao fechar {symbol}: {e}")
+
+            total_positions = len(positions)
+            if failures:
+                preview = "\n".join([f"• {item}" for item in failures[:5]])
+                if len(failures) > 5:
+                    preview += f"\n• ... e mais {len(failures) - 5} falha(s)"
+
+                self.send_message(
+                    f"⚠️ <b>FECHAMENTO PARCIAL</b>\n\n"
+                    f"✅ Fechadas: <code>{closed_count}/{total_positions}</code>\n"
+                    f"❌ Falhas: <code>{len(failures)}</code>\n\n"
+                    f"<b>Detalhes:</b>\n{preview}\n\n"
+                    f"Use /positions para confirmar se ainda restou posição aberta."
+                )
+            else:
+                self.send_message(
+                    f"✅ <b>POSIÇÕES FECHADAS</b>\n\n"
+                    f"   Fechadas: <code>{closed_count}/{total_positions}</code>\n\n"
+                    f"Use /balance para ver o resultado."
+                )
+
         except Exception as e:
             self.send_message(f"❌ Erro ao fechar posições: {e}")
     
@@ -1025,7 +1052,7 @@ class TelegramCommandHandler:
 ━━━━━━━━━━━━━━━━━━━━━
 
 <b>🎮 CONTROLE:</b>
-/start - Iniciar o bot
+/start - Retomar se pausado
 /stop - Parar o bot
 /stop force - Parar e fechar posições
 /pause - Pausar (mantém posições)

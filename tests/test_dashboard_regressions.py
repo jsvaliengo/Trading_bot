@@ -158,3 +158,58 @@ def test_dashboard_collector_respects_custom_date_range(tmp_path):
     assert data["analytics"]["start_date"] == "2026-01-01"
     assert data["analytics"]["end_date"] == "2026-01-10"
     assert len(data["analytics"]["daily_series"]) == 10
+
+
+def test_dashboard_collector_caches_daily_pnl_on_fast_collect(tmp_path):
+    state_file = tmp_path / "bot_state.test.json"
+    state_file.write_text(json.dumps({"saved_at": "2026-02-28T12:00:00+00:00"}), encoding="utf-8")
+
+    class ExchangeStub:
+        def __init__(self):
+            self.daily_calls = 0
+
+        def get_account_info(self):
+            return {
+                "wallet_balance": 100.0,
+                "available_balance": 90.0,
+                "unrealized_pnl": 0.0,
+                "margin_balance": 100.0,
+                "total_initial_margin": 0.0,
+            }
+
+        def get_daily_pnl_from_binance(self):
+            self.daily_calls += 1
+            return {
+                "realized_pnl": 1.0,
+                "funding_fee": 0.0,
+                "commission": -0.1,
+                "total": 0.9,
+                "income_count": 2,
+                "income_types": ["REALIZED_PNL", "COMMISSION"],
+            }
+
+        def get_open_positions(self):
+            return []
+
+        def get_retry_stats_report(self, reset=False):
+            return {}
+
+        def get_order_stats_report(self, reset=False):
+            return {}
+
+        def get_income_history(self, limit=1000, start_time=None):
+            return []
+
+    exchange = ExchangeStub()
+    collector = DashboardDataCollector(
+        state_file_path=str(state_file),
+        exchange=exchange,
+        fx_rate_provider=lambda: 5.0,
+    )
+
+    first = collector.collect(include_analytics=False)
+    second = collector.collect(include_analytics=False)
+
+    assert first["daily"]["total"] == 0.9
+    assert second["daily"]["total"] == 0.9
+    assert exchange.daily_calls == 1
