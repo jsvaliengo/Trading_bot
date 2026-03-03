@@ -52,6 +52,16 @@ class PairSelector:
         self.FEE_MARGIN = 1.10
         
         logger.info("✅ Seletor de pares inicializado")
+
+    def _is_disabled(self, symbol: str) -> bool:
+        """Retorna True se o par estiver desabilitado na configuração."""
+        if hasattr(self.config, "is_pair_disabled"):
+            return bool(self.config.is_pair_disabled(symbol))
+
+        disabled_pairs = {
+            str(item).upper() for item in (getattr(self.config, "DISABLED_PAIRS", []) or [])
+        }
+        return str(symbol).upper() in disabled_pairs
     
     def get_all_futures_pairs(self) -> List[str]:
         """
@@ -71,7 +81,8 @@ class PairSelector:
                 if (symbol.endswith('USDT') and 
                     symbol_info['contractType'] == 'PERPETUAL' and
                     symbol_info['status'] == 'TRADING' and
-                    symbol not in self.IGNORE_PAIRS):
+                    symbol not in self.IGNORE_PAIRS and
+                    not self._is_disabled(symbol)):
                     pairs.append(symbol)
             
             logger.info(f"📊 {len(pairs)} pares de futuros disponíveis")
@@ -349,6 +360,9 @@ class PairSelector:
             # Pula pares fixos (serão adicionados depois)
             if symbol in self.config.FIXED_PAIRS:
                 continue
+
+            if self._is_disabled(symbol):
+                continue
             
             metrics = self.get_pair_metrics(symbol)
             
@@ -405,6 +419,9 @@ class PairSelector:
         fixed_capital_needed = {}
         for symbol in self.config.FIXED_PAIRS:
             if symbol in selected_pairs:
+                continue
+            if self._is_disabled(symbol):
+                logger.info(f"   ⏭️ {symbol}: desabilitado manualmente")
                 continue
             pair_capital_needed = self._estimate_fixed_pair_capital_needed(symbol)
             fixed_capital_needed[symbol] = pair_capital_needed

@@ -14,7 +14,7 @@ import logging
 import threading
 import time
 from datetime import datetime, timezone
-from typing import Callable, Dict
+from typing import Callable, Dict, List
 import requests
 
 logger = logging.getLogger(__name__)
@@ -145,6 +145,74 @@ class TelegramCommandHandler:
         if signed:
             return f"${amount:+.{decimals}f} (R$ {brl_value:+.{decimals}f})"
         return f"${amount:.{decimals}f} (R$ {brl_value:.{decimals}f})"
+
+    def _normalize_pair_symbol(self, symbol: str) -> str:
+        """Normaliza ticker para o padrão XXXUSDT."""
+        if self.config is not None and hasattr(self.config, "normalize_pair_symbol"):
+            return self.config.normalize_pair_symbol(symbol)
+
+        token = str(symbol or "").strip().upper().strip(",;")
+        token = token.replace("/", "").replace("-", "").replace("_", "")
+        if not token:
+            return ""
+        if token.endswith("USDT"):
+            return token
+        return f"{token}USDT"
+
+    def _parse_coin_symbols(self, args: List[str]) -> List[str]:
+        """Converte argumentos do comando em lista de símbolos normalizados."""
+        symbols = []
+        seen = set()
+        for arg in args:
+            for raw_token in str(arg).replace(",", " ").split():
+                symbol = self._normalize_pair_symbol(raw_token)
+                if not symbol or symbol in seen:
+                    continue
+                seen.add(symbol)
+                symbols.append(symbol)
+        return symbols
+
+    def _refresh_pairs_after_coin_change(self, action: str) -> dict:
+        """Recalcula pares ativos após alteração manual de moedas."""
+        if self.bot is not None and hasattr(self.bot, "refresh_trading_pairs"):
+            try:
+                return self.bot.refresh_trading_pairs(trigger_reason=f"telegram:{action}")
+            except Exception as e:
+                logger.warning(f"⚠️ Falha ao recarregar pares ({action}): {e}")
+
+        if self.config is None:
+            return {
+                "old_pairs": [],
+                "new_pairs": [],
+                "added_pairs": [],
+                "removed_pairs": [],
+            }
+
+        old_pairs = list(getattr(self.config, "TRADING_PAIRS", []) or [])
+        if hasattr(self.config, "filter_disabled_pairs"):
+            self.config.TRADING_PAIRS = self.config.filter_disabled_pairs(old_pairs)
+        else:
+            disabled = {str(item).upper() for item in (getattr(self.config, "DISABLED_PAIRS", []) or [])}
+            self.config.TRADING_PAIRS = [
+                str(item).upper() for item in old_pairs if str(item).upper() not in disabled
+            ]
+
+        old_set = set(old_pairs)
+        new_set = set(self.config.TRADING_PAIRS)
+        return {
+            "old_pairs": old_pairs,
+            "new_pairs": list(self.config.TRADING_PAIRS),
+            "added_pairs": sorted(new_set - old_set),
+            "removed_pairs": sorted(old_set - new_set),
+        }
+
+    def _persist_runtime_state(self):
+        """Salva estado quando disponível para persistir ajustes via Telegram."""
+        if self.bot is not None and hasattr(self.bot, "save_state"):
+            try:
+                self.bot.save_state()
+            except Exception as e:
+                logger.warning(f"⚠️ Falha ao salvar estado após comando Telegram: {e}")
     
     def start_polling(self):
         """Inicia o polling de comandos em uma thread separada."""
@@ -679,23 +747,177 @@ class TelegramCommandHandler:
             self.send_message(f"❌ Erro ao buscar posições: {e}")
     
     def cmd_coins(self, args: list):
-        """Mostra moedas ativas."""
+        """Mostra/gerencia moedas ativas."""
         if self.config is None:
             self.send_message("❌ Config não disponível")
             return
-        
-        coins = [c.replace('USDT', '') for c in self.config.TRADING_PAIRS]
-        
-        message = f"""
-🪙 <b>MOEDAS ATIVAS ({len(coins)})</b>
-━━━━━━━━━━━━━━━━━━━━━
 
-{', '.join(coins)}
+        def _display(symbols: list) -> str:
+            return ", ".join([s.replace("USDT", "") for s in symbols]) if symbols else "-"
 
-━━━━━━━━━━━━━━━━━━━━━
-<i>Ordenadas por score (spread, volume, volatilidade)</i>
-"""
-        self.send_message(message)
+        if not args:
+            active_pairs = list(getattr(self.config, "TRADING_PAIRS", []) or [])
+            disabled_pairs = list(getattr(self.config, "DISABLED_PAIRS", []) or [])
+            candidate_pairs = list(getattr(self.config, "BINANCE_COIN_LIST", []) or [])
+            self.send_message(
+                f"🪙 <b>MOEDAS</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"✅ <b>Ativas ({len(active_pairs)}):</b>\n"
+                f"{_display(active_pairs)}\n\n"
+                f"⛔ <b>Desabilitadas ({len(disabled_pairs)}):</b>\n"
+                f"{_display(disabled_pairs)}\n\n"
+                f"📚 <b>Lista permitida ({len(candidate_pairs)}):</b>\n"
+                f"{_display(candidate_pairs)}\n\n"
+                f"Uso:\n"
+                f"• <code>/coins disable ETH SOL ADA</code>\n"
+                f"• <code>/coins enable ETH</code>\n"
+                f"• <code>/coins add MATIC</code>"
+            )
+            return
+
+        action = str(args[0]).strip().lower()
+        symbols = self._parse_coin_symbols(args[1:])
+
+        if action in {"disable", "off"}:
+            if not symbols:
+                self.send_message(
+                    "❌ Informe ao menos 1 moeda.\n\n"
+                    "Exemplo:\n"
+                    "<code>/coins disable ETH SOL ADA</code>"
+                )
+                return
+
+            current_disabled = list(getattr(self.config, "DISABLED_PAIRS", []) or [])
+            disabled_set = {str(item).upper() for item in current_disabled}
+            added = []
+            already = []
+            for symbol in symbols:
+                if symbol in disabled_set:
+                    already.append(symbol)
+                    continue
+                current_disabled.append(symbol)
+                disabled_set.add(symbol)
+                added.append(symbol)
+
+            if hasattr(self.config, "normalize_pair_list"):
+                self.config.DISABLED_PAIRS = self.config.normalize_pair_list(current_disabled)
+            else:
+                self.config.DISABLED_PAIRS = sorted(disabled_set)
+
+            refresh_info = self._refresh_pairs_after_coin_change("coins-disable")
+            self._persist_runtime_state()
+
+            self.send_message(
+                f"⛔ <b>PARES DESABILITADOS</b>\n\n"
+                f"✅ Novos: <code>{_display(added)}</code>\n"
+                f"ℹ️ Já estavam: <code>{_display(already)}</code>\n"
+                f"🧾 Ativos agora ({len(refresh_info.get('new_pairs', []))}):\n"
+                f"<code>{_display(refresh_info.get('new_pairs', []))}</code>"
+            )
+            return
+
+        if action in {"enable", "on"}:
+            if not symbols:
+                self.send_message(
+                    "❌ Informe ao menos 1 moeda.\n\n"
+                    "Exemplo:\n"
+                    "<code>/coins enable ETH</code>"
+                )
+                return
+
+            current_disabled = list(getattr(self.config, "DISABLED_PAIRS", []) or [])
+            disabled_set = {str(item).upper() for item in current_disabled}
+
+            enabled_now = []
+            not_disabled = []
+            for symbol in symbols:
+                if symbol in disabled_set:
+                    disabled_set.remove(symbol)
+                    enabled_now.append(symbol)
+                else:
+                    not_disabled.append(symbol)
+
+            self.config.DISABLED_PAIRS = sorted(disabled_set)
+            refresh_info = self._refresh_pairs_after_coin_change("coins-enable")
+            self._persist_runtime_state()
+
+            self.send_message(
+                f"✅ <b>PARES HABILITADOS</b>\n\n"
+                f"✅ Reabilitados: <code>{_display(enabled_now)}</code>\n"
+                f"ℹ️ Já estavam habilitados: <code>{_display(not_disabled)}</code>\n"
+                f"🧾 Ativos agora ({len(refresh_info.get('new_pairs', []))}):\n"
+                f"<code>{_display(refresh_info.get('new_pairs', []))}</code>"
+            )
+            return
+
+        if action == "add":
+            if not symbols:
+                self.send_message(
+                    "❌ Informe ao menos 1 moeda.\n\n"
+                    "Exemplo:\n"
+                    "<code>/coins add MATIC</code>"
+                )
+                return
+
+            current_candidates = list(getattr(self.config, "BINANCE_COIN_LIST", []) or [])
+            candidate_set = {str(item).upper() for item in current_candidates}
+            current_disabled = {str(item).upper() for item in (getattr(self.config, "DISABLED_PAIRS", []) or [])}
+
+            added = []
+            already = []
+            reenabled = []
+
+            for symbol in symbols:
+                if symbol in candidate_set:
+                    already.append(symbol)
+                else:
+                    current_candidates.append(symbol)
+                    candidate_set.add(symbol)
+                    added.append(symbol)
+
+                if symbol in current_disabled:
+                    current_disabled.remove(symbol)
+                    reenabled.append(symbol)
+
+            if hasattr(self.config, "normalize_pair_list"):
+                self.config.BINANCE_COIN_LIST = self.config.normalize_pair_list(current_candidates)
+                self.config.DISABLED_PAIRS = self.config.normalize_pair_list(list(current_disabled))
+            else:
+                self.config.BINANCE_COIN_LIST = current_candidates
+                self.config.DISABLED_PAIRS = sorted(current_disabled)
+
+            # Sem estratégia automática, adiciona também na lista ativa.
+            if not getattr(self.config, "USE_BINANCE_STRATEGY", False) and not getattr(self.config, "AUTO_SELECT_PAIRS", False):
+                active = list(getattr(self.config, "TRADING_PAIRS", []) or [])
+                for symbol in symbols:
+                    if symbol not in active:
+                        active.append(symbol)
+                if hasattr(self.config, "filter_disabled_pairs"):
+                    self.config.TRADING_PAIRS = self.config.filter_disabled_pairs(active)
+                else:
+                    self.config.TRADING_PAIRS = active
+
+            refresh_info = self._refresh_pairs_after_coin_change("coins-add")
+            self._persist_runtime_state()
+
+            self.send_message(
+                f"➕ <b>PARES ADICIONADOS</b>\n\n"
+                f"✅ Novos na lista permitida: <code>{_display(added)}</code>\n"
+                f"ℹ️ Já existiam: <code>{_display(already)}</code>\n"
+                f"🔓 Reabilitados automaticamente: <code>{_display(reenabled)}</code>\n"
+                f"🧾 Ativos agora ({len(refresh_info.get('new_pairs', []))}):\n"
+                f"<code>{_display(refresh_info.get('new_pairs', []))}</code>"
+            )
+            return
+
+        self.send_message(
+            "❌ Ação inválida para /coins.\n\n"
+            "Use:\n"
+            "• <code>/coins</code>\n"
+            "• <code>/coins disable ETH SOL ADA</code>\n"
+            "• <code>/coins enable ETH</code>\n"
+            "• <code>/coins add MATIC</code>"
+        )
     
     def cmd_balance(self, args: list):
         """Mostra saldo detalhado."""
@@ -1074,7 +1296,7 @@ class TelegramCommandHandler:
 /apihealth - Saúde operacional
 /config - Ver configurações
 /positions - Posições abertas
-/coins - Moedas ativas
+/coins - Moedas ativas e gestão
 /balance - Saldo detalhado
 
 <b>⚙️ CONFIGURAÇÕES:</b>
@@ -1095,5 +1317,6 @@ class TelegramCommandHandler:
 • <code>/dailyreport now</code>
 • <code>/sl off</code>
 • <code>/trailing 0.5 0.25</code>
+• <code>/coins disable ETH SOL ADA</code>
 """
         self.send_message(message)

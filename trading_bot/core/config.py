@@ -208,6 +208,9 @@ class TradingConfig:
     
     # Pares que SEMPRE serão operados (não são removidos pela seleção)
     FIXED_PAIRS: List[str] = None  # Será definido no __post_init__
+
+    # Pares desabilitados manualmente (não entram na seleção de moedas)
+    DISABLED_PAIRS: List[str] = None  # Será definido no __post_init__
     
     # Número total de pares a operar (fixos + dinâmicos)
     MAX_TRADING_PAIRS: int = 6
@@ -520,6 +523,11 @@ class TradingConfig:
         # Pares FIXOS - VAZIO = todos serão dinâmicos
         if self.FIXED_PAIRS is None:
             self.FIXED_PAIRS = []  # Nenhum par fixo, todos dinâmicos
+
+        # Pares desabilitados por padrão (podem ser reabilitados via Telegram)
+        if self.DISABLED_PAIRS is None:
+            self.DISABLED_PAIRS = ["ETHUSDT", "SOLUSDT", "ADAUSDT"]
+        self.DISABLED_PAIRS = self.normalize_pair_list(self.DISABLED_PAIRS)
         
         # ============================================
         # ESTRATÉGIA BINANCE PADRÃO
@@ -587,13 +595,14 @@ class TradingConfig:
                 "AAVEUSDT",
                 "AVAXUSDT",
             ]
-        
+        self.BINANCE_COIN_LIST = self.normalize_pair_list(self.BINANCE_COIN_LIST)
+
         # Pares de trading - usa BINANCE_COIN_LIST se estratégia Binance ativa
         # Será sobrescrito no setup_exchange() com a quantidade correta baseada no capital
         if self.TRADING_PAIRS is None:
             if self.USE_BINANCE_STRATEGY:
                 # Usa as primeiras 3 moedas da lista Binance (será ajustado no setup)
-                self.TRADING_PAIRS = self.BINANCE_COIN_LIST[:3]
+                self.TRADING_PAIRS = self.get_enabled_binance_coin_list()[:3]
             else:
                 # Lista padrão para seleção automática
                 self.TRADING_PAIRS = [
@@ -604,6 +613,8 @@ class TradingConfig:
                     "ADAUSDT",
                     "AVAXUSDT",
                 ]
+        self.FIXED_PAIRS = self.filter_disabled_pairs(self.FIXED_PAIRS)
+        self.TRADING_PAIRS = self.filter_disabled_pairs(self.TRADING_PAIRS)
         
         # Pesos para seleção de pares (ordem de prioridade)
         if self.PAIR_SELECTION_WEIGHTS is None:
@@ -630,7 +641,7 @@ class TradingConfig:
             min_cap, max_cap, order_size, stop_loss, num_coins = tier
             if min_cap <= capital < max_cap:
                 # Seleciona as primeiras N moedas da lista
-                coins = self.BINANCE_COIN_LIST[:num_coins]
+                coins = self.get_enabled_binance_coin_list()[:num_coins]
                 return {
                     'capital_range': f"${min_cap}-${max_cap}",
                     'order_size': order_size,
@@ -642,7 +653,7 @@ class TradingConfig:
         # Se não encontrar faixa (capital muito baixo), usa a primeira
         tier = self.BINANCE_STRATEGY_TIERS[0]
         min_cap, max_cap, order_size, stop_loss, num_coins = tier
-        coins = self.BINANCE_COIN_LIST[:num_coins]
+        coins = self.get_enabled_binance_coin_list()[:num_coins]
         return {
             'capital_range': f"${min_cap}-${max_cap}",
             'order_size': order_size,
@@ -650,6 +661,55 @@ class TradingConfig:
             'num_coins': num_coins,
             'coins': coins
         }
+
+    @staticmethod
+    def normalize_pair_symbol(symbol: str) -> str:
+        """Normaliza símbolo para o padrão XXXUSDT."""
+        token = str(symbol or "").strip().upper().strip(",;")
+        token = token.replace("/", "").replace("-", "").replace("_", "")
+        if not token:
+            return ""
+        if token.endswith("USDT"):
+            return token
+        return f"{token}USDT"
+
+    def normalize_pair_list(self, pairs: List[str]) -> List[str]:
+        """Normaliza e deduplica lista de símbolos preservando ordem."""
+        normalized = []
+        seen = set()
+        for raw_symbol in pairs or []:
+            symbol = self.normalize_pair_symbol(raw_symbol)
+            if not symbol or symbol in seen:
+                continue
+            seen.add(symbol)
+            normalized.append(symbol)
+        return normalized
+
+    def get_disabled_pairs_set(self) -> set:
+        """Retorna pares desabilitados em um set para lookup rápido."""
+        return set(self.normalize_pair_list(getattr(self, "DISABLED_PAIRS", []) or []))
+
+    def is_pair_disabled(self, symbol: str) -> bool:
+        """Retorna True se o par estiver desabilitado."""
+        normalized = self.normalize_pair_symbol(symbol)
+        return bool(normalized) and normalized in self.get_disabled_pairs_set()
+
+    def filter_disabled_pairs(self, pairs: List[str]) -> List[str]:
+        """Remove pares desabilitados de uma lista, preservando ordem."""
+        disabled = self.get_disabled_pairs_set()
+        filtered = []
+        seen = set()
+        for raw_symbol in pairs or []:
+            symbol = self.normalize_pair_symbol(raw_symbol)
+            if not symbol or symbol in disabled or symbol in seen:
+                continue
+            seen.add(symbol)
+            filtered.append(symbol)
+        return filtered
+
+    def get_enabled_binance_coin_list(self) -> List[str]:
+        """Retorna lista Binance com pares habilitados."""
+        return self.filter_disabled_pairs(self.BINANCE_COIN_LIST or [])
     
     def validate(self) -> bool:
         """
