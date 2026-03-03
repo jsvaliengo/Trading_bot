@@ -870,33 +870,48 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
       -webkit-overflow-scrolling: touch;
     }
     .table-wrap table {
-      width: max-content;
-      min-width: 100%;
+      width: 100%;
       border-collapse: collapse;
+      table-layout: fixed;
     }
     th, td {
-      padding: 11px 12px;
+      padding: 10px 10px;
       border-bottom: 1px solid rgba(148, 180, 203, 0.17);
       text-align: left;
-      font-size: .92rem;
+      font-size: .9rem;
       vertical-align: middle;
     }
-    th:nth-child(1), td:nth-child(1) { min-width: 110px; }
-    th:nth-child(2), td:nth-child(2) { min-width: 82px; }
-    th:nth-child(3), td:nth-child(3) { min-width: 95px; }
-    th:nth-child(4), td:nth-child(4) { min-width: 110px; }
-    th:nth-child(5), td:nth-child(5) { min-width: 130px; }
+    th:nth-child(1), td:nth-child(1) {
+      width: 17%;
+      white-space: nowrap;
+    }
+    th:nth-child(2), td:nth-child(2) {
+      width: 12%;
+      white-space: nowrap;
+    }
+    th:nth-child(3), td:nth-child(3) {
+      width: 9%;
+      white-space: nowrap;
+    }
+    th:nth-child(4), td:nth-child(4) {
+      width: 14%;
+      white-space: nowrap;
+    }
+    th:nth-child(5), td:nth-child(5) {
+      width: 14%;
+      white-space: nowrap;
+    }
     th:nth-child(6), td:nth-child(6) {
-      min-width: 170px;
+      width: 15%;
       white-space: normal;
       line-height: 1.25;
     }
     th:nth-child(7), td:nth-child(7) {
-      min-width: 95px;
+      width: 9%;
       white-space: nowrap;
     }
     th:nth-child(8), td:nth-child(8) {
-      min-width: 120px;
+      width: 10%;
       white-space: nowrap;
     }
     th { color: var(--muted); font-weight: 500; }
@@ -1175,9 +1190,11 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
       max-width: 280px;
       white-space: normal;
     }
+    @media (max-width: 1500px) {
+      .section { grid-template-columns: 1fr; }
+    }
     @media (max-width: 1080px) {
       .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .section { grid-template-columns: 1fr; }
       .stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .analytics-block { grid-template-columns: 1fr; }
       .chart-wrap { grid-template-columns: 1fr; }
