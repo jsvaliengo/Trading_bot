@@ -3366,6 +3366,7 @@ class TradingBot:
             "Use /trades para relatório de trades.\n"
             "Use /dailyreport para relatório diário e controle on/off.\n"
             "Use /apihealth para relatório de saúde.\n"
+            "Use /coins para listar e gerenciar moedas ativas.\n"
             "Use /pause para pausar o bot.\n"
             "Use /stop para parar o bot."
         )
