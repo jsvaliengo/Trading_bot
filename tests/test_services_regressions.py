@@ -71,6 +71,71 @@ def test_pair_selector_accounts_fixed_pairs_capital_before_dynamic_selection():
     assert selected == ["FIXEDUSDT"]
 
 
+def test_pair_selector_skips_disabled_pairs():
+    config = SimpleNamespace(
+        FIXED_PAIRS=[],
+        DISABLED_PAIRS=["DYNUSDT"],
+        MAX_TRADING_PAIRS=1,
+        PAIR_SELECTION_WEIGHTS={
+            "spread": 35,
+            "volume": 30,
+            "volatility": 20,
+            "trend": 10,
+            "funding": 5,
+        },
+        MIN_VOLUME_24H_USD=1.0,
+        MAX_SPREAD_PERCENT=1.0,
+        MIN_VOLATILITY_PERCENT=0.0,
+        MAX_MIN_NOTIONAL=100.0,
+        AUTO_SELECT_PAIRS=True,
+        PAIR_UPDATE_INTERVAL_MINUTES=60,
+    )
+
+    class ExchangeStub:
+        def get_exchange_info(self):
+            return {
+                "symbols": [
+                    {
+                        "symbol": "DYNUSDT",
+                        "contractType": "PERPETUAL",
+                        "status": "TRADING",
+                    },
+                    {
+                        "symbol": "ENABLEDUSDT",
+                        "contractType": "PERPETUAL",
+                        "status": "TRADING",
+                    },
+                ]
+            }
+
+        def get_ticker_24h(self, symbol):
+            return {"quoteVolume": "1000000", "lastPrice": "100"}
+
+        def get_order_book(self, symbol, limit=5):
+            return {"bids": [["100", "1"]], "asks": [["100.1", "1"]]}
+
+        def get_klines_raw(self, symbol, interval, limit=24):
+            rows = []
+            for i in range(limit):
+                rows.append([0, 0, 0, 0, 100 + i * 0.1])
+            return rows
+
+        def get_funding_rate(self, symbol):
+            return {"rate_percent": 0.0}
+
+        def get_symbol_info(self, symbol):
+            return {"minNotional": 5.0}
+
+        def get_available_balance(self):
+            return 100.0
+
+    selector = PairSelector(exchange=ExchangeStub(), config=config)
+    selected, _scores = selector.select_best_pairs(available_capital=100.0)
+
+    assert selected == ["ENABLEDUSDT"]
+    assert "DYNUSDT" not in selected
+
+
 def test_stop_force_reports_partial_close_failures():
     handler = TelegramCommandHandler(token="token", chat_id="123")
 
@@ -174,3 +239,32 @@ def test_closeall_reports_partial_failures():
     assert "FECHAMENTO PARCIAL" in final_message
     assert "1/2" in final_message
     assert "Falhas" in final_message
+
+
+def test_coins_command_disable_enable_and_add_pairs():
+    handler = TelegramCommandHandler(token="token", chat_id="123")
+
+    config = SimpleNamespace(
+        TRADING_PAIRS=["ETHUSDT", "XRPUSDT", "SOLUSDT"],
+        DISABLED_PAIRS=[],
+        BINANCE_COIN_LIST=["ETHUSDT", "XRPUSDT", "SOLUSDT"],
+        USE_BINANCE_STRATEGY=False,
+        AUTO_SELECT_PAIRS=False,
+    )
+    bot = SimpleNamespace(save_state=lambda: True)
+    handler.set_bot_reference(bot, config)
+
+    messages = []
+    handler.send_message = lambda text: messages.append(text) or True
+
+    handler.cmd_coins(["disable", "ETH,SOL"])
+    assert set(config.DISABLED_PAIRS) == {"ETHUSDT", "SOLUSDT"}
+    assert config.TRADING_PAIRS == ["XRPUSDT"]
+
+    handler.cmd_coins(["enable", "eth"])
+    assert set(config.DISABLED_PAIRS) == {"SOLUSDT"}
+    assert config.TRADING_PAIRS == ["XRPUSDT"]
+
+    handler.cmd_coins(["add", "matic"])
+    assert "MATICUSDT" in config.BINANCE_COIN_LIST
+    assert "MATICUSDT" in config.TRADING_PAIRS

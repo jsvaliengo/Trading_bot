@@ -484,7 +484,7 @@ class TradingBot:
                 })
             
             state = {
-                'version': '1.4',  # Inclui rastreamento Double First + transferências de capital
+                'version': '1.5',  # Inclui overrides de pares (disable/add) + transferências de capital
                 'saved_at': datetime.now().isoformat(),
                 'start_time': self.start_time.isoformat() if isinstance(self.start_time, datetime) else self.start_time,
                 'initial_capital': self.initial_capital,  # Capital inicial (atualiza com depósitos)
@@ -506,7 +506,11 @@ class TradingBot:
                 'double_first_used': self.double_first_used,
                 'last_daily_performance_report_date': self.last_daily_performance_report_date,
                 'last_transfer_check_ts_ms': int(self.last_transfer_check_ts_ms or 0),
-                'processed_transfer_ids': self.processed_transfer_ids[-max(100, int(config.CAPITAL_TRANSFER_TRACKED_IDS_LIMIT)):]
+                'processed_transfer_ids': self.processed_transfer_ids[
+                    -max(100, int(config.CAPITAL_TRANSFER_TRACKED_IDS_LIMIT)):
+                ],
+                'disabled_pairs': list(getattr(config, 'DISABLED_PAIRS', []) or []),
+                'binance_coin_list': list(getattr(config, 'BINANCE_COIN_LIST', []) or []),
             }
             
             with open(self._state_file_path, 'w') as f:
@@ -531,6 +535,18 @@ class TradingBot:
         try:
             with open(self._state_file_path, 'r') as f:
                 state = json.load(f)
+
+            # Carrega overrides de pares antes da inicialização da estratégia.
+            saved_disabled_pairs = state.get('disabled_pairs')
+            if saved_disabled_pairs is not None:
+                config.DISABLED_PAIRS = config.normalize_pair_list(saved_disabled_pairs)
+
+            saved_binance_coin_list = state.get('binance_coin_list')
+            if saved_binance_coin_list:
+                config.BINANCE_COIN_LIST = config.normalize_pair_list(saved_binance_coin_list)
+
+            config.FIXED_PAIRS = config.filter_disabled_pairs(config.FIXED_PAIRS)
+            config.TRADING_PAIRS = config.filter_disabled_pairs(config.TRADING_PAIRS)
             
             # Verifica se é do mesmo dia (usando UTC como a Binance)
             # A Binance reseta o P&L diário às 00:00 UTC
@@ -609,6 +625,7 @@ class TradingBot:
             logger.info(f"   • Trades fechados: {self.closed_trades_count}")
             logger.info(f"   • P&L Total: ${self.total_pnl:.2f}")
             logger.info(f"   • Snapshots no histórico: {len(self.portfolio_history)}")
+            logger.info(f"   • Pares desabilitados: {', '.join(config.DISABLED_PAIRS) if config.DISABLED_PAIRS else 'nenhum'}")
             if self.double_first_used:
                 logger.info(f"   • Double First usados: {len(self.double_first_used)}")
             
@@ -735,6 +752,77 @@ class TradingBot:
         """
         logger.info("\n⚠️  Sinal de parada recebido...")
         self.stop()
+
+    def _filter_disabled_pairs(self, pairs: list) -> list:
+        """
+        Filtra pares desabilitados preservando ordem.
+        """
+        if hasattr(config, "filter_disabled_pairs"):
+            return config.filter_disabled_pairs(pairs)
+
+        disabled = {str(item).upper() for item in (getattr(config, "DISABLED_PAIRS", []) or [])}
+        filtered = []
+        seen = set()
+        for raw_symbol in pairs or []:
+            symbol = str(raw_symbol).upper()
+            if not symbol or symbol in disabled or symbol in seen:
+                continue
+            seen.add(symbol)
+            filtered.append(symbol)
+        return filtered
+
+    def refresh_trading_pairs(self, trigger_reason: str = "manual") -> Dict[str, Any]:
+        """
+        Recalcula a lista ativa de pares imediatamente, respeitando pares desabilitados.
+        """
+        old_pairs = list(config.TRADING_PAIRS)
+
+        if config.USE_BINANCE_STRATEGY:
+            # Mantém regra atual de escolha (score), apenas filtra pares desabilitados.
+            if hasattr(self, "binance_strategy") and self.binance_strategy:
+                num_coins = int(self.binance_strategy.get("num_coins", len(old_pairs) or 0))
+            else:
+                num_coins = len(old_pairs)
+
+            new_pairs = self.sort_binance_coins_by_score(num_coins=max(0, num_coins))
+            if hasattr(self, "binance_strategy") and self.binance_strategy is not None:
+                self.binance_strategy["coins"] = list(new_pairs)
+        elif config.AUTO_SELECT_PAIRS and self.pair_selector is not None:
+            available_capital = self.exchange.get_available_balance()
+            selected_pairs, _scores = self.pair_selector.select_best_pairs(
+                available_capital=available_capital
+            )
+            new_pairs = selected_pairs
+        else:
+            new_pairs = list(config.TRADING_PAIRS)
+
+        config.TRADING_PAIRS = self._filter_disabled_pairs(new_pairs)
+
+        for symbol in config.TRADING_PAIRS:
+            if symbol not in self.pnl_by_symbol:
+                self.pnl_by_symbol[symbol] = 0.0
+
+        old_set = set(old_pairs)
+        new_set = set(config.TRADING_PAIRS)
+        added_pairs = sorted(new_set - old_set)
+        removed_pairs = sorted(old_set - new_set)
+
+        for symbol in added_pairs:
+            self.exchange.set_leverage(symbol, config.LEVERAGE)
+
+        self.cache_pairs_min_notional()
+        logger.info(
+            "🔄 Lista de pares atualizada (%s): %s",
+            trigger_reason,
+            ", ".join(config.TRADING_PAIRS) if config.TRADING_PAIRS else "nenhum par habilitado",
+        )
+
+        return {
+            "old_pairs": old_pairs,
+            "new_pairs": list(config.TRADING_PAIRS),
+            "added_pairs": added_pairs,
+            "removed_pairs": removed_pairs,
+        }
     
     def setup_exchange(self):
         """
@@ -806,7 +894,7 @@ class TradingBot:
             
             # Atualiza estratégia com moedas ordenadas
             strategy['coins'] = sorted_coins
-            config.TRADING_PAIRS = sorted_coins  # IMPORTANTE: Atualiza TRADING_PAIRS
+            config.TRADING_PAIRS = self._filter_disabled_pairs(sorted_coins)  # IMPORTANTE: Atualiza TRADING_PAIRS
             self.binance_strategy = strategy
             
             # Atualiza pnl_by_symbol para incluir os pares
@@ -821,17 +909,20 @@ class TradingBot:
             logger.info(f"   📈 Faixa de Capital: {strategy['capital_range']}")
             logger.info(f"   💵 Order Size: ${strategy['order_size']}")
             logger.info(f"   🛑 Stop Loss: ${strategy['stop_loss']}")
-            logger.info(f"   🪙 Moedas ({strategy['num_coins']}): {', '.join([c.replace('USDT', '') for c in sorted_coins])}")
+            logger.info(
+                f"   🪙 Moedas ({len(config.TRADING_PAIRS)}): "
+                f"{', '.join([c.replace('USDT', '') for c in config.TRADING_PAIRS])}"
+            )
             
             # Notifica no Telegram
-            coins_display = ', '.join([c.replace('USDT', '') for c in sorted_coins])
+            coins_display = ', '.join([c.replace('USDT', '') for c in config.TRADING_PAIRS])
             self.telegram.send_message(
                 f"📊 <b>ESTRATÉGIA BINANCE PADRÃO</b>\n\n"
                 f"💰 <b>Saldo:</b> ${current_balance:.2f}\n"
                 f"📈 <b>Faixa:</b> {strategy['capital_range']}\n"
                 f"💵 <b>Order Size:</b> ${strategy['order_size']}\n"
                 f"🛑 <b>Stop Loss:</b> ${strategy['stop_loss']}\n"
-                f"🪙 <b>Moedas ({strategy['num_coins']}) - Ordenadas por Score:</b>\n{coins_display}\n\n"
+                f"🪙 <b>Moedas ({len(config.TRADING_PAIRS)}) - Ordenadas por Score:</b>\n{coins_display}\n\n"
                 f"<i>Atualização a cada 6 horas</i>"
             )
         
@@ -848,7 +939,7 @@ class TradingBot:
             )
             
             # Atualiza a configuração
-            config.TRADING_PAIRS = selected_pairs
+            config.TRADING_PAIRS = self._filter_disabled_pairs(selected_pairs)
             self.last_pair_update = datetime.now()
             
             # Atualiza pnl_by_symbol para incluir novos pares
@@ -860,11 +951,12 @@ class TradingBot:
             for symbol in config.TRADING_PAIRS:
                 self.exchange.set_leverage(symbol, config.LEVERAGE)
             
+            active_fixed_pairs = self._filter_disabled_pairs(config.FIXED_PAIRS)
             # Notifica no Telegram
             self.telegram.send_message(
                 f"🤖 <b>SELEÇÃO DE PARES</b>\n\n"
-                f"📌 <b>Fixos:</b> {', '.join(config.FIXED_PAIRS)}\n"
-                f"🔄 <b>Dinâmicos:</b> {', '.join([p for p in config.TRADING_PAIRS if p not in config.FIXED_PAIRS])}\n\n"
+                f"📌 <b>Fixos:</b> {', '.join(active_fixed_pairs)}\n"
+                f"🔄 <b>Dinâmicos:</b> {', '.join([p for p in config.TRADING_PAIRS if p not in active_fixed_pairs])}\n\n"
                 f"<i>Próxima atualização em {config.PAIR_UPDATE_INTERVAL_MINUTES // 60}h</i>"
             )
         
@@ -1191,7 +1283,7 @@ class TradingBot:
                 
                 # Atualiza configurações
                 self.binance_strategy = new_strategy
-                config.TRADING_PAIRS = sorted_coins
+                config.TRADING_PAIRS = self._filter_disabled_pairs(sorted_coins)
                 
                 # Atualiza pnl_by_symbol para incluir novos pares
                 for symbol in config.TRADING_PAIRS:
@@ -1206,14 +1298,14 @@ class TradingBot:
                 self.cache_pairs_min_notional()
                 
                 # Notifica no Telegram
-                coins_display = ', '.join([c.replace('USDT', '') for c in sorted_coins])
+                coins_display = ', '.join([c.replace('USDT', '') for c in config.TRADING_PAIRS])
                 self.telegram.send_message(
                     f"📊 <b>MUDANÇA DE FAIXA</b>\n\n"
                     f"💰 <b>Saldo Atual:</b> ${current_balance:.2f}\n"
                     f"📈 <b>Nova Faixa:</b> {new_strategy['capital_range']}\n"
                     f"💵 <b>Order Size:</b> ${new_strategy['order_size']}\n"
                     f"🛑 <b>Stop Loss:</b> ${new_strategy['stop_loss']}\n"
-                    f"🪙 <b>Moedas ({new_strategy['num_coins']}) - Por Score:</b>\n{coins_display}"
+                    f"🪙 <b>Moedas ({len(config.TRADING_PAIRS)}) - Por Score:</b>\n{coins_display}"
                 )
                 
         except Exception as e:
@@ -1304,7 +1396,7 @@ class TradingBot:
                         )
         
         # Atualiza configuração
-        config.TRADING_PAIRS = selected_pairs
+        config.TRADING_PAIRS = self._filter_disabled_pairs(selected_pairs)
         self.last_pair_update = datetime.now()
         
         # Atualiza pnl_by_symbol para incluir novos pares
@@ -1319,10 +1411,11 @@ class TradingBot:
         for symbol in added_pairs:
             self.exchange.set_leverage(symbol, config.LEVERAGE)
         
+        active_fixed_pairs = self._filter_disabled_pairs(config.FIXED_PAIRS)
         # Notifica no Telegram
         msg = "🔄 <b>ATUALIZAÇÃO DE PARES</b>\n\n"
-        msg += f"📌 <b>Fixos:</b> {', '.join(config.FIXED_PAIRS)}\n"
-        msg += f"🔄 <b>Dinâmicos:</b> {', '.join([p for p in config.TRADING_PAIRS if p not in config.FIXED_PAIRS])}\n\n"
+        msg += f"📌 <b>Fixos:</b> {', '.join(active_fixed_pairs)}\n"
+        msg += f"🔄 <b>Dinâmicos:</b> {', '.join([p for p in config.TRADING_PAIRS if p not in active_fixed_pairs])}\n\n"
         
         if removed_pairs:
             msg += f"📤 <b>Removidos:</b> {', '.join(removed_pairs)}\n"
@@ -1354,14 +1447,15 @@ class TradingBot:
         """
         if not hasattr(self, 'pair_selector') or self.pair_selector is None:
             logger.warning("⚠️ PairSelector não inicializado, usando ordem padrão")
-            return config.BINANCE_COIN_LIST[:num_coins]
-        
-        logger.info(f"📊 Calculando scores para {len(config.BINANCE_COIN_LIST)} moedas...")
+            return config.get_enabled_binance_coin_list()[:num_coins]
+
+        candidate_coins = config.get_enabled_binance_coin_list()
+        logger.info(f"📊 Calculando scores para {len(candidate_coins)} moedas...")
         
         # Calcula score de cada moeda da lista Binance
         coins_with_scores = []
         
-        for symbol in config.BINANCE_COIN_LIST:
+        for symbol in candidate_coins:
             try:
                 # Busca métricas do par usando PairSelector
                 metrics = self.pair_selector.get_pair_metrics(symbol)
@@ -1392,7 +1486,7 @@ class TradingBot:
         # Se não conseguiu scores suficientes, completa com a ordem padrão
         if len(best_coins) < num_coins:
             logger.warning(f"⚠️ Só conseguiu {len(best_coins)} scores, completando com ordem padrão")
-            for coin in config.BINANCE_COIN_LIST:
+            for coin in candidate_coins:
                 if coin not in best_coins:
                     best_coins.append(coin)
                     if len(best_coins) >= num_coins:
@@ -1425,7 +1519,7 @@ class TradingBot:
             return
         
         # Atualiza
-        config.TRADING_PAIRS = new_coins
+        config.TRADING_PAIRS = self._filter_disabled_pairs(new_coins)
         self.binance_strategy['coins'] = new_coins
         
         # Atualiza pnl_by_symbol
