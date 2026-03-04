@@ -268,3 +268,52 @@ def test_coins_command_disable_enable_and_add_pairs():
     handler.cmd_coins(["add", "matic"])
     assert "MATICUSDT" in config.BINANCE_COIN_LIST
     assert "MATICUSDT" in config.TRADING_PAIRS
+
+
+def test_sentiment_command_toggles_mode_and_supports_normal_alias():
+    handler = TelegramCommandHandler(token="token", chat_id="123")
+
+    state = {"enabled": False}
+
+    def set_sentiment_mode(enabled, persist=True):
+        state["enabled"] = bool(enabled)
+        return state["enabled"]
+
+    def get_sentiment_snapshot(symbol, force_refresh=False):
+        return {
+            "symbol": symbol,
+            "bias": "BULLISH",
+            "direction": "LONG_ONLY",
+            "score": 3,
+            "rsi": 62.5,
+            "momentum_pct": 1.2,
+            "timeframe": "1h",
+            "reason": "tendência de alta",
+            "updated_at": "2026-03-03T10:00:00+00:00",
+        }
+
+    bot = SimpleNamespace(
+        sentiment_mode_enabled=False,
+        set_sentiment_mode=set_sentiment_mode,
+        get_sentiment_snapshot=get_sentiment_snapshot,
+    )
+    config = SimpleNamespace(
+        SENTIMENT_TIMEFRAME="1h",
+        SENTIMENT_CANDLES_LOOKBACK=120,
+        SENTIMENT_MIN_SCORE=2,
+        SENTIMENT_MIN_MOMENTUM_PERCENT=0.2,
+        normalize_pair_symbol=lambda s: f"{str(s).upper()}USDT" if not str(s).upper().endswith("USDT") else str(s).upper(),
+    )
+    handler.set_bot_reference(bot, config)
+
+    messages = []
+    handler.send_message = lambda text: messages.append(text) or True
+
+    handler.cmd_sentiment(["on"])
+    assert state["enabled"] is True
+
+    handler.cmd_sentiment(["normal"])
+    assert state["enabled"] is False
+
+    handler.cmd_sentiment(["SOL"])
+    assert "VIÉS DE MERCADO - SOLUSDT" in messages[-1]

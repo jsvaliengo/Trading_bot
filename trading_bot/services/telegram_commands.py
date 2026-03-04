@@ -65,6 +65,7 @@ class TelegramCommandHandler:
             '/lockinfo': self.cmd_lockinfo,
             '/apihealth': self.cmd_apihealth,
             '/dailyreport': self.cmd_dailyreport,
+            '/sentiment': self.cmd_sentiment,
             '/config': self.cmd_config,
             '/positions': self.cmd_positions,
             '/coins': self.cmd_coins,
@@ -510,6 +511,7 @@ class TelegramCommandHandler:
 ⚙️ <b>CONFIG:</b>
    • Alavancagem: <code>{self.config.LEVERAGE}x</code>
    • Moedas: <code>{len(self.config.TRADING_PAIRS)}</code>
+   • Sentimento: <code>{"ON" if getattr(self.bot, "sentiment_mode_enabled", False) else "OFF"}</code>
 ━━━━━━━━━━━━━━━━━━━━━
 """
             self.send_message(message)
@@ -546,6 +548,11 @@ class TelegramCommandHandler:
 🔄 <b>TRAILING STOP:</b>
    • Ativação: <code>{self.config.TRAILING_ACTIVATION_PERCENT}%</code>
    • Distância: <code>{self.config.TRAILING_DISTANCE_PERCENT}%</code>
+
+🧭 <b>SENTIMENTO:</b>
+   • Modo: <code>{"ON" if getattr(self.bot, "sentiment_mode_enabled", False) else "OFF"}</code>
+   • Timeframe: <code>{self.config.SENTIMENT_TIMEFRAME}</code>
+   • Score mínimo: <code>{self.config.SENTIMENT_MIN_SCORE}</code>
 
 🚀 <b>DOUBLE FIRST:</b>
    • LONG: <code>{'ON' if self.config.DOUBLE_FIRST_LONG_ENABLED else 'OFF'}</code>
@@ -659,6 +666,81 @@ class TelegramCommandHandler:
             "• <code>/dailyreport now</code>\n"
             "• <code>/dailyreport on</code>\n"
             "• <code>/dailyreport off</code>"
+        )
+
+    def cmd_sentiment(self, args: list):
+        """Controla filtro de sentimento e consulta viés por par."""
+        if self.bot is None or self.config is None:
+            self.send_message("❌ Bot/config não disponível")
+            return
+
+        if not hasattr(self.bot, "set_sentiment_mode") or not hasattr(self.bot, "get_sentiment_snapshot"):
+            self.send_message("⚠️ Esta versão do bot não suporta /sentiment.")
+            return
+
+        if not args or args[0].strip().lower() in {"status", "info"}:
+            enabled = bool(getattr(self.bot, "sentiment_mode_enabled", False))
+            status = "ON" if enabled else "OFF"
+            self.send_message(
+                f"🧭 <b>FILTRO DE SENTIMENTO</b>\n\n"
+                f"• Modo atual: <code>{status}</code>\n"
+                f"• Timeframe: <code>{self.config.SENTIMENT_TIMEFRAME}</code>\n"
+                f"• Lookback: <code>{self.config.SENTIMENT_CANDLES_LOOKBACK}</code> candles\n"
+                f"• Score mínimo: <code>{self.config.SENTIMENT_MIN_SCORE}</code>\n"
+                f"• Momentum mínimo: <code>{self.config.SENTIMENT_MIN_MOMENTUM_PERCENT:.2f}%</code>\n\n"
+                f"Uso:\n"
+                f"• <code>/sentiment on</code> (ativar filtro)\n"
+                f"• <code>/sentiment off</code> (modo normal)\n"
+                f"• <code>/sentiment SOL</code> (consultar viés do par)"
+            )
+            return
+
+        action = args[0].strip().lower()
+        if action in {"on", "enable", "ativar"}:
+            self.bot.set_sentiment_mode(True, persist=True)
+            self.send_message(
+                "✅ <b>Filtro de sentimento ATIVADO</b>\n\n"
+                "Entradas novas só serão abertas na direção do viés detectado."
+            )
+            return
+
+        if action in {"off", "disable", "normal"}:
+            self.bot.set_sentiment_mode(False, persist=True)
+            self.send_message(
+                "✅ <b>Modo normal restaurado</b>\n\n"
+                "Filtro de sentimento DESATIVADO. O bot voltou ao fluxo padrão de sinais."
+            )
+            return
+
+        symbol_arg = args[1] if action in {"check", "pair"} and len(args) > 1 else args[0]
+        symbol = self._normalize_pair_symbol(symbol_arg)
+        if not symbol:
+            self.send_message("❌ Símbolo inválido. Exemplo: <code>/sentiment SOL</code>")
+            return
+
+        snapshot = self.bot.get_sentiment_snapshot(symbol, force_refresh=True)
+        direction = str(snapshot.get("direction", "BOTH")).upper()
+        if direction == "LONG_ONLY":
+            allowed = "Somente LONG (compra)"
+        elif direction == "SHORT_ONLY":
+            allowed = "Somente SHORT (venda)"
+        else:
+            allowed = "Neutro (LONG/SHORT)"
+
+        updated_at = str(snapshot.get("updated_at", "") or "")
+        if "T" in updated_at:
+            updated_at = updated_at.replace("T", " ").split("+")[0]
+
+        self.send_message(
+            f"🧭 <b>VIÉS DE MERCADO - {symbol}</b>\n\n"
+            f"• Bias: <code>{snapshot.get('bias', 'NEUTRAL')}</code>\n"
+            f"• Direção permitida: <code>{allowed}</code>\n"
+            f"• Score: <code>{snapshot.get('score', 0)}</code>\n"
+            f"• RSI: <code>{float(snapshot.get('rsi', 50.0)):.2f}</code>\n"
+            f"• Momentum: <code>{float(snapshot.get('momentum_pct', 0.0)):+.2f}%</code>\n"
+            f"• Timeframe: <code>{snapshot.get('timeframe', self.config.SENTIMENT_TIMEFRAME)}</code>\n"
+            f"• Motivo: <code>{snapshot.get('reason', '-')}</code>\n"
+            f"• Atualizado: <code>{updated_at or 'agora'}</code>"
         )
 
     def cmd_portfolio(self, args: list):
@@ -1292,6 +1374,7 @@ class TelegramCommandHandler:
 /portfolio - Evolução da carteira
 /trades - Relatório de trades
 /dailyreport - Relatório diário (on/off)
+/sentiment - Filtro de viés (on/off/par)
 /lockinfo - Status do lock
 /apihealth - Saúde operacional
 /config - Ver configurações
@@ -1315,6 +1398,8 @@ class TelegramCommandHandler:
 • <code>/leverage 20</code>
 • <code>/tp 10</code>
 • <code>/dailyreport now</code>
+• <code>/sentiment on</code>
+• <code>/sentiment SOL</code>
 • <code>/sl off</code>
 • <code>/trailing 0.5 0.25</code>
 • <code>/coins disable ETH SOL ADA</code>

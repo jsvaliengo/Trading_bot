@@ -192,6 +192,10 @@ class TradingBot:
         self.pair_selector = None
         self.last_pair_update = None
 
+        # Filtro direcional por sentimento (opcional e com fallback seguro)
+        self.sentiment_mode_enabled = bool(getattr(config, "USE_MARKET_SENTIMENT_FILTER", False))
+        self.sentiment_cache: Dict[str, Dict[str, Any]] = {}
+
         # Lock de instância única (evita dois bots simultâneos)
         self._instance_lock_handle = None
 
@@ -504,6 +508,7 @@ class TradingBot:
                 'peak_prices': self.peak_prices,
                 'trailing_activated': self.trailing_activated,
                 'double_first_used': self.double_first_used,
+                'sentiment_mode_enabled': bool(self.sentiment_mode_enabled),
                 'last_daily_performance_report_date': self.last_daily_performance_report_date,
                 'last_transfer_check_ts_ms': int(self.last_transfer_check_ts_ms or 0),
                 'processed_transfer_ids': self.processed_transfer_ids[
@@ -563,6 +568,10 @@ class TradingBot:
             self.double_first_used = self._normalize_double_first_state(
                 state.get('double_first_used', {})
             )
+            self.sentiment_mode_enabled = bool(
+                state.get('sentiment_mode_enabled', self.sentiment_mode_enabled)
+            )
+            self.sentiment_cache = {}
             self.last_daily_performance_report_date = str(
                 state.get('last_daily_performance_report_date', '') or ''
             )
@@ -1588,7 +1597,182 @@ class TradingBot:
         if self.commission_rates is None:
             self.update_commission_rates()
         return self.commission_rates.get('taker_rate', 0.0005)
-    
+
+    def set_sentiment_mode(self, enabled: bool, persist: bool = True) -> bool:
+        """Liga/desliga o filtro de sentimento para entradas novas."""
+        self.sentiment_mode_enabled = bool(enabled)
+        if not self.sentiment_mode_enabled:
+            # Limpa cache para evitar leitura de viés antigo quando religar.
+            self.sentiment_cache = {}
+
+        if persist:
+            self.save_state()
+
+        logger.info(
+            "🧭 Modo sentimento %s",
+            "ATIVADO" if self.sentiment_mode_enabled else "DESATIVADO"
+        )
+        return self.sentiment_mode_enabled
+
+    def get_sentiment_snapshot(self, symbol: str, force_refresh: bool = False) -> Dict[str, Any]:
+        """Retorna snapshot do viés de mercado para um par."""
+        return self._get_symbol_sentiment(symbol=symbol, force_refresh=force_refresh)
+
+    def _get_symbol_sentiment(self, symbol: str, force_refresh: bool = False) -> Dict[str, Any]:
+        """
+        Calcula viés técnico por par em timeframe superior para filtrar direção.
+
+        Direções possíveis:
+        - LONG_ONLY
+        - SHORT_ONLY
+        - BOTH (neutro, não filtra)
+        """
+        normalized_symbol = str(symbol or "").upper()
+        now_monotonic = time.monotonic()
+        cache_ttl = max(5, int(getattr(config, "SENTIMENT_CACHE_SECONDS", 300)))
+
+        if not force_refresh:
+            cached = self.sentiment_cache.get(normalized_symbol)
+            if cached and (now_monotonic - float(cached.get("cached_at_monotonic", 0.0))) < cache_ttl:
+                return dict(cached)
+
+        payload: Dict[str, Any] = {
+            "symbol": normalized_symbol,
+            "bias": "NEUTRAL",
+            "direction": "BOTH",
+            "score": 0,
+            "timeframe": str(getattr(config, "SENTIMENT_TIMEFRAME", "1h")),
+            "lookback": int(getattr(config, "SENTIMENT_CANDLES_LOOKBACK", 120)),
+            "rsi": 50.0,
+            "momentum_pct": 0.0,
+            "reason": "insuficiente",
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "cached_at_monotonic": now_monotonic,
+        }
+
+        try:
+            timeframe = payload["timeframe"]
+            lookback = max(30, int(payload["lookback"]))
+            klines = self.exchange.get_klines(
+                symbol=normalized_symbol,
+                interval=timeframe,
+                limit=lookback,
+            )
+
+            if not klines or len(klines) < 30:
+                payload["reason"] = "candles insuficientes"
+                self.sentiment_cache[normalized_symbol] = dict(payload)
+                return dict(payload)
+
+            closes = [float(k["close"]) for k in klines if float(k.get("close", 0) or 0) > 0]
+            if len(closes) < 30:
+                payload["reason"] = "closes inválidos"
+                self.sentiment_cache[normalized_symbol] = dict(payload)
+                return dict(payload)
+
+            ta = self.strategy.ta if hasattr(self.strategy, "ta") else None
+            if ta is None:
+                payload["reason"] = "TA indisponível"
+                self.sentiment_cache[normalized_symbol] = dict(payload)
+                return dict(payload)
+
+            ema_fast = float(ta.calculate_ema(closes, 20))
+            ema_slow = float(ta.calculate_ema(closes, 50))
+            rsi = float(ta.calculate_rsi(closes, 14))
+
+            momentum_window = min(24, len(closes) - 1)
+            reference_price = closes[-1 - momentum_window] if momentum_window > 0 else closes[0]
+            if reference_price > 0:
+                momentum_pct = ((closes[-1] - reference_price) / reference_price) * 100
+            else:
+                momentum_pct = 0.0
+
+            min_score = max(1, int(getattr(config, "SENTIMENT_MIN_SCORE", 2)))
+            min_momentum = max(0.0, float(getattr(config, "SENTIMENT_MIN_MOMENTUM_PERCENT", 0.20)))
+
+            score = 0
+            if ema_fast > ema_slow:
+                score += 2
+            else:
+                score -= 2
+
+            if rsi >= 60:
+                score += 1
+            elif rsi <= 40:
+                score -= 1
+
+            if momentum_pct >= min_momentum:
+                score += 1
+            elif momentum_pct <= -min_momentum:
+                score -= 1
+
+            if score >= min_score:
+                bias = "BULLISH"
+                direction = "LONG_ONLY"
+                reason = "tendência de alta"
+            elif score <= -min_score:
+                bias = "BEARISH"
+                direction = "SHORT_ONLY"
+                reason = "tendência de baixa"
+            else:
+                bias = "NEUTRAL"
+                direction = "BOTH"
+                reason = "sem viés forte"
+
+            payload.update({
+                "bias": bias,
+                "direction": direction,
+                "score": int(score),
+                "rsi": rsi,
+                "momentum_pct": float(momentum_pct),
+                "ema_fast": ema_fast,
+                "ema_slow": ema_slow,
+                "reason": reason,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "cached_at_monotonic": now_monotonic,
+            })
+
+        except Exception as e:
+            payload["reason"] = "erro ao calcular viés"
+            payload["error"] = str(e)
+            logger.warning(f"⚠️ Falha ao calcular sentimento de {normalized_symbol}: {e}")
+
+        self.sentiment_cache[normalized_symbol] = dict(payload)
+        return dict(payload)
+
+    def _apply_sentiment_direction_filter(
+        self,
+        symbol: str,
+        should_open_long: bool,
+        should_open_short: bool,
+    ) -> Tuple[bool, bool]:
+        """Aplica filtro direcional por sentimento quando o modo está ativo."""
+        if not getattr(self, "sentiment_mode_enabled", False):
+            return (should_open_long, should_open_short)
+
+        if not hasattr(self, "sentiment_cache") or not isinstance(self.sentiment_cache, dict):
+            self.sentiment_cache = {}
+
+        sentiment = self._get_symbol_sentiment(symbol)
+        direction = str(sentiment.get("direction", "BOTH")).upper()
+
+        filtered_long = bool(should_open_long)
+        filtered_short = bool(should_open_short)
+
+        if direction == "LONG_ONLY":
+            filtered_short = False
+        elif direction == "SHORT_ONLY":
+            filtered_long = False
+
+        if filtered_long != should_open_long or filtered_short != should_open_short:
+            logger.info(
+                f"🧭 Filtro de sentimento em {symbol}: bias={sentiment.get('bias')} "
+                f"score={sentiment.get('score')} direction={direction} "
+                f"=> LONG={filtered_long} SHORT={filtered_short}"
+            )
+
+        return (filtered_long, filtered_short)
+
     def analyze_and_trade(self, symbol: str) -> bool:
         """
         Analisa um par e executa trades se houver oportunidade.
@@ -1651,10 +1835,20 @@ class TradingBot:
         # Agora aceita BUY, STRONG_BUY para LONG e SELL, STRONG_SELL para SHORT
         should_open_long = signal_name in ['BUY', 'STRONG_BUY']
         should_open_short = signal_name in ['SELL', 'STRONG_SELL']
-        
-        # Se sinal é NEUTRAL, não faz nada
+
+        # Aplica filtro direcional de sentimento (quando ativo).
+        should_open_long, should_open_short = self._apply_sentiment_direction_filter(
+            symbol=symbol,
+            should_open_long=should_open_long,
+            should_open_short=should_open_short,
+        )
+
+        # Se sinal é NEUTRAL ou foi filtrado pelo sentimento, não abre posição.
         if not should_open_long and not should_open_short:
-            logger.info(f"⏸️  Sinal {signal_name} em {symbol} - aguardando sinal de entrada")
+            if self.sentiment_mode_enabled and signal_name in ['BUY', 'STRONG_BUY', 'SELL', 'STRONG_SELL']:
+                logger.info(f"⏸️  Entrada bloqueada por sentimento em {symbol} (sinal={signal_name})")
+            else:
+                logger.info(f"⏸️  Sinal {signal_name} em {symbol} - aguardando sinal de entrada")
             return False
         
         # Verifica posições abertas neste símbolo
@@ -3367,6 +3561,7 @@ class TradingBot:
             "Use /dailyreport para relatório diário e controle on/off.\n"
             "Use /apihealth para relatório de saúde.\n"
             "Use /coins para listar e gerenciar moedas ativas.\n"
+            "Use /sentiment para ligar/desligar o filtro de viés.\n"
             "Use /pause para pausar o bot.\n"
             "Use /stop para parar o bot."
         )

@@ -412,6 +412,20 @@ class TradingConfig:
     CANDLES_LOOKBACK: int = 50
 
     # ============================================
+    # FILTRO DE SENTIMENTO / VIÉS DE MERCADO
+    # ============================================
+    # Quando ativo, só permite entrada na direção do viés detectado:
+    # - BULLISH => somente LONG
+    # - BEARISH => somente SHORT
+    # - NEUTRAL => mantém operação normal (LONG/SHORT conforme sinal)
+    USE_MARKET_SENTIMENT_FILTER: bool = _env_bool("TRADING_BOT_SENTIMENT_FILTER_ENABLED", False)
+    SENTIMENT_TIMEFRAME: str = os.getenv("TRADING_BOT_SENTIMENT_TIMEFRAME", "1h").strip() or "1h"
+    SENTIMENT_CANDLES_LOOKBACK: int = _env_int("TRADING_BOT_SENTIMENT_LOOKBACK_CANDLES", 120)
+    SENTIMENT_MIN_SCORE: int = _env_int("TRADING_BOT_SENTIMENT_MIN_SCORE", 2)
+    SENTIMENT_MIN_MOMENTUM_PERCENT: float = _env_float("TRADING_BOT_SENTIMENT_MIN_MOMENTUM_PERCENT", 0.20)
+    SENTIMENT_CACHE_SECONDS: int = _env_int("TRADING_BOT_SENTIMENT_CACHE_SECONDS", 300)
+
+    # ============================================
     # RESILIÊNCIA DE API (retry/backoff)
     # ============================================
     # Número máximo de tentativas em chamadas elegíveis para retry
@@ -799,6 +813,21 @@ class TradingConfig:
 
         if self.DAILY_PERFORMANCE_REPORT_LOOKBACK_HOURS < 1 or self.DAILY_PERFORMANCE_REPORT_LOOKBACK_HOURS > 168:
             errors.append("⚠️  ALERTA: DAILY_PERFORMANCE_REPORT_LOOKBACK_HOURS deve estar entre 1 e 168!")
+
+        if self.SENTIMENT_TIMEFRAME not in {"1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d"}:
+            errors.append("⚠️  ALERTA: SENTIMENT_TIMEFRAME inválido!")
+
+        if self.SENTIMENT_CANDLES_LOOKBACK < 30 or self.SENTIMENT_CANDLES_LOOKBACK > 1000:
+            errors.append("⚠️  ALERTA: SENTIMENT_CANDLES_LOOKBACK deve estar entre 30 e 1000!")
+
+        if self.SENTIMENT_MIN_SCORE < 1 or self.SENTIMENT_MIN_SCORE > 5:
+            errors.append("⚠️  ALERTA: SENTIMENT_MIN_SCORE deve estar entre 1 e 5!")
+
+        if self.SENTIMENT_MIN_MOMENTUM_PERCENT < 0 or self.SENTIMENT_MIN_MOMENTUM_PERCENT > 10:
+            errors.append("⚠️  ALERTA: SENTIMENT_MIN_MOMENTUM_PERCENT deve estar entre 0 e 10!")
+
+        if self.SENTIMENT_CACHE_SECONDS < 5 or self.SENTIMENT_CACHE_SECONDS > 3600:
+            errors.append("⚠️  ALERTA: SENTIMENT_CACHE_SECONDS deve estar entre 5 e 3600!")
 
         if self.DOUBLE_FIRST_SCOPE not in {"global", "symbol"}:
             errors.append("⚠️  ALERTA: DOUBLE_FIRST_SCOPE deve ser 'global' ou 'symbol'!")

@@ -509,3 +509,44 @@ def test_normalize_double_first_state_accepts_legacy_formats():
         {"short": True, "BTCUSDT_LONG": 1, "foo": True, "ADAUSDT_SHORT": False}
     )
     assert normalized_from_dict == {"SHORT": True, "BTCUSDT_LONG": True}
+
+
+def test_analyze_and_trade_blocks_signal_when_sentiment_conflicts(monkeypatch):
+    bot = _make_light_bot()
+
+    monkeypatch.setattr(config, "USE_DAILY_TARGETS", False)
+    monkeypatch.setattr(config, "TIMEFRAME", "5m")
+    monkeypatch.setattr(config, "CANDLES_LOOKBACK", 50)
+
+    setup = TradeSetup(
+        symbol="ETHUSDT",
+        signal=Signal.SELL,
+        long_size=5.0,
+        short_size=5.0,
+        entry_price=100.0,
+        stop_loss=102.0,
+        take_profit=98.0,
+        dca_levels=[],
+    )
+
+    bot.exchange = SimpleNamespace(
+        get_klines=lambda **_kwargs: [{"close": 100.0}],
+        get_available_balance=lambda: 1000.0,
+        get_symbol_info=lambda _symbol: {"minNotional": 5.0},
+        get_open_positions=lambda: [],
+    )
+    bot.strategy = SimpleNamespace(generate_trade_setup=lambda **_kwargs: setup)
+    bot.risk_manager = SimpleNamespace(can_open_position=lambda _total: True)
+    bot.execute_signal_trade = MagicMock(return_value=True)
+
+    bot.sentiment_mode_enabled = True
+    bot._get_symbol_sentiment = lambda _symbol, force_refresh=False: {
+        "direction": "LONG_ONLY",
+        "bias": "BULLISH",
+        "score": 3,
+    }
+
+    result = bot.analyze_and_trade("ETHUSDT")
+
+    assert result is False
+    bot.execute_signal_trade.assert_not_called()
