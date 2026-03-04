@@ -1003,6 +1003,13 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
       gap: 5px;
       align-items: center;
     }
+    .distance-meta {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+      min-width: 0;
+    }
     .distance-value {
       display: inline-block;
       font-size: .80rem;
@@ -1010,7 +1017,25 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
       letter-spacing: .02em;
       color: var(--muted);
       white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
+    .distance-severity {
+      border-radius: 8px;
+      border: 1px solid currentColor;
+      padding: 2px 7px;
+      font-size: .64rem;
+      font-weight: 700;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      white-space: nowrap;
+      background: rgba(8, 22, 35, 0.40);
+    }
+    .distance-severity-critical { color: #ffb0b7; background: rgba(138, 62, 78, 0.24); }
+    .distance-severity-alert { color: #f6d98a; background: rgba(121, 106, 43, 0.21); }
+    .distance-severity-warning { color: #ffc4a2; background: rgba(136, 89, 58, 0.22); }
+    .distance-severity-neutral { color: #b6c6d5; background: rgba(63, 85, 103, 0.24); }
+    .distance-severity-good { color: #9ceac3; background: rgba(42, 105, 82, 0.24); }
     .distance-bar {
       display: block;
       width: 100%;
@@ -1387,11 +1412,11 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
               <th>Lado</th>
               <th>Qtd</th>
               <th>Entrada</th>
-              <th>Preço de Marcação</th>
-              <th>Distância</th>
-              <th>Resultado</th>
+              <th title="Preço de marcação">Marc.</th>
+              <th title="Distância da entrada">Dist.</th>
+              <th title="Resultado (P&L)">P&L</th>
               <th>ROI</th>
-              <th>Status / Stop</th>
+              <th title="Status e Stop">St/Stop</th>
             </tr>
           </thead>
           <tbody id="positions-body">
@@ -1681,7 +1706,13 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
       const entry = Number(entryPrice || 0);
       const mark = Number(markPrice || 0);
       if (!Number.isFinite(entry) || entry <= 0 || !Number.isFinite(mark)) {
-        return { label: "0.00% → estável", width: 4, className: "distance-flat" };
+        return {
+          label: "0.00% → estável",
+          width: 4,
+          className: "distance-flat",
+          severityLabel: "NORMAL",
+          severityClass: "distance-severity-neutral",
+        };
       }
 
       const marketMove = ((mark - entry) / entry) * 100.0;
@@ -1703,10 +1734,28 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
 
       const signed = adjustedMove >= 0 ? `+${adjustedMove.toFixed(2)}` : adjustedMove.toFixed(2);
       const width = Math.max(4, Math.min(100, Math.abs(adjustedMove) * 8));
+      let severityLabel = "NORMAL";
+      let severityClass = "distance-severity-neutral";
+      if (adjustedMove <= -3.0) {
+        severityLabel = "CRÍTICO";
+        severityClass = "distance-severity-critical";
+      } else if (adjustedMove <= -1.5) {
+        severityLabel = "ALERTA";
+        severityClass = "distance-severity-alert";
+      } else if (adjustedMove <= -0.4) {
+        severityLabel = "ATENÇÃO";
+        severityClass = "distance-severity-warning";
+      } else if (adjustedMove >= 1.2) {
+        severityLabel = "CONFORTÁVEL";
+        severityClass = "distance-severity-good";
+      }
+
       return {
         label: `${signed}% ${arrow} ${trend}`,
         width: width,
         className: className,
+        severityLabel: severityLabel,
+        severityClass: severityClass,
       };
     }
 
@@ -2599,7 +2648,10 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
                 <td>${formatPriceCompact(pos.mark_price)}</td>
                 <td>
                   <div class="distance-wrap">
-                    <span class="distance-value ${distance.className}">${escapeHtml(distance.label)}</span>
+                    <div class="distance-meta">
+                      <span class="distance-value ${distance.className}">${escapeHtml(distance.label)}</span>
+                      <span class="distance-severity ${distance.severityClass}">${escapeHtml(distance.severityLabel)}</span>
+                    </div>
                     <span class="distance-bar">
                       <span class="distance-fill ${distance.className}" style="width:${distance.width.toFixed(1)}%"></span>
                     </span>
