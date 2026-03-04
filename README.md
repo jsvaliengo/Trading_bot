@@ -32,9 +32,12 @@ mkdir trading_bot
 cd trading_bot
 ```
 
-### 2. Instale as dependências
+### 2. Crie o ambiente virtual e instale dependências
 
 ```bash
+python3 -m venv .venv
+source .venv/bin/activate  # Linux/Mac
+pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
@@ -75,25 +78,27 @@ $env:TELEGRAM_CHAT_ID="seu_chat_id_aqui"
 
 ## 🔧 Configuração
 
-Antes de rodar, ajuste os parâmetros no arquivo `trading_bot/core/config.py`:
+O fluxo recomendado é ajustar via `.env` (o bot também suporta variáveis de ambiente no shell).
+Os valores abaixo são os defaults atuais em `trading_bot/core/config.py`.
 
 ### Parâmetros Essenciais
 
 | Parâmetro | Padrão | Descrição |
 |-----------|--------|-----------|
-| `USE_TESTNET` | `True` | Use `True` para testar, `False` para dinheiro real |
-| `TOTAL_CAPITAL` | `50.0` | Seu capital total em USDT |
-| `LEVERAGE` | `3` | Alavancagem (1-20x) |
-| `MAX_POSITION_PERCENT` | `0.05` | % do capital por trade (5%) |
+| `USE_TESTNET` | `False` | `True` para Testnet, `False` para Mainnet |
+| `TOTAL_CAPITAL` | `100.0` | Referência de capital (não é o saldo real da conta) |
+| `LEVERAGE` | `20` | Alavancagem por posição |
+| `MAX_POSITION_PERCENT` | `0.08` | % do capital por trade (8%) |
 
 ### Parâmetros de Risco
 
 | Parâmetro | Padrão | Descrição |
 |-----------|--------|-----------|
-| `STOP_LOSS_PERCENT` | `5.0` | Stop Loss em % |
-| `TAKE_PROFIT_PERCENT` | `3.0` | Take Profit em % |
+| `STOP_LOSS_PERCENT` | `3.0` | Stop Loss individual (%) quando habilitado |
+| `USE_INDIVIDUAL_STOP_LOSS` | `False` | Liga/desliga stop loss individual por posição |
+| `TAKE_PROFIT_PERCENT` | `8.0` | Take Profit em % |
 | `MAX_DAILY_LOSS_PERCENT` | `10.0` | Perda máxima diária em % |
-| `MAX_OPEN_POSITIONS` | `4` | Máximo de posições simultâneas |
+| `MAX_OPEN_POSITIONS` | `12` | Máximo de posições simultâneas |
 
 ### Parâmetros de DCA
 
@@ -121,10 +126,17 @@ export TRADING_BOT_DOUBLE_FIRST_SHORT_ENABLED=false
 export TRADING_BOT_DOUBLE_FIRST_MULTIPLIER=2.0
 export TRADING_BOT_DOUBLE_FIRST_MAX_MARGIN_USDT=0
 export TRADING_BOT_DOUBLE_FIRST_SCOPE=global
+export TRADING_BOT_SENTIMENT_FILTER_ENABLED=false
+export TRADING_BOT_SENTIMENT_TIMEFRAME=1h
+export TRADING_BOT_SENTIMENT_LOOKBACK_CANDLES=120
+export TRADING_BOT_SENTIMENT_MIN_SCORE=2
+export TRADING_BOT_SENTIMENT_MIN_MOMENTUM_PERCENT=0.20
+export TRADING_BOT_SENTIMENT_CACHE_SECONDS=300
 export TRADING_BOT_DASHBOARD_HOST=127.0.0.1
 export TRADING_BOT_DASHBOARD_PORT=8080
 export TRADING_BOT_DASHBOARD_REFRESH_SECONDS=5
 export TRADING_BOT_DASHBOARD_AUTH_TOKEN=
+export TRADING_BOT_MAINNET_CONFIRM=eu_sei_o_risco
 ```
 
 Arquivos de runtime ficam em `runtime/` por ambiente:
@@ -194,6 +206,19 @@ Depois acesse:
 - sem token: `http://127.0.0.1:8080`
 - com token: `http://127.0.0.1:8080/?token=SEU_TOKEN_FORTE`
 
+### Dashboard em modo seguro (rápido + análise sob demanda)
+
+O dashboard usa dois níveis de atualização:
+- **refresh rápido** (`/api/dashboard`): dados operacionais de conta, posições e risco
+- **análise sob demanda** (`/api/dashboard/analytics`): calendário, cumulativo e métricas históricas
+
+Na interface, use o botão **Atualizar análise** quando quiser recalcular analytics pesado para o período selecionado.
+
+Na tabela de pares:
+- coluna **Distância** com barra visual por posição
+- selo de severidade (`CRÍTICO`, `ALERTA`, `ATENÇÃO`, `NORMAL`, `CONFORTÁVEL`)
+- coluna **Status / Stop** com badges separados
+
 Recomendação para Oracle:
 - mantenha bind em `127.0.0.1`
 - exponha via Nginx/Cloudflare Tunnel com autenticação
@@ -214,11 +239,18 @@ O script faz:
 2. instala/atualiza dependências da `.venv`
 3. roda `pytest -q`
 4. reinicia o bot na sessão `screen` somente se os testes passarem
+5. reinicia o dashboard (sessão `screen`) por padrão
 
 Variáveis opcionais:
 
 ```bash
 SCREEN_NAME=bot PROJECT_DIR=/home/ubuntu/trading_bot TRADING_BOT_ENV=prod BOT_MODULE=trading_bot.core.bot ./scripts/update_server.sh
+```
+
+Para controlar restart do dashboard no deploy:
+
+```bash
+DASHBOARD_ENABLED=0 ./scripts/update_server.sh
 ```
 
 Se `USE_TESTNET=False`, garanta no `.env` do servidor:
@@ -285,6 +317,8 @@ O bot abre posições LONG e SHORT simultaneamente:
 - Se o mercado cair, a posição SHORT compensa parte da perda da LONG
 - Se o mercado subir, a posição LONG lucra mais que a perda da SHORT
 
+Com o **filtro de sentimento** ativo, novas entradas podem ser limitadas para apenas uma direção por par (LONG-only ou SHORT-only), conforme o viés detectado.
+
 ### 2. Análise Técnica
 
 O bot usa múltiplos indicadores para decidir a direção:
@@ -300,6 +334,8 @@ Baseado na força do sinal:
 - **Neutro**: 50% LONG / 50% SHORT
 - **Sinal moderado de baixa**: 40% LONG / 60% SHORT
 - **Sinal forte de baixa**: 30% LONG / 70% SHORT
+
+Também há o recurso **Double First** (opcional), que dobra a primeira entrada LONG e/ou SHORT (escopo global ou por símbolo), com limite de margem configurável.
 
 ### 4. DCA (Dollar Cost Averaging)
 
@@ -392,6 +428,34 @@ O bot gera logs detalhados:
         ├── Stop Loss: $39900.00
         └── Take Profit: $43260.00
 ```
+
+---
+
+## 📱 Comandos Telegram (principais)
+
+Controle operacional:
+- `/start` retoma se estiver pausado (não sobe processo parado)
+- `/stop` para o bot **mantendo posições abertas**
+- `/stop force` para e tenta fechar todas as posições
+- `/pause` pausa novas entradas e mantém gerenciamento das posições
+- `/resume` retoma entradas
+
+Relatórios sob demanda:
+- `/status` status geral (capital, P&L total realizado, trades, config)
+- `/portfolio` evolução da carteira
+- `/trades` relatório de trades fechados
+- `/apihealth` saúde operacional (API/retries/falhas/loops)
+
+Relatório diário:
+- `/dailyreport` mostra status do agendamento
+- `/dailyreport now` envia o relatório imediatamente
+- `/dailyreport on` / `/dailyreport off` liga/desliga envio automático
+
+Filtro de sentimento (direção de entrada):
+- `/sentiment` ou `/sentiment status` mostra estado atual
+- `/sentiment on` ativa filtro direcional por viés
+- `/sentiment off` (ou `/sentiment normal`) volta ao modo normal
+- `/sentiment SOL` consulta viés do par (`SOLUSDT`)
 
 ---
 
