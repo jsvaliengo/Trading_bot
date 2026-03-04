@@ -882,50 +882,164 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
       vertical-align: middle;
     }
     th:nth-child(1), td:nth-child(1) {
-      width: 17%;
+      width: 14%;
       white-space: nowrap;
     }
     th:nth-child(2), td:nth-child(2) {
-      width: 12%;
+      width: 9%;
       white-space: nowrap;
     }
     th:nth-child(3), td:nth-child(3) {
-      width: 9%;
+      width: 8%;
       white-space: nowrap;
     }
     th:nth-child(4), td:nth-child(4) {
-      width: 14%;
+      width: 11%;
       white-space: nowrap;
     }
     th:nth-child(5), td:nth-child(5) {
-      width: 14%;
+      width: 11%;
       white-space: nowrap;
     }
     th:nth-child(6), td:nth-child(6) {
-      width: 15%;
+      width: 16%;
+      white-space: nowrap;
+    }
+    th:nth-child(7), td:nth-child(7) {
+      width: 13%;
       white-space: normal;
       line-height: 1.25;
     }
-    th:nth-child(7), td:nth-child(7) {
-      width: 9%;
+    th:nth-child(8), td:nth-child(8) {
+      width: 8%;
       white-space: nowrap;
     }
-    th:nth-child(8), td:nth-child(8) {
+    th:nth-child(9), td:nth-child(9) {
       width: 10%;
       white-space: nowrap;
     }
-    th { color: var(--muted); font-weight: 500; }
-    tbody tr:hover { background: rgba(71, 211, 255, 0.06); }
+    th {
+      color: rgba(172, 188, 202, 0.92);
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      font-size: .76rem;
+    }
+    tbody tr.position-row {
+      transition: background .22s ease, box-shadow .22s ease;
+    }
+    tbody tr.position-row td {
+      border-top-color: rgba(148, 180, 203, 0.14);
+    }
+    tbody tr.position-row td:first-child {
+      padding-left: 14px;
+    }
+    tbody tr.position-row:hover {
+      box-shadow: inset 0 0 0 1px rgba(148, 180, 203, 0.16);
+    }
+    tbody tr.band-critical { background: rgba(125, 56, 71, 0.18); }
+    tbody tr.band-danger { background: rgba(115, 78, 50, 0.17); }
+    tbody tr.band-alert { background: rgba(108, 99, 52, 0.16); }
+    tbody tr.band-neutral { background: rgba(54, 72, 90, 0.15); }
+    tbody tr.band-good { background: rgba(46, 97, 77, 0.16); }
+    tbody tr.band-critical td:first-child { box-shadow: inset 3px 0 0 rgba(255, 132, 150, 0.42); }
+    tbody tr.band-danger td:first-child { box-shadow: inset 3px 0 0 rgba(255, 170, 125, 0.40); }
+    tbody tr.band-alert td:first-child { box-shadow: inset 3px 0 0 rgba(238, 213, 120, 0.38); }
+    tbody tr.band-neutral td:first-child { box-shadow: inset 3px 0 0 rgba(158, 182, 201, 0.30); }
+    tbody tr.band-good td:first-child { box-shadow: inset 3px 0 0 rgba(123, 228, 170, 0.36); }
+    tbody tr.band-critical:hover { background: rgba(125, 56, 71, 0.24); }
+    tbody tr.band-danger:hover { background: rgba(115, 78, 50, 0.23); }
+    tbody tr.band-alert:hover { background: rgba(108, 99, 52, 0.22); }
+    tbody tr.band-neutral:hover { background: rgba(54, 72, 90, 0.20); }
+    tbody tr.band-good:hover { background: rgba(46, 97, 77, 0.22); }
+    .pair-main {
+      display: block;
+      font-weight: 700;
+      letter-spacing: .02em;
+    }
+    .pair-sub {
+      display: block;
+      font-size: .72rem;
+      color: var(--muted);
+      margin-top: 2px;
+    }
     .tag {
       border-radius: 999px;
       padding: 4px 9px;
-      font-size: .75rem;
+      font-size: .74rem;
       border: 1px solid currentColor;
       display: inline-block;
       line-height: 1.1;
+      font-weight: 600;
+      letter-spacing: .03em;
     }
-    .tag.long { color: var(--good); }
-    .tag.short { color: var(--bad); }
+    .tag.long { color: #66d8a0; background: rgba(66, 179, 123, 0.10); }
+    .tag.short { color: #f0a195; background: rgba(179, 83, 66, 0.12); }
+    .status-wrap {
+      display: inline-flex;
+      flex-direction: column;
+      gap: 6px;
+      align-items: flex-start;
+    }
+    .status-badge, .stop-badge {
+      border-radius: 8px;
+      border: 1px solid currentColor;
+      font-size: .70rem;
+      letter-spacing: .08em;
+      padding: 3px 8px;
+      text-transform: uppercase;
+      white-space: nowrap;
+      background: rgba(8, 22, 35, 0.42);
+    }
+    .status-critical { color: #ffadb5; background: rgba(143, 63, 79, 0.26); }
+    .status-danger { color: #ffc19b; background: rgba(145, 91, 52, 0.23); }
+    .status-alert { color: #f5dc8e; background: rgba(122, 108, 45, 0.20); }
+    .status-neutral { color: #b4c4d3; background: rgba(65, 88, 108, 0.24); }
+    .status-good { color: #95e8be; background: rgba(41, 103, 80, 0.24); }
+    .stop-active { color: #8be6b6; background: rgba(39, 99, 77, 0.24); }
+    .stop-inactive { color: #9ab0bf; background: rgba(67, 82, 97, 0.22); }
+    .distance-wrap {
+      display: grid;
+      gap: 5px;
+      align-items: center;
+    }
+    .distance-value {
+      display: inline-block;
+      font-size: .80rem;
+      font-weight: 600;
+      letter-spacing: .02em;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+    .distance-bar {
+      display: block;
+      width: 100%;
+      max-width: 164px;
+      height: 6px;
+      border-radius: 999px;
+      background: rgba(50, 72, 92, 0.42);
+      overflow: hidden;
+      box-shadow: inset 0 0 0 1px rgba(148, 180, 203, 0.10);
+    }
+    .distance-fill {
+      display: block;
+      height: 100%;
+      width: 0%;
+      border-radius: inherit;
+      transition: width .25s ease;
+    }
+    .distance-up { color: #8ceab9; }
+    .distance-down { color: #ffb0a6; }
+    .distance-flat { color: #b3c3d2; }
+    .distance-fill.distance-up {
+      background: linear-gradient(90deg, rgba(68, 185, 129, 0.95), rgba(68, 185, 129, 0.38));
+    }
+    .distance-fill.distance-down {
+      background: linear-gradient(90deg, rgba(214, 112, 94, 0.90), rgba(214, 112, 94, 0.35));
+    }
+    .distance-fill.distance-flat {
+      background: linear-gradient(90deg, rgba(126, 148, 167, 0.82), rgba(126, 148, 167, 0.30));
+    }
     .panel-grid {
       display: grid;
       gap: 12px;
@@ -1274,13 +1388,14 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
               <th>Qtd</th>
               <th>Entrada</th>
               <th>Preço de Marcação</th>
+              <th>Distância</th>
               <th>Resultado</th>
               <th>ROI</th>
-              <th>Stop Móvel</th>
+              <th>Status / Stop</th>
             </tr>
           </thead>
           <tbody id="positions-body">
-            <tr><td colspan="8" class="muted">Sem dados...</td></tr>
+            <tr><td colspan="9" class="muted">Sem dados...</td></tr>
           </tbody>
         </table>
       </div>
@@ -1536,6 +1651,63 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
       } else {
         el.classList.add("warn");
       }
+    }
+
+    function classifyPositionByRoi(roiValue) {
+      const roi = Number(roiValue || 0);
+      if (roi <= -120) return { rowClass: "band-critical", label: "Crítico", statusClass: "status-critical" };
+      if (roi <= -60) return { rowClass: "band-danger", label: "Atenção", statusClass: "status-danger" };
+      if (roi <= -20) return { rowClass: "band-alert", label: "Alerta", statusClass: "status-alert" };
+      if (roi >= 8) return { rowClass: "band-good", label: "Confortável", statusClass: "status-good" };
+      return { rowClass: "band-neutral", label: "Normal", statusClass: "status-neutral" };
+    }
+
+    function formatPriceCompact(priceValue) {
+      const price = Number(priceValue || 0);
+      if (price >= 1000) return price.toFixed(2);
+      if (price >= 10) return price.toFixed(3);
+      if (price >= 1) return price.toFixed(4);
+      return price.toFixed(6);
+    }
+
+    function formatQtyCompact(qtyValue) {
+      const qty = Number(qtyValue || 0);
+      if (qty >= 10000) return qty.toFixed(0);
+      if (qty >= 100) return qty.toFixed(2);
+      return qty.toFixed(4);
+    }
+
+    function getDistanceMetrics(entryPrice, markPrice, sideValue) {
+      const entry = Number(entryPrice || 0);
+      const mark = Number(markPrice || 0);
+      if (!Number.isFinite(entry) || entry <= 0 || !Number.isFinite(mark)) {
+        return { label: "0.00% → estável", width: 4, className: "distance-flat" };
+      }
+
+      const marketMove = ((mark - entry) / entry) * 100.0;
+      const side = String(sideValue || "").toUpperCase();
+      const adjustedMove = side === "SHORT" ? -marketMove : marketMove;
+
+      let className = "distance-flat";
+      let arrow = "→";
+      let trend = "estável";
+      if (adjustedMove > 0.0001) {
+        className = "distance-up";
+        arrow = "↑";
+        trend = "alta";
+      } else if (adjustedMove < -0.0001) {
+        className = "distance-down";
+        arrow = "↓";
+        trend = "queda";
+      }
+
+      const signed = adjustedMove >= 0 ? `+${adjustedMove.toFixed(2)}` : adjustedMove.toFixed(2);
+      const width = Math.max(4, Math.min(100, Math.abs(adjustedMove) * 8));
+      return {
+        label: `${signed}% ${arrow} ${trend}`,
+        width: width,
+        className: className,
+      };
     }
 
     function ensureHistoryTooltip() {
@@ -2399,7 +2571,7 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
 
         const tbody = document.getElementById("positions-body");
         if (positions.length === 0) {
-          tbody.innerHTML = `<tr><td colspan="8" class="muted">Sem posições abertas no momento.</td></tr>`;
+          tbody.innerHTML = `<tr><td colspan="9" class="muted">Sem posições abertas no momento.</td></tr>`;
         } else {
           tbody.innerHTML = positions.map((pos) => {
             const pnl = Number(pos.unrealized_pnl || 0);
@@ -2407,16 +2579,40 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
             const side = String(pos.side || "");
             const sideClass = side === "LONG" ? "long" : "short";
             const sideLabel = side === "LONG" ? "COMPRA" : side === "SHORT" ? "VENDA" : side;
+            const pairSymbol = String(pos.symbol || "-");
+            const pairBase = pairSymbol.replace(/USDT$/i, "") || pairSymbol;
+            const band = classifyPositionByRoi(roi);
+            const trailingActive = Boolean(pos.trailing_active);
+            const trailingLabel = trailingActive ? "ATIVO" : "INATIVO";
+            const trailingClass = trailingActive ? "stop-active" : "stop-inactive";
+            const distance = getDistanceMetrics(pos.entry_price, pos.mark_price, side);
+
             return `
-              <tr>
-                <td><strong>${escapeHtml(pos.symbol || "-")}</strong></td>
+              <tr class="position-row ${band.rowClass}">
+                <td>
+                  <span class="pair-main">${escapeHtml(pairBase)}</span>
+                  <span class="pair-sub">${escapeHtml(pairSymbol)}</span>
+                </td>
                 <td><span class="tag ${sideClass}">${escapeHtml(sideLabel)}</span></td>
-                <td>${Number(pos.quantity || 0).toFixed(4)}</td>
-                <td>${Number(pos.entry_price || 0).toFixed(5)}</td>
-                <td>${Number(pos.mark_price || 0).toFixed(5)}</td>
-                <td class="${pnl >= 0 ? "good" : "bad"}">${formatMoney(pnl, rate, 2)}</td>
-                <td class="${roi >= 0 ? "good" : "bad"}">${roi.toFixed(2)}%</td>
-                <td>${pos.trailing_active ? "ATIVO" : "INATIVO"}</td>
+                <td>${formatQtyCompact(pos.quantity)}</td>
+                <td>${formatPriceCompact(pos.entry_price)}</td>
+                <td>${formatPriceCompact(pos.mark_price)}</td>
+                <td>
+                  <div class="distance-wrap">
+                    <span class="distance-value ${distance.className}">${escapeHtml(distance.label)}</span>
+                    <span class="distance-bar">
+                      <span class="distance-fill ${distance.className}" style="width:${distance.width.toFixed(1)}%"></span>
+                    </span>
+                  </div>
+                </td>
+                <td class="${pnl >= 0 ? "good" : "bad"}"><strong>${formatMoney(pnl, rate, 2)}</strong></td>
+                <td class="${roi >= 0 ? "good" : "bad"}"><strong>${roi.toFixed(2)}%</strong></td>
+                <td>
+                  <div class="status-wrap">
+                    <span class="status-badge ${band.statusClass}">${band.label}</span>
+                    <span class="stop-badge ${trailingClass}">${trailingLabel}</span>
+                  </div>
+                </td>
               </tr>
             `;
           }).join("");
