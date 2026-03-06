@@ -156,6 +156,17 @@ class TradingConfig:
     # 60 = envia status a cada 60 iterações (10 minutos com intervalo de 10s)
     # Use /status no Telegram para ver status a qualquer momento
     TELEGRAM_STATUS_INTERVAL: int = 180  # A cada 30 minutos (use /status para ver a qualquer momento)
+
+    # Notificações de progresso do ciclo de análise de pares (anti "travado")
+    TELEGRAM_ANALYSIS_PROGRESS_ENABLED: bool = _env_bool(
+        "TRADING_BOT_TELEGRAM_ANALYSIS_PROGRESS_ENABLED", True
+    )
+    TELEGRAM_ANALYSIS_PROGRESS_INTERVAL_SECONDS: int = _env_int(
+        "TRADING_BOT_TELEGRAM_ANALYSIS_PROGRESS_INTERVAL_SECONDS", 180
+    )
+    TELEGRAM_ANALYSIS_PROGRESS_MIN_CYCLE_SECONDS: int = _env_int(
+        "TRADING_BOT_TELEGRAM_ANALYSIS_PROGRESS_MIN_CYCLE_SECONDS", 90
+    )
     
     # ============================================
     # GESTÃO DE CAPITAL
@@ -733,6 +744,12 @@ class TradingConfig:
 
         if self.ANALYSIS_SYMBOL_DELAY <= 0:
             errors.append("⚠️  ALERTA: ANALYSIS_SYMBOL_DELAY deve ser > 0 segundo!")
+
+        if self.TELEGRAM_ANALYSIS_PROGRESS_INTERVAL_SECONDS < 30:
+            errors.append("⚠️  ALERTA: TELEGRAM_ANALYSIS_PROGRESS_INTERVAL_SECONDS deve ser >= 30!")
+
+        if self.TELEGRAM_ANALYSIS_PROGRESS_MIN_CYCLE_SECONDS < 0:
+            errors.append("⚠️  ALERTA: TELEGRAM_ANALYSIS_PROGRESS_MIN_CYCLE_SECONDS deve ser >= 0!")
 
         if self.API_RETRY_ATTEMPTS < 1:
             errors.append("⚠️  ALERTA: API_RETRY_ATTEMPTS deve ser >= 1!")
