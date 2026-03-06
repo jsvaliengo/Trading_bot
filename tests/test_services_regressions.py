@@ -4,6 +4,269 @@ from trading_bot.services.pair_selector import PairSelector
 from trading_bot.services.telegram_commands import TelegramCommandHandler
 
 
+def _normalize_pair_symbol(symbol: str) -> str:
+    token = str(symbol or "").strip().upper()
+    token = token.replace("/", "").replace("-", "").replace("_", "")
+    if not token:
+        return ""
+    if token.endswith("USDT"):
+        return token
+    return f"{token}USDT"
+
+
+def _build_handler_with_full_stubs():
+    events = []
+
+    class ExchangeStub:
+        def __init__(self):
+            self.leverage_calls = []
+            self.order_calls = []
+
+        def get_account_info(self):
+            return {
+                "wallet_balance": 1000.0,
+                "available_balance": 850.0,
+                "unrealized_pnl": 12.5,
+                "margin_balance": 1012.5,
+            }
+
+        def get_open_positions(self):
+            return [
+                {
+                    "symbol": "ETHUSDT",
+                    "side": "LONG",
+                    "entry_price": 100.0,
+                    "quantity": 0.1,
+                }
+            ]
+
+        def get_symbol_price(self, symbol):
+            return 102.0
+
+        def get_daily_pnl_from_binance(self):
+            return {
+                "realized_pnl": 5.5,
+                "funding_fee": -0.2,
+                "commission": -0.3,
+                "total": 5.0,
+            }
+
+        def set_leverage(self, symbol, leverage):
+            self.leverage_calls.append((symbol, leverage))
+            return True
+
+        def place_market_order(self, symbol, side, position_side, quantity):
+            self.order_calls.append((symbol, side, position_side, quantity))
+            return {"orderId": len(self.order_calls)}
+
+    exchange = ExchangeStub()
+    config = SimpleNamespace(
+        TELEGRAM_USER_ID=None,
+        LEVERAGE=10,
+        TAKE_PROFIT_PERCENT=2.0,
+        STOP_LOSS_PERCENT=1.0,
+        USE_INDIVIDUAL_STOP_LOSS=True,
+        TRAILING_ACTIVATION_PERCENT=0.5,
+        TRAILING_DISTANCE_PERCENT=0.25,
+        SENTIMENT_TIMEFRAME="1h",
+        SENTIMENT_CANDLES_LOOKBACK=120,
+        SENTIMENT_MIN_SCORE=2,
+        SENTIMENT_MIN_MOMENTUM_PERCENT=0.2,
+        DOUBLE_FIRST_LONG_ENABLED=True,
+        DOUBLE_FIRST_SHORT_ENABLED=True,
+        DOUBLE_FIRST_MULTIPLIER=2.0,
+        DOUBLE_FIRST_MAX_MARGIN_USDT=15.0,
+        DOUBLE_FIRST_SCOPE="all",
+        USE_DAILY_TARGETS=False,
+        TRADING_PAIRS=["ETHUSDT", "BTCUSDT"],
+        BINANCE_COIN_LIST=["ETHUSDT", "BTCUSDT", "SOLUSDT"],
+        DISABLED_PAIRS=[],
+        USE_BINANCE_STRATEGY=True,
+        AUTO_SELECT_PAIRS=False,
+        MAX_POSITION_PERCENT=0.1,
+        DAILY_PERFORMANCE_REPORT_ENABLED=True,
+        DAILY_PERFORMANCE_REPORT_HOUR_BRT=23,
+        DAILY_PERFORMANCE_REPORT_MINUTE_BRT=55,
+        DAILY_PERFORMANCE_REPORT_LOOKBACK_HOURS=24,
+        normalize_pair_symbol=_normalize_pair_symbol,
+    )
+
+    def save_state():
+        events.append(("save_state",))
+        return True
+
+    def refresh_trading_pairs(trigger_reason=""):
+        old_pairs = list(config.TRADING_PAIRS)
+        disabled = set(config.DISABLED_PAIRS)
+        config.TRADING_PAIRS = [p for p in config.BINANCE_COIN_LIST if p not in disabled]
+        events.append(("refresh_trading_pairs", trigger_reason))
+        old_set = set(old_pairs)
+        new_set = set(config.TRADING_PAIRS)
+        return {
+            "old_pairs": old_pairs,
+            "new_pairs": list(config.TRADING_PAIRS),
+            "added_pairs": sorted(new_set - old_set),
+            "removed_pairs": sorted(old_set - new_set),
+        }
+
+    def send_portfolio_evolution():
+        events.append(("send_portfolio_evolution",))
+        return True
+
+    def send_trades_report():
+        events.append(("send_trades_report",))
+        return True
+
+    def send_api_health_report(force=False):
+        events.append(("send_api_health_report", bool(force)))
+        return True
+
+    def send_daily_performance_report(force=False):
+        events.append(("send_daily_performance_report", bool(force)))
+        return True
+
+    def get_lock_info():
+        return {
+            "lock_acquired": True,
+            "lock_file": "/tmp/trading_bot.lock",
+            "holder_info": "pid:123",
+            "current_pid": 123,
+            "bot_running": True,
+            "bot_paused": False,
+        }
+
+    def set_sentiment_mode(enabled, persist=True):
+        bot.sentiment_mode_enabled = bool(enabled)
+        events.append(("set_sentiment_mode", bool(enabled), bool(persist)))
+        return bot.sentiment_mode_enabled
+
+    def get_sentiment_snapshot(symbol, force_refresh=False):
+        events.append(("get_sentiment_snapshot", symbol, bool(force_refresh)))
+        return {
+            "symbol": symbol,
+            "bias": "BULLISH",
+            "direction": "LONG_ONLY",
+            "score": 3,
+            "rsi": 61.3,
+            "momentum_pct": 1.1,
+            "timeframe": "1h",
+            "reason": "trend",
+            "updated_at": "2026-03-06T10:00:00+00:00",
+        }
+
+    bot = SimpleNamespace(
+        running=True,
+        paused=False,
+        total_pnl=9.5,
+        trades_win_count=3,
+        trades_loss_count=1,
+        exchange=exchange,
+        binance_strategy={"capital_range": "0-1k", "order_size": 5.0, "num_coins": 3},
+        sentiment_mode_enabled=False,
+        save_state=save_state,
+        refresh_trading_pairs=refresh_trading_pairs,
+        send_portfolio_evolution=send_portfolio_evolution,
+        send_trades_report=send_trades_report,
+        send_api_health_report=send_api_health_report,
+        send_daily_performance_report=send_daily_performance_report,
+        get_lock_info=get_lock_info,
+        set_sentiment_mode=set_sentiment_mode,
+        get_sentiment_snapshot=get_sentiment_snapshot,
+    )
+
+    handler = TelegramCommandHandler(token="token", chat_id="123")
+    handler.set_bot_reference(bot, config)
+    handler._get_usd_brl_rate = lambda: 5.0
+
+    messages = []
+    handler.send_message = lambda text: messages.append(text) or True
+    return handler, bot, config, messages, events
+
+
+def _mk_update(text: str, update_id: int = 1) -> dict:
+    return {
+        "update_id": update_id,
+        "message": {
+            "chat": {"id": "123"},
+            "from": {"id": 999},
+            "text": text,
+        },
+    }
+
+
+def _with_bot_mention(command_line: str) -> str:
+    parts = str(command_line).split()
+    if not parts:
+        return command_line
+    return " ".join([f"{parts[0]}@MeuBot", *parts[1:]])
+
+
+def test_dispatches_all_registered_commands_with_bot_mention():
+    handler = TelegramCommandHandler(token="token", chat_id="123")
+    called = []
+
+    command_names = list(handler.commands.keys())
+    for command in command_names:
+        handler.commands[command] = lambda args, cmd=command: called.append((cmd, args))
+
+    for idx, command in enumerate(command_names, start=1):
+        text = _with_bot_mention(f"{command} arg{idx}")
+        handler._process_update(_mk_update(text, update_id=idx))
+
+    assert len(called) == len(command_names)
+    assert [item[0] for item in called] == command_names
+    assert called[0][1] == ["arg1"]
+
+
+def test_process_update_notifies_telegram_when_command_raises():
+    handler = TelegramCommandHandler(token="token", chat_id="123")
+    messages = []
+    handler.send_message = lambda text: messages.append(text) or True
+    handler.commands["/status"] = lambda _args: (_ for _ in ()).throw(RuntimeError("boom"))
+
+    handler._process_update(_mk_update("/status", update_id=77))
+
+    assert any("Erro ao executar comando" in text for text in messages)
+
+
+def test_all_registered_commands_have_smoke_path():
+    command_cases = [
+        ("/start", lambda _handler, bot, _config: setattr(bot, "paused", True)),
+        ("/stop", None),
+        ("/pause", None),
+        ("/resume", lambda _handler, bot, _config: setattr(bot, "paused", True)),
+        ("/status", None),
+        ("/portfolio", None),
+        ("/trades", None),
+        ("/lockinfo", None),
+        ("/apihealth", None),
+        ("/dailyreport now", None),
+        ("/sentiment SOL", None),
+        ("/config", None),
+        ("/positions", None),
+        ("/coins disable SOL", None),
+        ("/balance", None),
+        ("/leverage 20", None),
+        ("/ordersize 6", None),
+        ("/tp 3", None),
+        ("/sl 1", None),
+        ("/trailing 0.7 0.3", None),
+        ("/closeall confirm", None),
+        ("/help", None),
+    ]
+
+    for idx, (command_line, pre_setup) in enumerate(command_cases, start=1):
+        handler, bot, config, messages, events = _build_handler_with_full_stubs()
+        if pre_setup:
+            pre_setup(handler, bot, config)
+
+        handler._process_update(_mk_update(_with_bot_mention(command_line), update_id=1000 + idx))
+
+        assert not any("Comando desconhecido" in text for text in messages), command_line
+        assert not any("Erro ao executar comando" in text for text in messages), command_line
+        assert messages or events, command_line
+
+
 def test_pair_selector_accounts_fixed_pairs_capital_before_dynamic_selection():
     config = SimpleNamespace(
         FIXED_PAIRS=["FIXEDUSDT"],
@@ -268,6 +531,27 @@ def test_coins_command_disable_enable_and_add_pairs():
     handler.cmd_coins(["add", "matic"])
     assert "MATICUSDT" in config.BINANCE_COIN_LIST
     assert "MATICUSDT" in config.TRADING_PAIRS
+
+
+def test_process_update_accepts_command_with_bot_mention_suffix():
+    handler = TelegramCommandHandler(token="token", chat_id="123")
+
+    called = []
+    handler.commands["/coins"] = lambda args: called.append(args)
+    handler.send_message = lambda text: (_ for _ in ()).throw(AssertionError(text))
+
+    update = {
+        "update_id": 1,
+        "message": {
+            "chat": {"id": "123"},
+            "from": {"id": 999},
+            "text": "/coins@MeuBot disable ETH",
+        },
+    }
+
+    handler._process_update(update)
+
+    assert called == [["disable", "ETH"]]
 
 
 def test_sentiment_command_toggles_mode_and_supports_normal_alias():
