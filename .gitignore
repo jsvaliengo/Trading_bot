@@ -16,3 +16,4 @@ __pycache__/
 runtime/*.json
 runtime/*.lock
 runtime/*.log
+runtime/.notes_sync_hash

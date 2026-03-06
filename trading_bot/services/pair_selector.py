@@ -74,13 +74,15 @@ class PairSelector:
                 return []
             pairs = []
             
-            for symbol_info in exchange_info['symbols']:
-                symbol = symbol_info['symbol']
+            for symbol_info in exchange_info.get('symbols', []):
+                symbol = symbol_info.get('symbol')
+                if not symbol:
+                    continue
                 
                 # Filtra apenas pares USDT perpétuos ativos
                 if (symbol.endswith('USDT') and 
-                    symbol_info['contractType'] == 'PERPETUAL' and
-                    symbol_info['status'] == 'TRADING' and
+                    symbol_info.get('contractType') == 'PERPETUAL' and
+                    symbol_info.get('status') == 'TRADING' and
                     symbol not in self.IGNORE_PAIRS and
                     not self._is_disabled(symbol)):
                     pairs.append(symbol)
