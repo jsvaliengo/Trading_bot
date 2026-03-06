@@ -257,6 +257,52 @@ class TradingConfig:
     
     # Percentual da posição para hedge (usado apenas se USE_SIGNAL_STRATEGY = False)
     HEDGE_RATIO: float = 0.5
+
+    # Perfis de estratégia (v1 multi-estratégia em uma instância).
+    # Cada item pode conter:
+    # - name: identificador da estratégia
+    # - enabled: ativa/desativa o perfil
+    # - strategy_type: "trend_signal" (padrão) ou "range_scalping"
+    # - entry_mode: "strong_only" (padrão) ou "standard"
+    # - pairs: lista de pares atribuídos ao perfil
+    # - risk_profile (opcional para trend_signal): limites de SL/TP e alvo de risk/reward
+    STRATEGY_PROFILES: list = None  # Será definido no __post_init__
+
+    # ============================================
+    # TREND STRONG (pullback multi-timeframe)
+    # ============================================
+    # Execução rápida (entrada) em 1m ou 3m + confirmação de tendência em 5m.
+    TREND_STRONG_EXECUTION_TIMEFRAME: str = "3m"
+    TREND_STRONG_CONFIRM_TIMEFRAME: str = "5m"
+    TREND_STRONG_CANDLES_LOOKBACK: int = 260
+    TREND_STRONG_PULLBACK_TOLERANCE_PERCENT: float = 0.10
+    TREND_STRONG_LONG_RSI_MIN: float = 40.0
+    TREND_STRONG_LONG_RSI_MAX: float = 55.0
+    TREND_STRONG_SHORT_RSI_MIN: float = 45.0
+    TREND_STRONG_SHORT_RSI_MAX: float = 60.0
+    TREND_STRONG_MIN_VOLUME_RATIO: float = 0.90
+
+    # ============================================
+    # RANGE SCALPING (segunda estratégia)
+    # ============================================
+    RANGE_SCALP_MIN_RANGE_PERCENT: float = 0.8
+    RANGE_SCALP_MIN_RANGE_MINUTES: int = 45
+    RANGE_SCALP_MIN_TOUCHES_PER_SIDE: int = 2
+    RANGE_SCALP_TOUCH_TOLERANCE_RATIO: float = 0.12
+    RANGE_SCALP_REJECTION_MIN_RATIO: float = 0.08
+    RANGE_SCALP_EDGE_ZONE_RATIO: float = 0.30
+    RANGE_SCALP_MIN_EDGE_PARTICIPATION: float = 0.30
+    RANGE_SCALP_MAX_VOLUME_RATIO: float = 0.95
+    RANGE_SCALP_INVALIDATE_VOLUME_STREAK: int = 3
+    RANGE_SCALP_INVALIDATE_MOMENTUM_CANDLES: int = 3
+    RANGE_SCALP_STOP_BUFFER_RATIO: float = 0.25
+    RANGE_SCALP_STOP_BUFFER_MIN_PERCENT: float = 0.15
+    RANGE_SCALP_TAKE_PROFIT_RATIO: float = 0.70
+    RANGE_SCALP_MIN_POSITION_MULTIPLIER: float = 0.70
+    RANGE_SCALP_MAX_POSITION_MULTIPLIER: float = 1.30
+    RANGE_SCALP_MIN_RISK_REWARD: float = 1.20
+    RANGE_SCALP_EARLY_EXIT_ENABLED: bool = True
+    RANGE_SCALP_EARLY_EXIT_TIMEFRAME: str = "3m"
     
     # Diferença de preço para abrir posição oposta (em %)
     # Se o preço mover 1%, abre a posição de hedge
@@ -591,6 +637,40 @@ class TradingConfig:
                 ]
         self.FIXED_PAIRS = self.filter_disabled_pairs(self.FIXED_PAIRS)
         self.TRADING_PAIRS = self.filter_disabled_pairs(self.TRADING_PAIRS)
+
+        # Perfis de estratégia (mantém compatibilidade com TRADING_PAIRS legado)
+        if self.STRATEGY_PROFILES is None:
+            self.STRATEGY_PROFILES = [
+                {
+                    "name": "trend_strong",
+                    "enabled": True,
+                    "strategy_type": "trend_signal",
+                    "entry_mode": "strong_only",
+                    # Dinâmico via Binance strategy no runtime
+                    "pairs": [],
+                    # Perfil equilibrado: SL 0.4%-0.6%, TP 0.8%-1.2%, RR alvo ~1:2
+                    "risk_profile": {
+                        "stop_loss_min_percent": 0.4,
+                        "stop_loss_max_percent": 0.6,
+                        "take_profit_min_percent": 0.8,
+                        "take_profit_max_percent": 1.2,
+                        "risk_reward_target": 2.0,
+                    },
+                },
+                {
+                    "name": "range_scalp_v1",
+                    "enabled": True,
+                    "strategy_type": "range_scalping",
+                    "entry_mode": "strong_only",
+                    "pairs": ["DOGEUSDT", "AVAXUSDT", "MATICUSDT"],
+                },
+            ]
+        self.STRATEGY_PROFILES = self._normalize_strategy_profiles(self.STRATEGY_PROFILES)
+        strategy_pairs = []
+        for profile in self.get_enabled_strategy_profiles():
+            strategy_pairs.extend(profile.get("pairs", []))
+        if strategy_pairs:
+            self.TRADING_PAIRS = self.filter_disabled_pairs(strategy_pairs)
         
         # Pesos para seleção de pares (ordem de prioridade)
         if self.PAIR_SELECTION_WEIGHTS is None:
@@ -686,6 +766,127 @@ class TradingConfig:
     def get_enabled_binance_coin_list(self) -> List[str]:
         """Retorna lista Binance com pares habilitados."""
         return self.filter_disabled_pairs(self.BINANCE_COIN_LIST or [])
+
+    @staticmethod
+    def _normalize_entry_mode(mode: str) -> str:
+        """Normaliza modo de entrada por estratégia."""
+        token = str(mode or "").strip().lower()
+        if token in {"standard", "normal", "full"}:
+            return "standard"
+        return "strong_only"
+
+    @staticmethod
+    def _normalize_strategy_type(strategy_type: str) -> str:
+        """Normaliza tipo de estratégia por perfil."""
+        token = str(strategy_type or "").strip().lower()
+        if token in {"range_scalping", "range", "scalping", "range_scalp"}:
+            return "range_scalping"
+        return "trend_signal"
+
+    @staticmethod
+    def _normalize_trend_risk_profile(risk_profile: dict | None) -> dict:
+        """Normaliza limites de risco/retorno para perfis trend_signal."""
+        source = risk_profile if isinstance(risk_profile, dict) else {}
+
+        def _to_float(*keys: str, default: float) -> float:
+            for key in keys:
+                if key in source:
+                    try:
+                        return float(source.get(key))
+                    except (TypeError, ValueError):
+                        break
+            return float(default)
+
+        stop_loss_min = _to_float("stop_loss_min_percent", "stop_loss_percent_min", default=0.4)
+        stop_loss_max = _to_float("stop_loss_max_percent", "stop_loss_percent_max", default=0.6)
+        take_profit_min = _to_float("take_profit_min_percent", "take_profit_percent_min", default=0.8)
+        take_profit_max = _to_float("take_profit_max_percent", "take_profit_percent_max", default=1.2)
+        rr_target = _to_float("risk_reward_target", "risk_reward_ratio", default=2.0)
+
+        stop_loss_min = max(0.05, stop_loss_min)
+        stop_loss_max = max(stop_loss_min, stop_loss_max)
+        take_profit_min = max(0.05, take_profit_min)
+        take_profit_max = max(take_profit_min, take_profit_max)
+        rr_target = max(1.0, rr_target)
+
+        return {
+            "stop_loss_min_percent": round(stop_loss_min, 4),
+            "stop_loss_max_percent": round(stop_loss_max, 4),
+            "take_profit_min_percent": round(take_profit_min, 4),
+            "take_profit_max_percent": round(take_profit_max, 4),
+            "risk_reward_target": round(rr_target, 4),
+        }
+
+    def _normalize_strategy_profiles(self, profiles: list | None) -> List[dict]:
+        """Normaliza perfis de estratégia preservando ordem e sem sobreposição de pares."""
+        source = profiles if isinstance(profiles, list) and profiles else [
+            {
+                "name": "primary",
+                "enabled": True,
+                "strategy_type": "trend_signal",
+                "entry_mode": "strong_only",
+                "pairs": list(self.TRADING_PAIRS),
+            }
+        ]
+
+        normalized_profiles: List[dict] = []
+        used_pairs = set()
+
+        for index, raw_profile in enumerate(source, start=1):
+            if not isinstance(raw_profile, dict):
+                continue
+
+            name = str(raw_profile.get("name") or f"strategy_{index}").strip() or f"strategy_{index}"
+            enabled = bool(raw_profile.get("enabled", True))
+            strategy_type = self._normalize_strategy_type(raw_profile.get("strategy_type", "trend_signal"))
+            entry_mode = self._normalize_entry_mode(raw_profile.get("entry_mode", "strong_only"))
+            pairs = self.filter_disabled_pairs(raw_profile.get("pairs", []))
+            risk_profile = {}
+            if strategy_type == "trend_signal" and raw_profile.get("risk_profile") is not None:
+                risk_profile = self._normalize_trend_risk_profile(raw_profile.get("risk_profile"))
+
+            unique_pairs = []
+            for symbol in pairs:
+                if enabled and symbol in used_pairs:
+                    logger.warning(
+                        "⚠️ Par %s duplicado em STRATEGY_PROFILES. Mantendo apenas a primeira ocorrência.",
+                        symbol,
+                    )
+                    continue
+                if enabled:
+                    used_pairs.add(symbol)
+                unique_pairs.append(symbol)
+
+            normalized_profile = {
+                "name": name,
+                "enabled": enabled,
+                "strategy_type": strategy_type,
+                "entry_mode": entry_mode,
+                "pairs": unique_pairs,
+            }
+            if risk_profile:
+                normalized_profile["risk_profile"] = risk_profile
+            normalized_profiles.append(normalized_profile)
+
+        enabled_profiles = [profile for profile in normalized_profiles if profile.get("enabled", True)]
+        if not enabled_profiles:
+            fallback_pairs = self.filter_disabled_pairs(self.TRADING_PAIRS)
+            normalized_profiles = [
+                {
+                    "name": "primary",
+                    "enabled": True,
+                    "strategy_type": "trend_signal",
+                    "entry_mode": "strong_only",
+                    "pairs": fallback_pairs,
+                }
+            ]
+
+        return normalized_profiles
+
+    def get_enabled_strategy_profiles(self) -> List[dict]:
+        """Retorna apenas perfis de estratégia habilitados."""
+        profiles = list(getattr(self, "STRATEGY_PROFILES", []) or [])
+        return [profile for profile in profiles if bool(profile.get("enabled", True))]
     
     def validate(self) -> bool:
         """
@@ -705,6 +906,41 @@ class TradingConfig:
         
         if len(self.TRADING_PAIRS) > self.MAX_TRADING_PAIRS:
             errors.append(f"⚠️  ALERTA: Mais de {self.MAX_TRADING_PAIRS} pares configurados!")
+
+        strategy_profiles = self.get_enabled_strategy_profiles()
+        if not strategy_profiles:
+            errors.append("⚠️  ALERTA: Nenhum perfil habilitado em STRATEGY_PROFILES.")
+        else:
+            pair_owner = {}
+            for profile in strategy_profiles:
+                profile_name = str(profile.get("name") or "strategy").strip()
+                strategy_type = self._normalize_strategy_type(profile.get("strategy_type", "trend_signal"))
+                if strategy_type not in {"trend_signal", "range_scalping"}:
+                    errors.append(f"⚠️  ALERTA: strategy_type inválido em {profile_name}: {strategy_type}")
+                entry_mode = self._normalize_entry_mode(profile.get("entry_mode", "strong_only"))
+                if entry_mode not in {"strong_only", "standard"}:
+                    errors.append(f"⚠️  ALERTA: entry_mode inválido em {profile_name}: {entry_mode}")
+                if profile.get("risk_profile") is not None:
+                    if strategy_type != "trend_signal":
+                        errors.append(
+                            f"⚠️  ALERTA: risk_profile só é suportado para trend_signal ({profile_name})."
+                        )
+                    else:
+                        self._normalize_trend_risk_profile(profile.get("risk_profile"))
+                profile_pairs = self.normalize_pair_list(profile.get("pairs", []))
+                dynamic_profile_allowed_empty = (
+                    strategy_type == "trend_signal" and
+                    bool(self.USE_BINANCE_STRATEGY)
+                )
+                if not profile_pairs and not dynamic_profile_allowed_empty:
+                    errors.append(f"⚠️  ALERTA: Perfil {profile_name} está sem pares atribuídos.")
+                for symbol in profile_pairs:
+                    previous_owner = pair_owner.get(symbol)
+                    if previous_owner and previous_owner != profile_name:
+                        errors.append(
+                            f"⚠️  ALERTA: Par {symbol} está duplicado em perfis ({previous_owner} e {profile_name})."
+                        )
+                    pair_owner[symbol] = profile_name
 
         valid_log_levels = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
         if self.LOG_LEVEL not in valid_log_levels:
@@ -779,6 +1015,30 @@ class TradingConfig:
         if self.SENTIMENT_TIMEFRAME not in {"1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d"}:
             errors.append("⚠️  ALERTA: SENTIMENT_TIMEFRAME inválido!")
 
+        if self.RANGE_SCALP_EARLY_EXIT_TIMEFRAME not in {"1m", "3m", "5m", "15m", "30m", "1h"}:
+            errors.append("⚠️  ALERTA: RANGE_SCALP_EARLY_EXIT_TIMEFRAME inválido!")
+
+        if self.TREND_STRONG_EXECUTION_TIMEFRAME not in {"1m", "3m"}:
+            errors.append("⚠️  ALERTA: TREND_STRONG_EXECUTION_TIMEFRAME deve ser '1m' ou '3m'!")
+
+        if self.TREND_STRONG_CONFIRM_TIMEFRAME != "5m":
+            errors.append("⚠️  ALERTA: TREND_STRONG_CONFIRM_TIMEFRAME deve ser '5m'!")
+
+        if self.TREND_STRONG_CANDLES_LOOKBACK < 220 or self.TREND_STRONG_CANDLES_LOOKBACK > 1000:
+            errors.append("⚠️  ALERTA: TREND_STRONG_CANDLES_LOOKBACK deve estar entre 220 e 1000!")
+
+        if self.TREND_STRONG_PULLBACK_TOLERANCE_PERCENT < 0 or self.TREND_STRONG_PULLBACK_TOLERANCE_PERCENT > 2:
+            errors.append("⚠️  ALERTA: TREND_STRONG_PULLBACK_TOLERANCE_PERCENT deve estar entre 0 e 2!")
+
+        if not (0 <= self.TREND_STRONG_LONG_RSI_MIN < self.TREND_STRONG_LONG_RSI_MAX <= 100):
+            errors.append("⚠️  ALERTA: Faixa RSI LONG do trend_strong é inválida!")
+
+        if not (0 <= self.TREND_STRONG_SHORT_RSI_MIN < self.TREND_STRONG_SHORT_RSI_MAX <= 100):
+            errors.append("⚠️  ALERTA: Faixa RSI SHORT do trend_strong é inválida!")
+
+        if self.TREND_STRONG_MIN_VOLUME_RATIO <= 0 or self.TREND_STRONG_MIN_VOLUME_RATIO > 3:
+            errors.append("⚠️  ALERTA: TREND_STRONG_MIN_VOLUME_RATIO deve estar entre 0 e 3!")
+
         if self.SENTIMENT_CANDLES_LOOKBACK < 30 or self.SENTIMENT_CANDLES_LOOKBACK > 1000:
             errors.append("⚠️  ALERTA: SENTIMENT_CANDLES_LOOKBACK deve estar entre 30 e 1000!")
 
@@ -799,6 +1059,26 @@ class TradingConfig:
 
         if self.DOUBLE_FIRST_MAX_MARGIN_USDT < 0:
             errors.append("⚠️  ALERTA: DOUBLE_FIRST_MAX_MARGIN_USDT deve ser >= 0!")
+
+        if self.RANGE_SCALP_MIN_RANGE_PERCENT <= 0:
+            errors.append("⚠️  ALERTA: RANGE_SCALP_MIN_RANGE_PERCENT deve ser > 0!")
+
+        if self.RANGE_SCALP_MIN_RANGE_MINUTES < 15:
+            errors.append("⚠️  ALERTA: RANGE_SCALP_MIN_RANGE_MINUTES deve ser >= 15!")
+
+        if self.RANGE_SCALP_MIN_TOUCHES_PER_SIDE < 1:
+            errors.append("⚠️  ALERTA: RANGE_SCALP_MIN_TOUCHES_PER_SIDE deve ser >= 1!")
+
+        if self.RANGE_SCALP_EDGE_ZONE_RATIO <= 0 or self.RANGE_SCALP_EDGE_ZONE_RATIO >= 0.5:
+            errors.append("⚠️  ALERTA: RANGE_SCALP_EDGE_ZONE_RATIO deve estar entre 0 e 0.5!")
+
+        if self.RANGE_SCALP_MIN_POSITION_MULTIPLIER <= 0:
+            errors.append("⚠️  ALERTA: RANGE_SCALP_MIN_POSITION_MULTIPLIER deve ser > 0!")
+
+        if self.RANGE_SCALP_MAX_POSITION_MULTIPLIER < self.RANGE_SCALP_MIN_POSITION_MULTIPLIER:
+            errors.append(
+                "⚠️  ALERTA: RANGE_SCALP_MAX_POSITION_MULTIPLIER deve ser >= RANGE_SCALP_MIN_POSITION_MULTIPLIER!"
+            )
 
         if self.DASHBOARD_PORT < 1 or self.DASHBOARD_PORT > 65535:
             errors.append("⚠️  ALERTA: DASHBOARD_PORT deve estar entre 1 e 65535!")

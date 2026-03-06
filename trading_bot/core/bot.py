@@ -24,11 +24,11 @@ import fcntl
 import threading
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, List, Tuple
 
 from .config import config
 from ..infra.binance_client import BinanceConnection
-from .strategy import HedgeStrategy, RiskManager
+from .strategy import HedgeStrategy, RangeScalpingStrategy, RiskManager
 from ..services.notifications import TelegramNotifier
 from ..services.pair_selector import PairSelector
 from ..services.telegram_commands import TelegramCommandHandler
@@ -97,6 +97,9 @@ class TradingBot:
         
         logger.info("📊 Inicializando estratégia...")
         self.strategy = HedgeStrategy()
+        self._strategy_engines: Dict[str, Any] = {"primary": self.strategy}
+        self.strategy_profiles: List[Dict[str, Any]] = []
+        self._reload_strategy_profiles(reason="init")
         
         logger.info("🛡️  Inicializando gerenciador de risco...")
         self.risk_manager = RiskManager()
@@ -488,7 +491,7 @@ class TradingBot:
                 })
             
             state = {
-                'version': '1.5',  # Inclui overrides de pares (disable/add) + transferências de capital
+                'version': '1.6',  # Inclui perfis de estratégia + overrides de pares + transferências de capital
                 'saved_at': datetime.now().isoformat(),
                 'start_time': self.start_time.isoformat() if isinstance(self.start_time, datetime) else self.start_time,
                 'initial_capital': self.initial_capital,  # Capital inicial (atualiza com depósitos)
@@ -516,6 +519,7 @@ class TradingBot:
                 ],
                 'disabled_pairs': list(getattr(config, 'DISABLED_PAIRS', []) or []),
                 'binance_coin_list': list(getattr(config, 'BINANCE_COIN_LIST', []) or []),
+                'strategy_profiles': list(getattr(config, 'STRATEGY_PROFILES', []) or []),
             }
             
             with open(self._state_file_path, 'w') as f:
@@ -550,8 +554,13 @@ class TradingBot:
             if saved_binance_coin_list:
                 config.BINANCE_COIN_LIST = config.normalize_pair_list(saved_binance_coin_list)
 
+            saved_strategy_profiles = state.get('strategy_profiles')
+            if saved_strategy_profiles is not None and hasattr(config, "_normalize_strategy_profiles"):
+                config.STRATEGY_PROFILES = config._normalize_strategy_profiles(saved_strategy_profiles)
+
             config.FIXED_PAIRS = config.filter_disabled_pairs(config.FIXED_PAIRS)
             config.TRADING_PAIRS = config.filter_disabled_pairs(config.TRADING_PAIRS)
+            self._sync_strategy_profiles_with_trading_pairs(reason="state-load")
             
             # Verifica se é do mesmo dia (usando UTC como a Binance)
             # A Binance reseta o P&L diário às 00:00 UTC
@@ -780,6 +789,301 @@ class TradingBot:
             filtered.append(symbol)
         return filtered
 
+    @staticmethod
+    def _normalize_strategy_entry_mode(entry_mode: str) -> str:
+        """Normaliza modo de entrada por estratégia."""
+        token = str(entry_mode or "").strip().lower()
+        if token in {"standard", "normal", "full"}:
+            return "standard"
+        return "strong_only"
+
+    @staticmethod
+    def _normalize_strategy_type(strategy_type: str) -> str:
+        """Normaliza o tipo de estratégia do perfil."""
+        token = str(strategy_type or "").strip().lower()
+        if token in {"range_scalping", "range", "scalping", "range_scalp"}:
+            return "range_scalping"
+        return "trend_signal"
+
+    def _create_strategy_engine(self, strategy_type: str):
+        """Cria a instância da estratégia de acordo com o tipo."""
+        normalized = self._normalize_strategy_type(strategy_type)
+        if normalized == "range_scalping":
+            return RangeScalpingStrategy()
+        return HedgeStrategy()
+
+    def _reload_strategy_profiles(self, reason: str = "runtime"):
+        """
+        Recarrega perfis de estratégia a partir do config.
+
+        Mantém compatibilidade com fluxo legado:
+        - se faltar profile, cria "primary" com TRADING_PAIRS atual
+        - se houver pares em TRADING_PAIRS fora dos profiles, injeta no profile primário
+        """
+        raw_profiles = list(getattr(config, "STRATEGY_PROFILES", []) or [])
+        if not raw_profiles:
+            raw_profiles = [
+                {
+                    "name": "primary",
+                    "enabled": True,
+                    "entry_mode": "strong_only",
+                    "pairs": list(getattr(config, "TRADING_PAIRS", []) or []),
+                }
+            ]
+
+        previous_engines = getattr(self, "_strategy_engines", {})
+        if not isinstance(previous_engines, dict):
+            previous_engines = {}
+
+        runtime_profiles: List[Dict[str, Any]] = []
+        assigned_pairs = set()
+
+        for index, raw_profile in enumerate(raw_profiles, start=1):
+            if not isinstance(raw_profile, dict):
+                continue
+            if not bool(raw_profile.get("enabled", True)):
+                continue
+
+            profile_name = str(raw_profile.get("name") or f"strategy_{index}").strip() or f"strategy_{index}"
+            strategy_type = self._normalize_strategy_type(raw_profile.get("strategy_type", "trend_signal"))
+            entry_mode = self._normalize_strategy_entry_mode(raw_profile.get("entry_mode", "strong_only"))
+            pairs = self._filter_disabled_pairs(raw_profile.get("pairs", []))
+            raw_risk_profile = raw_profile.get("risk_profile")
+            risk_profile = {}
+            if strategy_type == "trend_signal" and raw_risk_profile is not None:
+                if hasattr(config, "_normalize_trend_risk_profile"):
+                    risk_profile = config._normalize_trend_risk_profile(raw_risk_profile)
+                elif isinstance(raw_risk_profile, dict):
+                    risk_profile = dict(raw_risk_profile)
+
+            unique_pairs = []
+            for symbol in pairs:
+                if symbol in assigned_pairs:
+                    logger.warning(
+                        "⚠️ Par %s duplicado entre perfis. Ignorando no perfil %s.",
+                        symbol,
+                        profile_name,
+                    )
+                    continue
+                assigned_pairs.add(symbol)
+                unique_pairs.append(symbol)
+
+            strategy_engine = previous_engines.get(profile_name)
+            if strategy_engine is None:
+                strategy_engine = self._create_strategy_engine(strategy_type)
+            else:
+                current_type = "range_scalping" if isinstance(strategy_engine, RangeScalpingStrategy) else "trend_signal"
+                if current_type != strategy_type:
+                    strategy_engine = self._create_strategy_engine(strategy_type)
+
+            runtime_profile = {
+                "name": profile_name,
+                "strategy_type": strategy_type,
+                "entry_mode": entry_mode,
+                "pairs": unique_pairs,
+                "strategy": strategy_engine,
+            }
+            if risk_profile:
+                runtime_profile["risk_profile"] = risk_profile
+            runtime_profiles.append(runtime_profile)
+
+        if not runtime_profiles:
+            fallback_strategy = previous_engines.get("primary") or getattr(self, "strategy", None) or HedgeStrategy()
+            runtime_profiles = [
+                {
+                    "name": "primary",
+                    "strategy_type": "trend_signal",
+                    "entry_mode": "strong_only",
+                    "pairs": self._filter_disabled_pairs(getattr(config, "TRADING_PAIRS", []) or []),
+                    "strategy": fallback_strategy,
+                }
+            ]
+
+        # Mantém pares legados no profile primário quando surgirem fora dos profiles.
+        legacy_pairs = self._filter_disabled_pairs(getattr(config, "TRADING_PAIRS", []) or [])
+        mapped_pairs = {symbol for profile in runtime_profiles for symbol in profile["pairs"]}
+        missing_pairs = [symbol for symbol in legacy_pairs if symbol not in mapped_pairs]
+        if missing_pairs:
+            runtime_profiles[0]["pairs"].extend(missing_pairs)
+
+        consolidated_pairs = []
+        seen_pairs = set()
+        for profile in runtime_profiles:
+            dedup_pairs = []
+            for symbol in profile["pairs"]:
+                if symbol in seen_pairs:
+                    continue
+                seen_pairs.add(symbol)
+                dedup_pairs.append(symbol)
+                consolidated_pairs.append(symbol)
+            profile["pairs"] = dedup_pairs
+
+        config.TRADING_PAIRS = list(consolidated_pairs)
+        config_profiles = []
+        for profile in runtime_profiles:
+            serialized = {
+                "name": profile["name"],
+                "enabled": True,
+                "strategy_type": profile["strategy_type"],
+                "entry_mode": profile["entry_mode"],
+                "pairs": list(profile["pairs"]),
+            }
+            if profile.get("risk_profile"):
+                serialized["risk_profile"] = dict(profile["risk_profile"])
+            config_profiles.append(serialized)
+        config.STRATEGY_PROFILES = config_profiles
+
+        self._strategy_engines = {profile["name"]: profile["strategy"] for profile in runtime_profiles}
+        self.strategy_profiles = runtime_profiles
+        self.strategy = runtime_profiles[0]["strategy"]
+
+        logger.info(
+            "🧠 Perfis de estratégia recarregados (%s): %s perfil(is), %s par(es).",
+            reason,
+            len(runtime_profiles),
+            len(consolidated_pairs),
+        )
+
+    def _sync_strategy_profiles_with_trading_pairs(
+        self,
+        reason: str,
+        primary_pairs: List[str] | None = None,
+    ):
+        """
+        Sincroniza STRATEGY_PROFILES com TRADING_PAIRS.
+
+        Quando primary_pairs é informado, substitui os pares do profile primário.
+        """
+        raw_profiles = list(getattr(config, "STRATEGY_PROFILES", []) or [])
+        if not raw_profiles:
+            raw_profiles = [
+                {
+                    "name": "primary",
+                    "enabled": True,
+                    "strategy_type": "trend_signal",
+                    "entry_mode": "strong_only",
+                    "pairs": [],
+                }
+            ]
+
+        normalized_profiles: List[dict] = []
+        for index, raw_profile in enumerate(raw_profiles, start=1):
+            if isinstance(raw_profile, dict):
+                profile = dict(raw_profile)
+            else:
+                profile = {}
+            profile.setdefault("name", f"strategy_{index}")
+            profile.setdefault("enabled", True)
+            profile.setdefault("strategy_type", "trend_signal")
+            profile.setdefault("entry_mode", "strong_only")
+            profile.setdefault("pairs", [])
+            normalized_profiles.append(profile)
+
+        primary_index = next(
+            (idx for idx, profile in enumerate(normalized_profiles) if bool(profile.get("enabled", True))),
+            0,
+        )
+        if not normalized_profiles:
+            normalized_profiles = [
+                {
+                    "name": "primary",
+                    "enabled": True,
+                    "strategy_type": "trend_signal",
+                    "entry_mode": "strong_only",
+                    "pairs": [],
+                }
+            ]
+            primary_index = 0
+
+        if primary_pairs is not None:
+            # Mantém o primário dinâmico, mas sem sobreposição com perfis secundários.
+            reserved_pairs = set()
+            for idx, profile in enumerate(normalized_profiles):
+                if idx == primary_index:
+                    continue
+                if not bool(profile.get("enabled", True)):
+                    continue
+                reserved_pairs.update(self._filter_disabled_pairs(profile.get("pairs", [])))
+
+            candidate_primary_pairs = self._filter_disabled_pairs(primary_pairs)
+            normalized_profiles[primary_index]["pairs"] = [
+                symbol for symbol in candidate_primary_pairs if symbol not in reserved_pairs
+            ]
+
+        # Se TRADING_PAIRS contém pares fora dos profiles, injeta no primário.
+        trading_pairs = self._filter_disabled_pairs(getattr(config, "TRADING_PAIRS", []) or [])
+        profile_pairs = []
+        for profile in normalized_profiles:
+            profile_pairs.extend(self._filter_disabled_pairs(profile.get("pairs", [])))
+        profile_pairs_set = set(profile_pairs)
+        missing = [symbol for symbol in trading_pairs if symbol not in profile_pairs_set]
+        if missing:
+            base_pairs = self._filter_disabled_pairs(normalized_profiles[primary_index].get("pairs", []))
+            normalized_profiles[primary_index]["pairs"] = base_pairs + [symbol for symbol in missing if symbol not in set(base_pairs)]
+
+        config.STRATEGY_PROFILES = normalized_profiles
+        self._reload_strategy_profiles(reason=reason)
+
+    def _build_analysis_tasks(self) -> List[Dict[str, str]]:
+        """Monta fila de análise com contexto de estratégia por par."""
+        if not getattr(self, "strategy_profiles", None):
+            self._reload_strategy_profiles(reason="analysis-build")
+
+        tasks: List[Dict[str, str]] = []
+        seen_pairs = set()
+        for profile in list(getattr(self, "strategy_profiles", []) or []):
+            profile_name = str(profile.get("name", "primary"))
+            for symbol in self._filter_disabled_pairs(profile.get("pairs", [])):
+                if symbol in seen_pairs:
+                    continue
+                seen_pairs.add(symbol)
+                tasks.append({"symbol": symbol, "strategy_name": profile_name})
+
+        if tasks:
+            return tasks
+
+        # Fallback de compatibilidade para configurações legadas.
+        for symbol in self._filter_disabled_pairs(getattr(config, "TRADING_PAIRS", []) or []):
+            tasks.append({"symbol": symbol, "strategy_name": "primary"})
+        return tasks
+
+    def _resolve_strategy_context(self, symbol: str, strategy_name: str | None = None) -> Dict[str, Any]:
+        """Resolve engine + parâmetros do perfil para um símbolo."""
+        profiles = list(getattr(self, "strategy_profiles", []) or [])
+        if not profiles:
+            fallback_strategy = getattr(self, "strategy", None)
+            if fallback_strategy is not None:
+                return {
+                    "name": str(strategy_name or "primary"),
+                    "strategy_type": "trend_signal",
+                    "entry_mode": "strong_only",
+                    "pairs": [str(symbol).upper()],
+                    "strategy": fallback_strategy,
+                }
+            self._reload_strategy_profiles(reason="analysis-resolve")
+            profiles = list(getattr(self, "strategy_profiles", []) or [])
+
+        if strategy_name:
+            for profile in profiles:
+                if str(profile.get("name")) == str(strategy_name):
+                    return profile
+
+        normalized_symbol = str(symbol).upper()
+        for profile in profiles:
+            if normalized_symbol in set(profile.get("pairs", [])):
+                return profile
+
+        fallback_strategy = getattr(self, "strategy", None) or HedgeStrategy()
+        if not hasattr(self, "strategy"):
+            self.strategy = fallback_strategy
+        return {
+            "name": str(strategy_name or "primary"),
+            "strategy_type": "trend_signal",
+            "entry_mode": "strong_only",
+            "pairs": [normalized_symbol],
+            "strategy": fallback_strategy,
+        }
+
     def _refresh_binance_coin_universe(self, trigger_reason: str = "runtime") -> list:
         """
         Atualiza BINANCE_COIN_LIST com pares tradáveis atuais da Binance Futures.
@@ -863,6 +1167,15 @@ class TradingBot:
             new_pairs = list(config.TRADING_PAIRS)
 
         config.TRADING_PAIRS = self._filter_disabled_pairs(new_pairs)
+        if config.USE_BINANCE_STRATEGY or config.AUTO_SELECT_PAIRS:
+            self._sync_strategy_profiles_with_trading_pairs(
+                reason=f"refresh:{trigger_reason}",
+                primary_pairs=config.TRADING_PAIRS,
+            )
+        else:
+            self._sync_strategy_profiles_with_trading_pairs(
+                reason=f"refresh:{trigger_reason}",
+            )
 
         for symbol in config.TRADING_PAIRS:
             if symbol not in self.pnl_by_symbol:
@@ -905,6 +1218,9 @@ class TradingBot:
         if not self.exchange.set_hedge_mode():
             logger.error("❌ Não foi possível ativar Hedge Mode!")
             return False
+
+        # Recarrega perfis para garantir TRADING_PAIRS consistente antes do setup.
+        self._reload_strategy_profiles(reason="setup-start")
         
         # Define alavancagem para cada par
         for symbol in config.TRADING_PAIRS:
@@ -966,6 +1282,10 @@ class TradingBot:
             strategy['coins'] = sorted_coins
             config.TRADING_PAIRS = self._filter_disabled_pairs(sorted_coins)  # IMPORTANTE: Atualiza TRADING_PAIRS
             self.binance_strategy = strategy
+            self._sync_strategy_profiles_with_trading_pairs(
+                reason="setup-binance",
+                primary_pairs=config.TRADING_PAIRS,
+            )
             
             # Atualiza pnl_by_symbol para incluir os pares
             for symbol in config.TRADING_PAIRS:
@@ -1011,6 +1331,10 @@ class TradingBot:
             # Atualiza a configuração
             config.TRADING_PAIRS = self._filter_disabled_pairs(selected_pairs)
             self.last_pair_update = datetime.now()
+            self._sync_strategy_profiles_with_trading_pairs(
+                reason="setup-auto-select",
+                primary_pairs=config.TRADING_PAIRS,
+            )
             
             # Atualiza pnl_by_symbol para incluir novos pares
             for symbol in config.TRADING_PAIRS:
@@ -1030,6 +1354,9 @@ class TradingBot:
                 f"<i>Próxima atualização em {config.PAIR_UPDATE_INTERVAL_MINUTES // 60}h</i>"
             )
         
+        if not config.USE_BINANCE_STRATEGY and not config.AUTO_SELECT_PAIRS:
+            self._sync_strategy_profiles_with_trading_pairs(reason="setup-static")
+
         # ============================================
         # CACHEIA VALORES MÍNIMOS (DEPOIS da estratégia)
         # ============================================
@@ -1354,6 +1681,10 @@ class TradingBot:
                 # Atualiza configurações
                 self.binance_strategy = new_strategy
                 config.TRADING_PAIRS = self._filter_disabled_pairs(sorted_coins)
+                self._sync_strategy_profiles_with_trading_pairs(
+                    reason="binance-tier-change",
+                    primary_pairs=config.TRADING_PAIRS,
+                )
                 
                 # Atualiza pnl_by_symbol para incluir novos pares
                 for symbol in config.TRADING_PAIRS:
@@ -1470,6 +1801,10 @@ class TradingBot:
         # Atualiza configuração
         config.TRADING_PAIRS = self._filter_disabled_pairs(selected_pairs)
         self.last_pair_update = datetime.now()
+        self._sync_strategy_profiles_with_trading_pairs(
+            reason="auto-select-update",
+            primary_pairs=config.TRADING_PAIRS,
+        )
         
         # Atualiza pnl_by_symbol para incluir novos pares
         for symbol in config.TRADING_PAIRS:
@@ -1599,6 +1934,10 @@ class TradingBot:
         # Atualiza
         config.TRADING_PAIRS = self._filter_disabled_pairs(new_coins)
         self.binance_strategy['coins'] = new_coins
+        self._sync_strategy_profiles_with_trading_pairs(
+            reason="binance-reorder",
+            primary_pairs=config.TRADING_PAIRS,
+        )
         
         # Atualiza pnl_by_symbol
         for symbol in new_coins:
@@ -1842,17 +2181,13 @@ class TradingBot:
 
         return (filtered_long, filtered_short)
 
-    def analyze_and_trade(self, symbol: str) -> bool:
+    def analyze_and_trade(self, symbol: str, strategy_name: str | None = None) -> bool:
         """
         Analisa um par e executa trades se houver oportunidade.
-        
-        ESTRATÉGIA DIRECIONAL BASEADA EM SINAIS:
-        - STRONG_BUY → Abre LONG (se não tiver LONG aberto)
-        - STRONG_SELL → Abre SHORT (se não tiver SHORT aberto)
-        - NEUTRAL → Não faz nada
-        
-        Pode ter LONG e SHORT ao mesmo tempo se o sinal mudar depois.
-        Posições abertas continuam seguindo trailing stop, TP, SL normalmente.
+
+        O comportamento de entrada depende do perfil da estratégia:
+        - strong_only: entra só com STRONG_BUY/STRONG_SELL
+        - standard: entra com BUY/SELL e sinais fortes
         """
         # ============================================
         # VERIFICA META DIÁRIA
@@ -1860,19 +2195,50 @@ class TradingBot:
         if self.check_daily_targets():
             logger.info("⏸️  Meta diária atingida - não abrindo novas posições")
             return False
-        
-        logger.info(f"🔍 Analisando {symbol}...")
+
+        strategy_context = self._resolve_strategy_context(symbol=symbol, strategy_name=strategy_name)
+        strategy_engine = strategy_context.get("strategy", getattr(self, "strategy", None) or HedgeStrategy())
+        strategy_label = str(strategy_context.get("name", "primary"))
+        strategy_type = self._normalize_strategy_type(strategy_context.get("strategy_type", "trend_signal"))
+        entry_mode = self._normalize_strategy_entry_mode(strategy_context.get("entry_mode", "strong_only"))
+        risk_profile = strategy_context.get("risk_profile")
+        execution_timeframe = str(config.TIMEFRAME)
+        analysis_lookback = int(config.CANDLES_LOOKBACK)
+        confirmation_timeframe = None
+        confirmation_klines = None
+
+        is_trend_strong = strategy_type == "trend_signal" and strategy_label == "trend_strong"
+        if is_trend_strong:
+            execution_timeframe = str(getattr(config, "TREND_STRONG_EXECUTION_TIMEFRAME", "3m"))
+            analysis_lookback = max(
+                220,
+                int(getattr(config, "TREND_STRONG_CANDLES_LOOKBACK", 260)),
+                int(config.CANDLES_LOOKBACK),
+            )
+            confirmation_timeframe = str(getattr(config, "TREND_STRONG_CONFIRM_TIMEFRAME", "5m"))
+
+        logger.info(f"🔍 [{strategy_label}] Analisando {symbol}...")
         
         # Obtém candles
         klines = self.exchange.get_klines(
             symbol=symbol,
-            interval=config.TIMEFRAME,
-            limit=config.CANDLES_LOOKBACK
+            interval=execution_timeframe,
+            limit=analysis_lookback
         )
         
         if not klines:
             logger.warning(f"⚠️  Sem dados para {symbol}")
             return False
+
+        if is_trend_strong and confirmation_timeframe:
+            confirmation_klines = self.exchange.get_klines(
+                symbol=symbol,
+                interval=confirmation_timeframe,
+                limit=analysis_lookback,
+            )
+            if not confirmation_klines:
+                logger.warning(f"⚠️  Sem dados de confirmação ({confirmation_timeframe}) para {symbol}")
+                return False
         
         # Verifica saldo DISPONÍVEL para novos trades
         available_balance = self.exchange.get_available_balance()
@@ -1883,11 +2249,20 @@ class TradingBot:
         min_notional = symbol_info.get('minNotional', 5.0)
         
         # Gera setup de trade
-        setup = self.strategy.generate_trade_setup(
-            symbol=symbol,
-            klines=klines,
-            available_capital=available_balance,
-            min_notional=min_notional
+        setup_kwargs = {
+            "symbol": symbol,
+            "klines": klines,
+            "available_capital": available_balance,
+            "min_notional": min_notional,
+            "risk_profile": risk_profile,
+        }
+        if confirmation_klines is not None:
+            setup_kwargs["confirmation_klines"] = confirmation_klines
+            setup_kwargs["execution_timeframe"] = execution_timeframe
+            setup_kwargs["confirmation_timeframe"] = confirmation_timeframe
+
+        setup = strategy_engine.generate_trade_setup(
+            **setup_kwargs,
         )
         
         if not setup:
@@ -1900,10 +2275,13 @@ class TradingBot:
         signal = setup.signal
         signal_name = signal.name if hasattr(signal, 'name') else str(signal)
         
-        # Define se deve abrir LONG ou SHORT baseado no sinal.
-        # REGRA ATUAL: só entra com sinais fortes.
-        should_open_long = signal_name == 'STRONG_BUY'
-        should_open_short = signal_name == 'STRONG_SELL'
+        # Define se deve abrir LONG ou SHORT conforme o perfil.
+        if entry_mode == "standard":
+            should_open_long = signal_name in {'STRONG_BUY', 'BUY'}
+            should_open_short = signal_name in {'STRONG_SELL', 'SELL'}
+        else:
+            should_open_long = signal_name == 'STRONG_BUY'
+            should_open_short = signal_name == 'STRONG_SELL'
 
         # Aplica filtro direcional de sentimento (quando ativo).
         should_open_long, should_open_short = self._apply_sentiment_direction_filter(
@@ -1916,7 +2294,7 @@ class TradingBot:
         if not should_open_long and not should_open_short:
             if getattr(self, "sentiment_mode_enabled", False) and signal_name in ['STRONG_BUY', 'STRONG_SELL']:
                 logger.info(f"⏸️  Entrada bloqueada por sentimento em {symbol} (sinal={signal_name})")
-            elif signal_name in ['BUY', 'SELL']:
+            elif signal_name in ['BUY', 'SELL'] and entry_mode == "strong_only":
                 logger.info(
                     f"⏸️  Sinal {signal_name} em {symbol} é fraco para entrada - "
                     "aguardando STRONG_BUY/STRONG_SELL"
@@ -1968,10 +2346,17 @@ class TradingBot:
         return self.execute_signal_trade(
             setup=setup,
             open_long=should_open_long,
-            open_short=should_open_short
+            open_short=should_open_short,
+            strategy_name=strategy_label,
         )
     
-    def execute_signal_trade(self, setup, open_long: bool = False, open_short: bool = False) -> bool:
+    def execute_signal_trade(
+        self,
+        setup,
+        open_long: bool = False,
+        open_short: bool = False,
+        strategy_name: str = "primary",
+    ) -> bool:
         """
         Executa um trade baseado no sinal (direcional).
         
@@ -1986,6 +2371,20 @@ class TradingBot:
         """
         symbol = setup.symbol
         signal_name = setup.signal.name if hasattr(setup.signal, 'name') else str(setup.signal)
+        setup_metadata = dict(getattr(setup, "metadata", {}) or {})
+
+        def _safe_float(value):
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return None
+
+        strategy_type = self._normalize_strategy_type(
+            setup_metadata.get("strategy_type", "trend_signal")
+        )
+        custom_stop_loss = _safe_float(setup_metadata.get("custom_stop_loss", setup.stop_loss))
+        custom_take_profit = _safe_float(setup_metadata.get("custom_take_profit", setup.take_profit))
+        range_mid_price = _safe_float(setup_metadata.get("range_mid_price"))
         
         # Log do funding rate (apenas informativo)
         if config.CHECK_FUNDING_RATE:
@@ -2096,7 +2495,7 @@ class TradingBot:
                     symbol=symbol,
                     position_side='LONG',
                     stop_loss_price=None,  # Sem SL na Binance
-                    take_profit_price=setup.take_profit
+                    take_profit_price=custom_take_profit if custom_take_profit else setup.take_profit
                 )
 
                 # Notifica no Telegram
@@ -2116,8 +2515,10 @@ class TradingBot:
                     'qty': long_qty,
                     'value': order_size,
                     'entry_price': price,
-                    'stop_loss': None,  # Gerenciado pelo bot
-                    'take_profit': setup.take_profit,
+                    'stop_loss': custom_stop_loss,
+                    'take_profit': custom_take_profit if custom_take_profit else setup.take_profit,
+                    'strategy_name': str(strategy_name or "primary"),
+                    'strategy_type': strategy_type,
                     'double_first': bool(double_first_applied),
                 }
                 self.trade_history.append(trade_record)
@@ -2129,7 +2530,13 @@ class TradingBot:
                     'side': 'LONG',
                     'entry_price': price,
                     'quantity': long_qty,
-                    'last_seen': datetime.now()
+                    'last_seen': datetime.now(),
+                    'strategy_name': str(strategy_name or "primary"),
+                    'strategy_type': strategy_type,
+                    'custom_stop_loss': custom_stop_loss,
+                    'custom_take_profit': custom_take_profit,
+                    'range_mid_price': range_mid_price,
+                    'range_entry_side': "LONG",
                 }
                 
                 logger.info("✅ LONG aberto com sucesso!")
@@ -2137,10 +2544,13 @@ class TradingBot:
                 if double_first_applied:
                     logger.info(
                         f"   Order Size: ${order_size} (double first aplicado sobre ${base_order_size:.2f}) | "
-                        f"TP: ${setup.take_profit:.4f}"
+                        f"TP: ${(custom_take_profit if custom_take_profit else setup.take_profit):.4f}"
                     )
                 else:
-                    logger.info(f"   Order Size: ${order_size} | TP: ${setup.take_profit:.4f}")
+                    logger.info(
+                        f"   Order Size: ${order_size} | "
+                        f"TP: ${(custom_take_profit if custom_take_profit else setup.take_profit):.4f}"
+                    )
                 
                 return True
             
@@ -2181,9 +2591,10 @@ class TradingBot:
                         applied_order_size=order_size,
                     )
 
-                # Define apenas TP para o SHORT (SL é gerenciado pelo Trailing Stop do bot)
-                # Para SHORT: TP é abaixo do preço
-                short_tp = price * (1 - config.TAKE_PROFIT_PERCENT / 100)
+                # Define apenas TP para o SHORT (SL é gerenciado pelo bot no monitoramento).
+                short_tp = custom_take_profit if custom_take_profit else setup.take_profit
+                if short_tp is None or short_tp <= 0:
+                    short_tp = price * (1 - config.TAKE_PROFIT_PERCENT / 100)
                 self.exchange.set_stop_loss_take_profit(
                     symbol=symbol,
                     position_side='SHORT',
@@ -2208,8 +2619,10 @@ class TradingBot:
                     'qty': short_qty,
                     'value': order_size,
                     'entry_price': price,
-                    'stop_loss': None,  # Gerenciado pelo bot
+                    'stop_loss': custom_stop_loss,
                     'take_profit': short_tp,
+                    'strategy_name': str(strategy_name or "primary"),
+                    'strategy_type': strategy_type,
                     'double_first': bool(double_first_applied),
                 }
                 self.trade_history.append(trade_record)
@@ -2221,7 +2634,13 @@ class TradingBot:
                     'side': 'SHORT',
                     'entry_price': price,
                     'quantity': short_qty,
-                    'last_seen': datetime.now()
+                    'last_seen': datetime.now(),
+                    'strategy_name': str(strategy_name or "primary"),
+                    'strategy_type': strategy_type,
+                    'custom_stop_loss': custom_stop_loss,
+                    'custom_take_profit': short_tp,
+                    'range_mid_price': range_mid_price,
+                    'range_entry_side': "SHORT",
                 }
                 
                 logger.info("✅ SHORT aberto com sucesso!")
@@ -2253,6 +2672,39 @@ class TradingBot:
             open_long=not has_long,
             open_short=not has_short
         )
+
+    def _should_force_exit_range_break(self, symbol: str, side: str, range_mid_price) -> bool:
+        """
+        Critério de saída antecipada para range scalping.
+
+        Se duas velas consecutivas fecham além do meio do range sem repique,
+        assume risco de breakout e reduz exposição.
+        """
+        if not bool(getattr(config, "RANGE_SCALP_EARLY_EXIT_ENABLED", True)):
+            return False
+
+        try:
+            mid_price = float(range_mid_price)
+        except (TypeError, ValueError):
+            return False
+
+        timeframe = str(getattr(config, "RANGE_SCALP_EARLY_EXIT_TIMEFRAME", "3m") or "3m")
+        try:
+            klines = self.exchange.get_klines(symbol=symbol, interval=timeframe, limit=4)
+        except Exception as e:
+            logger.warning(f"⚠️ Falha ao avaliar saída antecipada de range em {symbol}: {e}")
+            return False
+
+        if not klines or len(klines) < 2:
+            return False
+
+        closes = [float(item.get("close", 0.0) or 0.0) for item in klines][-2:]
+        if len(closes) < 2:
+            return False
+
+        if side == "LONG":
+            return (closes[0] < mid_price and closes[1] < mid_price and closes[1] <= closes[0])
+        return (closes[0] > mid_price and closes[1] > mid_price and closes[1] >= closes[0])
     
     def monitor_positions(self):
         """
@@ -2275,6 +2727,7 @@ class TradingBot:
         for pos in positions:
             position_key = f"{pos['symbol']}_{pos['side']}"
             current_position_keys.add(position_key)
+            previous = self.known_positions.get(position_key, {})
             
             # Atualiza known_positions com info atual
             self.known_positions[position_key] = {
@@ -2282,7 +2735,13 @@ class TradingBot:
                 'side': pos['side'],
                 'entry_price': pos['entry_price'],
                 'quantity': pos['quantity'],
-                'last_seen': datetime.now()
+                'last_seen': datetime.now(),
+                'strategy_name': previous.get('strategy_name', 'primary'),
+                'strategy_type': previous.get('strategy_type', 'trend_signal'),
+                'custom_stop_loss': previous.get('custom_stop_loss'),
+                'custom_take_profit': previous.get('custom_take_profit'),
+                'range_mid_price': previous.get('range_mid_price'),
+                'range_entry_side': previous.get('range_entry_side'),
             }
         
         # Verifica se alguma posição conhecida sumiu
@@ -2352,6 +2811,81 @@ class TradingBot:
                 profit_pct = ((entry_price - current_price) / entry_price) * 100
             
             logger.info(f"   {side} {symbol}: P&L ${pnl:.2f} ({profit_pct:+.2f}%) | Preço: ${current_price:.4f}")
+
+            known_meta = self.known_positions.get(position_key, {})
+            custom_take_profit = known_meta.get('custom_take_profit')
+            custom_stop_loss = known_meta.get('custom_stop_loss')
+            strategy_type = self._normalize_strategy_type(known_meta.get('strategy_type', 'trend_signal'))
+            range_mid_price = known_meta.get('range_mid_price')
+
+            # ============================================
+            # 0. TAKE PROFIT / STOP LOSS CUSTOM (por estratégia)
+            # ============================================
+            custom_tp_hit = bool(
+                custom_take_profit is not None and (
+                    (side == "LONG" and current_price >= float(custom_take_profit)) or
+                    (side == "SHORT" and current_price <= float(custom_take_profit))
+                )
+            )
+            if custom_tp_hit:
+                pos['current_price'] = current_price
+                closed = self._close_position_with_notification(
+                    pos,
+                    f"Take Profit custom ({float(custom_take_profit):.4f})"
+                )
+                if closed:
+                    self._clear_trailing_data(position_key)
+                    if position_key in self.known_positions:
+                        del self.known_positions[position_key]
+                else:
+                    logger.warning(
+                        f"⚠️ Fechamento não confirmado para {position_key} em TP custom. "
+                        "Mantendo rastreamento da posição."
+                    )
+                continue
+
+            custom_sl_hit = bool(
+                custom_stop_loss is not None and (
+                    (side == "LONG" and current_price <= float(custom_stop_loss)) or
+                    (side == "SHORT" and current_price >= float(custom_stop_loss))
+                )
+            )
+            if custom_sl_hit:
+                pos['current_price'] = current_price
+                closed = self._close_position_with_notification(
+                    pos,
+                    f"Stop Loss custom ({float(custom_stop_loss):.4f})"
+                )
+                if closed:
+                    self._clear_trailing_data(position_key)
+                    if position_key in self.known_positions:
+                        del self.known_positions[position_key]
+                else:
+                    logger.warning(
+                        f"⚠️ Fechamento não confirmado para {position_key} em SL custom. "
+                        "Mantendo rastreamento da posição."
+                    )
+                continue
+
+            if strategy_type == "range_scalping" and self._should_force_exit_range_break(
+                symbol=symbol,
+                side=side,
+                range_mid_price=range_mid_price,
+            ):
+                pos['current_price'] = current_price
+                closed = self._close_position_with_notification(
+                    pos,
+                    "Saída antecipada por possível breakout de range"
+                )
+                if closed:
+                    self._clear_trailing_data(position_key)
+                    if position_key in self.known_positions:
+                        del self.known_positions[position_key]
+                else:
+                    logger.warning(
+                        f"⚠️ Fechamento não confirmado para {position_key} em saída antecipada de range."
+                    )
+                continue
             
             # ============================================
             # 1. VERIFICA TAKE PROFIT (SEMPRE ATIVO)
@@ -3608,7 +4142,7 @@ class TradingBot:
         next_strategy_check_time = now + strategy_check_interval
 
         analysis_cycle_active = False
-        analysis_symbols = []
+        analysis_tasks = []
         analysis_index = 0
         
         # Inicia polling de comandos do Telegram
@@ -3734,7 +4268,7 @@ class TradingBot:
                     # Cancela ciclo em andamento quando pausa
                     if analysis_cycle_active:
                         analysis_cycle_active = False
-                        analysis_symbols = []
+                        analysis_tasks = []
                         analysis_index = 0
 
                     if now >= next_analysis_cycle_time:
@@ -3742,25 +4276,30 @@ class TradingBot:
                 else:
                     # Inicia um novo ciclo completo de análise
                     if (not analysis_cycle_active) and now >= next_analysis_cycle_time:
-                        analysis_symbols = list(config.TRADING_PAIRS)
+                        analysis_tasks = self._build_analysis_tasks()
                         analysis_index = 0
                         analysis_cycle_active = True
                         analysis_cycle += 1
                         next_analysis_step_time = now
 
+                        symbols_preview = [item["symbol"].replace("USDT", "") for item in analysis_tasks[:12]]
+                        if len(analysis_tasks) > 12:
+                            symbols_preview.append("...")
                         logger.info(
                             f"🔍 Iniciando ciclo de análise #{analysis_cycle} "
-                            f"em {len(analysis_symbols)} pares: "
-                            f"{', '.join([p.replace('USDT', '') for p in analysis_symbols])}"
+                            f"em {len(analysis_tasks)} tarefa(s): "
+                            f"{', '.join(symbols_preview)}"
                         )
 
                     # Analisa um símbolo por vez (intercalado com monitoramento)
                     if analysis_cycle_active and now >= next_analysis_step_time:
-                        if analysis_index < len(analysis_symbols):
-                            symbol = analysis_symbols[analysis_index]
+                        if analysis_index < len(analysis_tasks):
+                            task = analysis_tasks[analysis_index]
                             analysis_index += 1
+                            symbol = task["symbol"]
+                            task_strategy = task.get("strategy_name")
                             analysis_started_at = time.monotonic()
-                            self.analyze_and_trade(symbol)
+                            self.analyze_and_trade(symbol, strategy_name=task_strategy)
                             analysis_duration = time.monotonic() - analysis_started_at
                             self._record_loop_timing(
                                 loop_type='analysis',
@@ -3771,7 +4310,7 @@ class TradingBot:
                             next_analysis_step_time = now + analysis_symbol_delay
 
                         # Finaliza ciclo quando todos os pares forem processados
-                        if analysis_index >= len(analysis_symbols):
+                        if analysis_index >= len(analysis_tasks):
                             analysis_cycle_active = False
                             next_analysis_cycle_time = now + analysis_cycle_interval
 

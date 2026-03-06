@@ -4,11 +4,37 @@ from unittest.mock import MagicMock
 
 from trading_bot.core.bot import TradingBot
 from trading_bot.core.config import config
-from trading_bot.core.strategy import Signal, TradeSetup
+from trading_bot.core.strategy import HedgeStrategy, RangeScalpingStrategy, Signal, TradeSetup
 
 
 def _make_light_bot():
     return TradingBot.__new__(TradingBot)
+
+
+def _make_range_klines(last_close: float) -> list[dict]:
+    pattern = [
+        99.15, 99.82, 99.22, 99.78, 99.18, 99.88,
+        99.24, 99.74, 99.16, 99.84, 99.20, last_close,
+    ]
+    rows = []
+    for index, close_price in enumerate(pattern):
+        open_price = close_price + (0.03 if index % 2 == 0 else -0.03)
+        high_price = min(100.0, max(open_price, close_price) + 0.12)
+        low_price = max(99.0, min(open_price, close_price) - 0.12)
+        if index in {1, 5, 9}:
+            high_price = 100.0
+        if index in {0, 4, 8}:
+            low_price = 99.0
+        rows.append(
+            {
+                "open": round(open_price, 6),
+                "high": round(high_price, 6),
+                "low": round(low_price, 6),
+                "close": round(close_price, 6),
+                "volume": 110.0 - float(index % 4),
+            }
+        )
+    return rows
 
 
 def test_stop_keeps_open_positions_and_does_not_close_them(monkeypatch):
@@ -375,6 +401,357 @@ def test_analyze_and_trade_ignores_weak_sell_signal(monkeypatch):
 
     assert result is False
     bot.execute_signal_trade.assert_not_called()
+
+
+def test_analyze_and_trade_accepts_buy_signal_for_standard_profile(monkeypatch):
+    bot = _make_light_bot()
+
+    monkeypatch.setattr(config, "USE_DAILY_TARGETS", False)
+    monkeypatch.setattr(config, "TIMEFRAME", "5m")
+    monkeypatch.setattr(config, "CANDLES_LOOKBACK", 50)
+
+    setup = TradeSetup(
+        symbol="ETHUSDT",
+        signal=Signal.BUY,
+        long_size=5.0,
+        short_size=5.0,
+        entry_price=100.0,
+        stop_loss=98.0,
+        take_profit=102.0,
+        dca_levels=[],
+    )
+
+    strategy = SimpleNamespace(generate_trade_setup=lambda **_kwargs: setup)
+    bot.strategy_profiles = [
+        {
+            "name": "scalper_standard",
+            "entry_mode": "standard",
+            "pairs": ["ETHUSDT"],
+            "strategy": strategy,
+        }
+    ]
+    bot.strategy = strategy
+    bot.exchange = SimpleNamespace(
+        get_klines=lambda **_kwargs: [{"close": 100.0}],
+        get_available_balance=lambda: 1000.0,
+        get_symbol_info=lambda _symbol: {"minNotional": 5.0},
+        get_open_positions=lambda: [],
+    )
+    bot.risk_manager = SimpleNamespace(can_open_position=lambda _total: True)
+    bot.sentiment_mode_enabled = False
+    bot.execute_signal_trade = MagicMock(return_value=True)
+
+    result = bot.analyze_and_trade("ETHUSDT", strategy_name="scalper_standard")
+
+    assert result is True
+    bot.execute_signal_trade.assert_called_once()
+    call_kwargs = bot.execute_signal_trade.call_args.kwargs
+    assert call_kwargs["open_long"] is True
+    assert call_kwargs["open_short"] is False
+
+
+def test_analyze_and_trade_passes_risk_profile_for_trend_strategy(monkeypatch):
+    bot = _make_light_bot()
+
+    monkeypatch.setattr(config, "USE_DAILY_TARGETS", False)
+    monkeypatch.setattr(config, "TIMEFRAME", "5m")
+    monkeypatch.setattr(config, "CANDLES_LOOKBACK", 50)
+
+    risk_profile = {
+        "stop_loss_min_percent": 0.4,
+        "stop_loss_max_percent": 0.6,
+        "take_profit_min_percent": 0.8,
+        "take_profit_max_percent": 1.2,
+        "risk_reward_target": 2.0,
+    }
+
+    setup = TradeSetup(
+        symbol="ETHUSDT",
+        signal=Signal.STRONG_BUY,
+        long_size=5.0,
+        short_size=5.0,
+        entry_price=100.0,
+        stop_loss=99.5,
+        take_profit=101.0,
+        dca_levels=[],
+    )
+
+    captured_kwargs = {}
+
+    def _generate_trade_setup(**kwargs):
+        captured_kwargs.update(kwargs)
+        return setup
+
+    strategy = SimpleNamespace(generate_trade_setup=_generate_trade_setup)
+    bot.strategy_profiles = [
+        {
+            "name": "trend_strong",
+            "strategy_type": "trend_signal",
+            "entry_mode": "strong_only",
+            "risk_profile": dict(risk_profile),
+            "pairs": ["ETHUSDT"],
+            "strategy": strategy,
+        }
+    ]
+    bot.strategy = strategy
+    bot.exchange = SimpleNamespace(
+        get_klines=lambda **_kwargs: [{"close": 100.0}],
+        get_available_balance=lambda: 1000.0,
+        get_symbol_info=lambda _symbol: {"minNotional": 5.0},
+        get_open_positions=lambda: [],
+    )
+    bot.risk_manager = SimpleNamespace(can_open_position=lambda _total: True)
+    bot.sentiment_mode_enabled = False
+    bot.execute_signal_trade = MagicMock(return_value=True)
+
+    result = bot.analyze_and_trade("ETHUSDT", strategy_name="trend_strong")
+
+    assert result is True
+    assert captured_kwargs.get("risk_profile") == risk_profile
+
+
+def test_hedge_strategy_uses_balanced_risk_profile_with_rr_target():
+    strategy = HedgeStrategy()
+    risk_profile = {
+        "stop_loss_min_percent": 0.4,
+        "stop_loss_max_percent": 0.6,
+        "take_profit_min_percent": 0.8,
+        "take_profit_max_percent": 1.2,
+        "risk_reward_target": 2.0,
+    }
+
+    stop_loss, take_profit = strategy.calculate_stop_loss_take_profit(
+        entry_price=100.0,
+        signal=Signal.STRONG_BUY,
+        atr=0.2,  # 2*ATR = 0.4% de risco (dentro da faixa)
+        risk_profile=risk_profile,
+    )
+
+    assert stop_loss == 99.60
+    assert take_profit == 100.80
+
+
+def test_range_scalping_strategy_generates_setup_in_buy_zone(monkeypatch):
+    strategy = RangeScalpingStrategy()
+
+    monkeypatch.setattr(config, "TIMEFRAME", "5m")
+    monkeypatch.setattr(config, "RANGE_SCALP_MIN_RANGE_PERCENT", 0.8)
+    monkeypatch.setattr(config, "RANGE_SCALP_MIN_RANGE_MINUTES", 45)
+    monkeypatch.setattr(config, "RANGE_SCALP_MIN_TOUCHES_PER_SIDE", 2)
+    monkeypatch.setattr(config, "RANGE_SCALP_EDGE_ZONE_RATIO", 0.30)
+    monkeypatch.setattr(config, "RANGE_SCALP_MIN_EDGE_PARTICIPATION", 0.30)
+    monkeypatch.setattr(config, "RANGE_SCALP_MAX_VOLUME_RATIO", 1.20)
+    monkeypatch.setattr(config, "RANGE_SCALP_MIN_RISK_REWARD", 1.0)
+    monkeypatch.setattr(config, "MAX_POSITION_PERCENT", 0.08)
+
+    klines = _make_range_klines(last_close=99.12)
+    setup = strategy.generate_trade_setup(
+        symbol="ETHUSDT",
+        klines=klines,
+        available_capital=300.0,
+        min_notional=5.0,
+    )
+
+    assert setup is not None
+    assert setup.signal == Signal.STRONG_BUY
+    assert setup.long_size > 0
+    assert setup.short_size == 0
+    assert setup.metadata.get("strategy_type") == "range_scalping"
+    assert setup.stop_loss < setup.entry_price < setup.take_profit
+
+
+def test_range_scalping_strategy_skips_dead_zone_entries(monkeypatch):
+    strategy = RangeScalpingStrategy()
+
+    monkeypatch.setattr(config, "TIMEFRAME", "5m")
+    monkeypatch.setattr(config, "RANGE_SCALP_MIN_RANGE_PERCENT", 0.8)
+    monkeypatch.setattr(config, "RANGE_SCALP_MIN_RANGE_MINUTES", 45)
+    monkeypatch.setattr(config, "RANGE_SCALP_MIN_TOUCHES_PER_SIDE", 2)
+    monkeypatch.setattr(config, "RANGE_SCALP_EDGE_ZONE_RATIO", 0.30)
+    monkeypatch.setattr(config, "RANGE_SCALP_MIN_EDGE_PARTICIPATION", 0.30)
+    monkeypatch.setattr(config, "RANGE_SCALP_MAX_VOLUME_RATIO", 1.20)
+
+    klines = _make_range_klines(last_close=99.50)
+    setup = strategy.generate_trade_setup(
+        symbol="ETHUSDT",
+        klines=klines,
+        available_capital=300.0,
+        min_notional=5.0,
+    )
+
+    assert setup is None
+
+
+def test_build_analysis_tasks_keeps_strategy_context(monkeypatch):
+    bot = _make_light_bot()
+
+    monkeypatch.setattr(config, "DISABLED_PAIRS", [])
+
+    bot.strategy_profiles = [
+        {
+            "name": "strong_alpha",
+            "entry_mode": "strong_only",
+            "pairs": ["BTCUSDT"],
+            "strategy": object(),
+        },
+        {
+            "name": "normal_beta",
+            "entry_mode": "standard",
+            "pairs": ["ETHUSDT", "SOLUSDT"],
+            "strategy": object(),
+        },
+    ]
+
+    tasks = bot._build_analysis_tasks()
+
+    assert tasks == [
+        {"symbol": "BTCUSDT", "strategy_name": "strong_alpha"},
+        {"symbol": "ETHUSDT", "strategy_name": "normal_beta"},
+        {"symbol": "SOLUSDT", "strategy_name": "normal_beta"},
+    ]
+
+
+def test_sync_strategy_profiles_adds_legacy_pairs_to_primary(monkeypatch):
+    bot = _make_light_bot()
+    bot.strategy = SimpleNamespace(generate_trade_setup=lambda **_kwargs: None)
+    bot._strategy_engines = {}
+    bot.strategy_profiles = []
+
+    monkeypatch.setattr(config, "DISABLED_PAIRS", [])
+    monkeypatch.setattr(
+        config,
+        "STRATEGY_PROFILES",
+        [
+            {
+                "name": "alpha",
+                "enabled": True,
+                "entry_mode": "strong_only",
+                "pairs": ["BTCUSDT"],
+            }
+        ],
+    )
+    monkeypatch.setattr(config, "TRADING_PAIRS", ["BTCUSDT", "XRPUSDT"])
+
+    bot._sync_strategy_profiles_with_trading_pairs(reason="test-sync")
+
+    assert config.STRATEGY_PROFILES[0]["pairs"] == ["BTCUSDT", "XRPUSDT"]
+    assert config.TRADING_PAIRS == ["BTCUSDT", "XRPUSDT"]
+
+
+def test_reload_strategy_profiles_instantiates_range_engine(monkeypatch):
+    bot = _make_light_bot()
+    bot.strategy = SimpleNamespace(generate_trade_setup=lambda **_kwargs: None)
+    bot._strategy_engines = {}
+    bot.strategy_profiles = []
+
+    monkeypatch.setattr(config, "DISABLED_PAIRS", [])
+    monkeypatch.setattr(config, "TRADING_PAIRS", ["ETHUSDT", "XRPUSDT"])
+    monkeypatch.setattr(
+        config,
+        "STRATEGY_PROFILES",
+        [
+            {
+                "name": "trend",
+                "enabled": True,
+                "strategy_type": "trend_signal",
+                "entry_mode": "strong_only",
+                "pairs": ["ETHUSDT"],
+            },
+            {
+                "name": "range",
+                "enabled": True,
+                "strategy_type": "range_scalping",
+                "entry_mode": "strong_only",
+                "pairs": ["XRPUSDT"],
+            },
+        ],
+    )
+
+    bot._reload_strategy_profiles(reason="test-range-engine")
+
+    range_profile = next(
+        profile for profile in bot.strategy_profiles if profile["name"] == "range"
+    )
+    assert range_profile["strategy_type"] == "range_scalping"
+    assert isinstance(range_profile["strategy"], RangeScalpingStrategy)
+
+
+def test_reload_strategy_profiles_preserves_trend_risk_profile(monkeypatch):
+    bot = _make_light_bot()
+    bot.strategy = SimpleNamespace(generate_trade_setup=lambda **_kwargs: None)
+    bot._strategy_engines = {}
+    bot.strategy_profiles = []
+
+    monkeypatch.setattr(config, "DISABLED_PAIRS", [])
+    monkeypatch.setattr(config, "TRADING_PAIRS", ["BTCUSDT"])
+    monkeypatch.setattr(
+        config,
+        "STRATEGY_PROFILES",
+        [
+            {
+                "name": "trend_strong",
+                "enabled": True,
+                "strategy_type": "trend_signal",
+                "entry_mode": "strong_only",
+                "pairs": ["BTCUSDT"],
+                "risk_profile": {
+                    "stop_loss_min_percent": 0.4,
+                    "stop_loss_max_percent": 0.6,
+                    "take_profit_min_percent": 0.8,
+                    "take_profit_max_percent": 1.2,
+                    "risk_reward_target": 2.0,
+                },
+            }
+        ],
+    )
+
+    bot._reload_strategy_profiles(reason="test-trend-risk-profile")
+
+    assert bot.strategy_profiles[0]["name"] == "trend_strong"
+    assert bot.strategy_profiles[0]["risk_profile"]["risk_reward_target"] == 2.0
+    assert config.STRATEGY_PROFILES[0]["risk_profile"]["stop_loss_min_percent"] == 0.4
+
+
+def test_sync_strategy_profiles_excludes_reserved_pairs_from_dynamic_primary(monkeypatch):
+    bot = _make_light_bot()
+    bot.strategy = SimpleNamespace(generate_trade_setup=lambda **_kwargs: None)
+    bot._strategy_engines = {}
+    bot.strategy_profiles = []
+
+    monkeypatch.setattr(config, "DISABLED_PAIRS", [])
+    monkeypatch.setattr(
+        config,
+        "STRATEGY_PROFILES",
+        [
+            {
+                "name": "trend_strong",
+                "enabled": True,
+                "strategy_type": "trend_signal",
+                "entry_mode": "strong_only",
+                "pairs": [],
+            },
+            {
+                "name": "range_scalp_v1",
+                "enabled": True,
+                "strategy_type": "range_scalping",
+                "entry_mode": "strong_only",
+                "pairs": ["DOGEUSDT", "AVAXUSDT"],
+            },
+        ],
+    )
+    monkeypatch.setattr(config, "TRADING_PAIRS", ["BTCUSDT", "DOGEUSDT", "ETHUSDT", "AVAXUSDT"])
+
+    bot._sync_strategy_profiles_with_trading_pairs(
+        reason="test-dynamic-primary",
+        primary_pairs=["BTCUSDT", "DOGEUSDT", "ETHUSDT", "AVAXUSDT"],
+    )
+
+    primary = config.STRATEGY_PROFILES[0]
+    secondary = config.STRATEGY_PROFILES[1]
+
+    assert primary["pairs"] == ["BTCUSDT", "ETHUSDT"]
+    assert secondary["pairs"] == ["DOGEUSDT", "AVAXUSDT"]
+    assert config.TRADING_PAIRS == ["BTCUSDT", "ETHUSDT", "DOGEUSDT", "AVAXUSDT"]
 
 
 def test_setup_exchange_restores_open_positions_for_reentry_tracking(monkeypatch):
