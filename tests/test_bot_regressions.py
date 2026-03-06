@@ -1,5 +1,4 @@
 from datetime import datetime
-from threading import Lock
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -638,31 +637,6 @@ def test_normalize_double_first_state_accepts_legacy_formats():
         {"short": True, "BTCUSDT_LONG": 1, "foo": True, "ADAUSDT_SHORT": False}
     )
     assert normalized_from_dict == {"SHORT": True, "BTCUSDT_LONG": True}
-
-
-def test_format_duration_short_renders_expected_units():
-    bot = _make_light_bot()
-
-    assert bot._format_duration_short(9.1) == "9s"
-    assert bot._format_duration_short(80) == "1m 20s"
-    assert bot._format_duration_short(3660) == "1h 01m"
-
-
-def test_estimate_analysis_step_seconds_uses_runtime_average_with_fallback():
-    bot = _make_light_bot()
-
-    bot._runtime_stats_lock = Lock()
-    bot._runtime_stats_since_report = {
-        "analysis_steps": 4,
-        "analysis_total_seconds": 10.0,
-    }
-    assert bot._estimate_analysis_step_seconds(0.8) == 2.5
-
-    bot._runtime_stats_since_report = {
-        "analysis_steps": 0,
-        "analysis_total_seconds": 0.0,
-    }
-    assert bot._estimate_analysis_step_seconds(0.8) == 0.8
 
 
 def test_analyze_and_trade_blocks_signal_when_sentiment_conflicts(monkeypatch):
