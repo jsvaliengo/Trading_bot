@@ -350,6 +350,64 @@ def test_setup_exchange_restores_open_positions_for_reentry_tracking(monkeypatch
     assert bot.known_positions["ETHUSDT_LONG"]["quantity"] == 0.4
 
 
+def test_sort_binance_coins_by_score_uses_dynamic_binance_universe(monkeypatch):
+    bot = _make_light_bot()
+    bot.exchange = SimpleNamespace()
+
+    monkeypatch.setattr(config, "DISABLED_PAIRS", ["ETHUSDT"])
+    monkeypatch.setattr(config, "BINANCE_COIN_LIST", ["OLDUSDT"])
+
+    score_map = {
+        "ADAUSDT": 90.0,
+        "XRPUSDT": 70.0,
+        "ETHUSDT": 99.0,  # desabilitado
+    }
+
+    class PairSelectorStub:
+        def get_all_futures_pairs(self):
+            return ["XRPUSDT", "ETHUSDT", "ADAUSDT"]
+
+        def get_pair_metrics(self, symbol):
+            return {"symbol": symbol}
+
+        def score_pair(self, metrics):
+            return score_map.get(metrics["symbol"], 0.0)
+
+    bot.pair_selector = PairSelectorStub()
+
+    best = bot.sort_binance_coins_by_score(2)
+
+    assert best == ["ADAUSDT", "XRPUSDT"]
+    assert config.BINANCE_COIN_LIST == ["XRPUSDT", "ETHUSDT", "ADAUSDT"]
+
+
+def test_sort_binance_coins_by_score_keeps_previous_universe_on_refresh_failure(monkeypatch):
+    bot = _make_light_bot()
+    bot.exchange = SimpleNamespace()
+
+    monkeypatch.setattr(config, "DISABLED_PAIRS", [])
+    monkeypatch.setattr(config, "BINANCE_COIN_LIST", ["BNBUSDT", "XRPUSDT"])
+
+    score_map = {"BNBUSDT": 80.0, "XRPUSDT": 60.0}
+
+    class PairSelectorStub:
+        def get_all_futures_pairs(self):
+            return []
+
+        def get_pair_metrics(self, symbol):
+            return {"symbol": symbol}
+
+        def score_pair(self, metrics):
+            return score_map.get(metrics["symbol"], 0.0)
+
+    bot.pair_selector = PairSelectorStub()
+
+    best = bot.sort_binance_coins_by_score(1)
+
+    assert best == ["BNBUSDT"]
+    assert config.BINANCE_COIN_LIST == ["BNBUSDT", "XRPUSDT"]
+
+
 def test_close_position_does_not_account_when_exchange_close_fails():
     bot = _make_light_bot()
 

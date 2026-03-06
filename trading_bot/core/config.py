@@ -312,8 +312,8 @@ class TradingConfig:
     # Formato: (capital_min, capital_max, order_size, stop_loss, num_coins)
     BINANCE_STRATEGY_TIERS: list = None  # Será definido no __post_init__
     
-    # Lista FIXA de moedas (em ordem de prioridade)
-    # O bot vai usar as primeiras N moedas conforme a faixa de capital
+    # Universo de moedas Binance (preenchido dinamicamente em runtime)
+    # O bot usa as primeiras N moedas ordenadas por score conforme a faixa de capital
     BINANCE_COIN_LIST: list = None  # Será definido no __post_init__
     
     # ============================================
@@ -566,56 +566,18 @@ class TradingConfig:
                 (10000, 999999, 28, 1680, 12), # 10000+: order 28, SL 1680, 12 moedas
             ]
         
-        # Lista de moedas PERMITIDAS pela estratégia Binance
-        # O bot vai ordenar essas moedas pelo score (spread, volume, volatility, trend, funding)
-        # e selecionar as primeiras N conforme a faixa de capital
+        # Universo de moedas PERMITIDAS pela estratégia Binance.
+        # Agora é atualizado dinamicamente a partir dos pares tradáveis na Binance Futures.
+        # Mantemos vazio aqui para ser populado após conexão com a exchange.
         if self.BINANCE_COIN_LIST is None:
-            self.BINANCE_COIN_LIST = [
-                # Moedas da planilha Binance Padrão (serão ordenadas por score)
-                "ADAUSDT",
-                "TRXUSDT",
-                "ARBUSDT",
-                "XRPUSDT",
-                "APTUSDT",
-                "FILUSDT",
-                "SUSHIUSDT",
-                "ATOMUSDT",
-                "NOTUSDT",
-                "1000PEPEUSDT",
-                "CFXUSDT",
-                "1INCHUSDT",
-                "MASKUSDT",
-                "SNXUSDT",
-                "THETAUSDT",
-                "OPUSDT",
-                "COMPUSDT",
-                "SUIUSDT",
-                "CHZUSDT",
-                "1000SHIBUSDT",
-                "DOGEUSDT",
-                "NEARUSDT",
-                "SANDUSDT",
-                "APEUSDT",
-                "SOLUSDT",
-                "CRVUSDT",
-                "DOTUSDT",
-                "UNIUSDT",
-                "BNBUSDT",
-                "LTCUSDT",
-                "BCHUSDT",
-                "LINKUSDT",
-                "ETCUSDT",
-                "ETHUSDT",
-                "AAVEUSDT",
-                "AVAXUSDT",
-            ]
+            self.BINANCE_COIN_LIST = []
         self.BINANCE_COIN_LIST = self.normalize_pair_list(self.BINANCE_COIN_LIST)
 
         # Pares de trading - usa BINANCE_COIN_LIST se estratégia Binance ativa
         # Será sobrescrito no setup_exchange() com a quantidade correta baseada no capital
         if self.TRADING_PAIRS is None:
             if self.USE_BINANCE_STRATEGY:
-                # Usa as primeiras 3 moedas da lista Binance (será ajustado no setup)
+                # Antes da conexão, pode estar vazio. setup_exchange() buscará os pares na Binance.
                 self.TRADING_PAIRS = self.get_enabled_binance_coin_list()[:3]
             else:
                 # Lista padrão para seleção automática

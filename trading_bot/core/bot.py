@@ -780,6 +780,62 @@ class TradingBot:
             filtered.append(symbol)
         return filtered
 
+    def _refresh_binance_coin_universe(self, trigger_reason: str = "runtime") -> list:
+        """
+        Atualiza BINANCE_COIN_LIST com pares tradáveis atuais da Binance Futures.
+
+        Retorna a lista habilitada (já sem pares desabilitados).
+        Em caso de falha, mantém a última lista conhecida.
+        """
+        if not hasattr(self, "pair_selector") or self.pair_selector is None:
+            self.pair_selector = PairSelector(self.exchange, config)
+
+        previous_universe = list(getattr(config, "BINANCE_COIN_LIST", []) or [])
+        previous_enabled = self._filter_disabled_pairs(previous_universe)
+
+        try:
+            fresh_pairs = self.pair_selector.get_all_futures_pairs()
+        except Exception as e:
+            logger.warning(f"⚠️ Falha ao atualizar universo Binance ({trigger_reason}): {e}")
+            fresh_pairs = []
+
+        normalized_fresh = (
+            config.normalize_pair_list(fresh_pairs)
+            if hasattr(config, "normalize_pair_list")
+            else [str(item).upper() for item in fresh_pairs]
+        )
+
+        if normalized_fresh:
+            config.BINANCE_COIN_LIST = normalized_fresh
+            enabled = self._filter_disabled_pairs(normalized_fresh)
+            logger.info(
+                "📚 Universo Binance atualizado (%s): %s pares tradáveis (%s habilitados)",
+                trigger_reason,
+                len(normalized_fresh),
+                len(enabled),
+            )
+            return enabled
+
+        if previous_enabled:
+            logger.warning(
+                "⚠️ Universo Binance indisponível (%s). Mantendo lista anterior com %s pares.",
+                trigger_reason,
+                len(previous_enabled),
+            )
+            return previous_enabled
+
+        fallback_pairs = self._filter_disabled_pairs(list(getattr(config, "TRADING_PAIRS", []) or []))
+        if fallback_pairs:
+            logger.warning(
+                "⚠️ Universo Binance vazio (%s). Usando pares ativos atuais (%s).",
+                trigger_reason,
+                len(fallback_pairs),
+            )
+            return fallback_pairs
+
+        logger.error("❌ Universo Binance vazio e sem fallback de pares (%s).", trigger_reason)
+        return []
+
     def refresh_trading_pairs(self, trigger_reason: str = "manual") -> Dict[str, Any]:
         """
         Recalcula a lista ativa de pares imediatamente, respeitando pares desabilitados.
@@ -797,6 +853,7 @@ class TradingBot:
             if hasattr(self, "binance_strategy") and self.binance_strategy is not None:
                 self.binance_strategy["coins"] = list(new_pairs)
         elif config.AUTO_SELECT_PAIRS and self.pair_selector is not None:
+            self._refresh_binance_coin_universe(trigger_reason=f"refresh:{trigger_reason}")
             available_capital = self.exchange.get_available_balance()
             selected_pairs, _scores = self.pair_selector.select_best_pairs(
                 available_capital=available_capital
@@ -888,6 +945,9 @@ class TradingBot:
         logger.info(f"   • Saldo atual: ${current_balance:.2f}")
         logger.info(f"   • Por trade: {config.MAX_POSITION_PERCENT * 100:.0f}% = ${trade_value:.2f} (ou mínimo da moeda)")
         logger.info(f"   • Alavancagem: {config.LEVERAGE}x")
+
+        if config.USE_BINANCE_STRATEGY or config.AUTO_SELECT_PAIRS:
+            self._refresh_binance_coin_universe(trigger_reason="setup")
         
         # ============================================
         # ESTRATÉGIA BINANCE PADRÃO (por faixa de capital)
@@ -898,7 +958,8 @@ class TradingBot:
             
             # Ordena as moedas da lista Binance pelo score (spread, volume, volatility, etc)
             logger.info("🔄 Ordenando moedas pelo score...")
-            self.pair_selector = PairSelector(self.exchange, config)
+            if not hasattr(self, "pair_selector") or self.pair_selector is None:
+                self.pair_selector = PairSelector(self.exchange, config)
             sorted_coins = self.sort_binance_coins_by_score(strategy['num_coins'])
             
             # Atualiza estratégia com moedas ordenadas
@@ -1368,6 +1429,8 @@ class TradingBot:
         
         # Guarda pares antigos
         old_pairs = set(config.TRADING_PAIRS)
+
+        self._refresh_binance_coin_universe(trigger_reason="auto-update")
         
         # Busca capital disponível atual
         available_capital = self.exchange.get_available_balance()
@@ -1439,7 +1502,7 @@ class TradingBot:
     
     def sort_binance_coins_by_score(self, num_coins: int) -> list:
         """
-        Ordena as moedas da lista Binance pelo score e retorna as melhores.
+        Ordena os pares tradáveis da Binance pelo score e retorna os melhores.
         
         Usa os critérios de seleção:
         - spread: 35% (menor = melhor)
@@ -1454,11 +1517,17 @@ class TradingBot:
         Returns:
             Lista das melhores moedas ordenadas por score
         """
-        if not hasattr(self, 'pair_selector') or self.pair_selector is None:
-            logger.warning("⚠️ PairSelector não inicializado, usando ordem padrão")
-            return config.get_enabled_binance_coin_list()[:num_coins]
+        if num_coins <= 0:
+            return []
 
-        candidate_coins = config.get_enabled_binance_coin_list()
+        candidate_coins = self._refresh_binance_coin_universe(
+            trigger_reason=f"score:{num_coins}"
+        )
+
+        if not candidate_coins:
+            logger.warning("⚠️ Sem pares candidatos para calcular score")
+            return []
+
         logger.info(f"📊 Calculando scores para {len(candidate_coins)} moedas...")
         
         # Calcula score de cada moeda da lista Binance

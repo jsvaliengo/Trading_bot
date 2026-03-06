@@ -461,19 +461,15 @@ Filtro de sentimento (direção de entrada):
 
 ## ⚙️ Personalizações
 
-### Adicionar mais moedas
+### Seleção de moedas (agora dinâmica)
 
-No `trading_bot/core/config.py`, edite `TRADING_PAIRS`:
+O bot busca automaticamente na Binance Futures os pares `USDT` com status `TRADING`
+e usa essa lista como universo para ranking/seleção.
 
-```python
-TRADING_PAIRS = [
-    "BTCUSDT",
-    "ETHUSDT",
-    "BNBUSDT",
-    "SOLUSDT",
-    "XRPUSDT",  # Adicione novas moedas
-]
-```
+Para controlar o que fica ativo, use os comandos do Telegram:
+- `/coins` para ver ativas, desabilitadas e universo atual
+- `/coins disable ETH SOL ADA` para remover pares da seleção
+- `/coins enable ETH` para reabilitar pares
 
 ### Ajustar indicadores
 
