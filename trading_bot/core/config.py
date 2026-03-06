@@ -257,6 +257,14 @@ class TradingConfig:
     
     # Percentual da posição para hedge (usado apenas se USE_SIGNAL_STRATEGY = False)
     HEDGE_RATIO: float = 0.5
+
+    # Perfis de estratégia (v1 multi-estratégia em uma instância).
+    # Cada item pode conter:
+    # - name: identificador da estratégia
+    # - enabled: ativa/desativa o perfil
+    # - entry_mode: "strong_only" (padrão) ou "standard"
+    # - pairs: lista de pares atribuídos ao perfil
+    STRATEGY_PROFILES: list = None  # Será definido no __post_init__
     
     # Diferença de preço para abrir posição oposta (em %)
     # Se o preço mover 1%, abre a posição de hedge
@@ -591,6 +599,14 @@ class TradingConfig:
                 ]
         self.FIXED_PAIRS = self.filter_disabled_pairs(self.FIXED_PAIRS)
         self.TRADING_PAIRS = self.filter_disabled_pairs(self.TRADING_PAIRS)
+
+        # Perfis de estratégia (mantém compatibilidade com TRADING_PAIRS legado)
+        self.STRATEGY_PROFILES = self._normalize_strategy_profiles(self.STRATEGY_PROFILES)
+        strategy_pairs = []
+        for profile in self.get_enabled_strategy_profiles():
+            strategy_pairs.extend(profile.get("pairs", []))
+        if strategy_pairs:
+            self.TRADING_PAIRS = self.filter_disabled_pairs(strategy_pairs)
         
         # Pesos para seleção de pares (ordem de prioridade)
         if self.PAIR_SELECTION_WEIGHTS is None:
@@ -686,6 +702,77 @@ class TradingConfig:
     def get_enabled_binance_coin_list(self) -> List[str]:
         """Retorna lista Binance com pares habilitados."""
         return self.filter_disabled_pairs(self.BINANCE_COIN_LIST or [])
+
+    @staticmethod
+    def _normalize_entry_mode(mode: str) -> str:
+        """Normaliza modo de entrada por estratégia."""
+        token = str(mode or "").strip().lower()
+        if token in {"standard", "normal", "full"}:
+            return "standard"
+        return "strong_only"
+
+    def _normalize_strategy_profiles(self, profiles: list | None) -> List[dict]:
+        """Normaliza perfis de estratégia preservando ordem e sem sobreposição de pares."""
+        source = profiles if isinstance(profiles, list) and profiles else [
+            {
+                "name": "primary",
+                "enabled": True,
+                "entry_mode": "strong_only",
+                "pairs": list(self.TRADING_PAIRS),
+            }
+        ]
+
+        normalized_profiles: List[dict] = []
+        used_pairs = set()
+
+        for index, raw_profile in enumerate(source, start=1):
+            if not isinstance(raw_profile, dict):
+                continue
+
+            name = str(raw_profile.get("name") or f"strategy_{index}").strip() or f"strategy_{index}"
+            enabled = bool(raw_profile.get("enabled", True))
+            entry_mode = self._normalize_entry_mode(raw_profile.get("entry_mode", "strong_only"))
+            pairs = self.filter_disabled_pairs(raw_profile.get("pairs", []))
+
+            unique_pairs = []
+            for symbol in pairs:
+                if enabled and symbol in used_pairs:
+                    logger.warning(
+                        "⚠️ Par %s duplicado em STRATEGY_PROFILES. Mantendo apenas a primeira ocorrência.",
+                        symbol,
+                    )
+                    continue
+                if enabled:
+                    used_pairs.add(symbol)
+                unique_pairs.append(symbol)
+
+            normalized_profiles.append(
+                {
+                    "name": name,
+                    "enabled": enabled,
+                    "entry_mode": entry_mode,
+                    "pairs": unique_pairs,
+                }
+            )
+
+        enabled_profiles = [profile for profile in normalized_profiles if profile.get("enabled", True)]
+        if not enabled_profiles:
+            fallback_pairs = self.filter_disabled_pairs(self.TRADING_PAIRS)
+            normalized_profiles = [
+                {
+                    "name": "primary",
+                    "enabled": True,
+                    "entry_mode": "strong_only",
+                    "pairs": fallback_pairs,
+                }
+            ]
+
+        return normalized_profiles
+
+    def get_enabled_strategy_profiles(self) -> List[dict]:
+        """Retorna apenas perfis de estratégia habilitados."""
+        profiles = list(getattr(self, "STRATEGY_PROFILES", []) or [])
+        return [profile for profile in profiles if bool(profile.get("enabled", True))]
     
     def validate(self) -> bool:
         """
@@ -705,6 +792,27 @@ class TradingConfig:
         
         if len(self.TRADING_PAIRS) > self.MAX_TRADING_PAIRS:
             errors.append(f"⚠️  ALERTA: Mais de {self.MAX_TRADING_PAIRS} pares configurados!")
+
+        strategy_profiles = self.get_enabled_strategy_profiles()
+        if not strategy_profiles:
+            errors.append("⚠️  ALERTA: Nenhum perfil habilitado em STRATEGY_PROFILES.")
+        else:
+            pair_owner = {}
+            for profile in strategy_profiles:
+                profile_name = str(profile.get("name") or "strategy").strip()
+                entry_mode = self._normalize_entry_mode(profile.get("entry_mode", "strong_only"))
+                if entry_mode not in {"strong_only", "standard"}:
+                    errors.append(f"⚠️  ALERTA: entry_mode inválido em {profile_name}: {entry_mode}")
+                profile_pairs = self.normalize_pair_list(profile.get("pairs", []))
+                if not profile_pairs:
+                    errors.append(f"⚠️  ALERTA: Perfil {profile_name} está sem pares atribuídos.")
+                for symbol in profile_pairs:
+                    previous_owner = pair_owner.get(symbol)
+                    if previous_owner and previous_owner != profile_name:
+                        errors.append(
+                            f"⚠️  ALERTA: Par {symbol} está duplicado em perfis ({previous_owner} e {profile_name})."
+                        )
+                    pair_owner[symbol] = profile_name
 
         valid_log_levels = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
         if self.LOG_LEVEL not in valid_log_levels:

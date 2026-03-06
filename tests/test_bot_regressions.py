@@ -377,6 +377,109 @@ def test_analyze_and_trade_ignores_weak_sell_signal(monkeypatch):
     bot.execute_signal_trade.assert_not_called()
 
 
+def test_analyze_and_trade_accepts_buy_signal_for_standard_profile(monkeypatch):
+    bot = _make_light_bot()
+
+    monkeypatch.setattr(config, "USE_DAILY_TARGETS", False)
+    monkeypatch.setattr(config, "TIMEFRAME", "5m")
+    monkeypatch.setattr(config, "CANDLES_LOOKBACK", 50)
+
+    setup = TradeSetup(
+        symbol="ETHUSDT",
+        signal=Signal.BUY,
+        long_size=5.0,
+        short_size=5.0,
+        entry_price=100.0,
+        stop_loss=98.0,
+        take_profit=102.0,
+        dca_levels=[],
+    )
+
+    strategy = SimpleNamespace(generate_trade_setup=lambda **_kwargs: setup)
+    bot.strategy_profiles = [
+        {
+            "name": "scalper_standard",
+            "entry_mode": "standard",
+            "pairs": ["ETHUSDT"],
+            "strategy": strategy,
+        }
+    ]
+    bot.strategy = strategy
+    bot.exchange = SimpleNamespace(
+        get_klines=lambda **_kwargs: [{"close": 100.0}],
+        get_available_balance=lambda: 1000.0,
+        get_symbol_info=lambda _symbol: {"minNotional": 5.0},
+        get_open_positions=lambda: [],
+    )
+    bot.risk_manager = SimpleNamespace(can_open_position=lambda _total: True)
+    bot.sentiment_mode_enabled = False
+    bot.execute_signal_trade = MagicMock(return_value=True)
+
+    result = bot.analyze_and_trade("ETHUSDT", strategy_name="scalper_standard")
+
+    assert result is True
+    bot.execute_signal_trade.assert_called_once()
+    call_kwargs = bot.execute_signal_trade.call_args.kwargs
+    assert call_kwargs["open_long"] is True
+    assert call_kwargs["open_short"] is False
+
+
+def test_build_analysis_tasks_keeps_strategy_context(monkeypatch):
+    bot = _make_light_bot()
+
+    monkeypatch.setattr(config, "DISABLED_PAIRS", [])
+
+    bot.strategy_profiles = [
+        {
+            "name": "strong_alpha",
+            "entry_mode": "strong_only",
+            "pairs": ["BTCUSDT"],
+            "strategy": object(),
+        },
+        {
+            "name": "normal_beta",
+            "entry_mode": "standard",
+            "pairs": ["ETHUSDT", "SOLUSDT"],
+            "strategy": object(),
+        },
+    ]
+
+    tasks = bot._build_analysis_tasks()
+
+    assert tasks == [
+        {"symbol": "BTCUSDT", "strategy_name": "strong_alpha"},
+        {"symbol": "ETHUSDT", "strategy_name": "normal_beta"},
+        {"symbol": "SOLUSDT", "strategy_name": "normal_beta"},
+    ]
+
+
+def test_sync_strategy_profiles_adds_legacy_pairs_to_primary(monkeypatch):
+    bot = _make_light_bot()
+    bot.strategy = SimpleNamespace(generate_trade_setup=lambda **_kwargs: None)
+    bot._strategy_engines = {}
+    bot.strategy_profiles = []
+
+    monkeypatch.setattr(config, "DISABLED_PAIRS", [])
+    monkeypatch.setattr(
+        config,
+        "STRATEGY_PROFILES",
+        [
+            {
+                "name": "alpha",
+                "enabled": True,
+                "entry_mode": "strong_only",
+                "pairs": ["BTCUSDT"],
+            }
+        ],
+    )
+    monkeypatch.setattr(config, "TRADING_PAIRS", ["BTCUSDT", "XRPUSDT"])
+
+    bot._sync_strategy_profiles_with_trading_pairs(reason="test-sync")
+
+    assert config.STRATEGY_PROFILES[0]["pairs"] == ["BTCUSDT", "XRPUSDT"]
+    assert config.TRADING_PAIRS == ["BTCUSDT", "XRPUSDT"]
+
+
 def test_setup_exchange_restores_open_positions_for_reentry_tracking(monkeypatch):
     bot = _make_light_bot()
 
