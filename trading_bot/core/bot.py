@@ -28,7 +28,7 @@ from typing import Any, Dict, List, Tuple
 
 from .config import config
 from ..infra.binance_client import BinanceConnection
-from .strategy import HedgeStrategy, RiskManager
+from .strategy import HedgeStrategy, RangeScalpingStrategy, RiskManager
 from ..services.notifications import TelegramNotifier
 from ..services.pair_selector import PairSelector
 from ..services.telegram_commands import TelegramCommandHandler
@@ -97,7 +97,7 @@ class TradingBot:
         
         logger.info("📊 Inicializando estratégia...")
         self.strategy = HedgeStrategy()
-        self._strategy_engines: Dict[str, HedgeStrategy] = {"primary": self.strategy}
+        self._strategy_engines: Dict[str, Any] = {"primary": self.strategy}
         self.strategy_profiles: List[Dict[str, Any]] = []
         self._reload_strategy_profiles(reason="init")
         
@@ -491,7 +491,7 @@ class TradingBot:
                 })
             
             state = {
-                'version': '1.5',  # Inclui overrides de pares (disable/add) + transferências de capital
+                'version': '1.6',  # Inclui perfis de estratégia + overrides de pares + transferências de capital
                 'saved_at': datetime.now().isoformat(),
                 'start_time': self.start_time.isoformat() if isinstance(self.start_time, datetime) else self.start_time,
                 'initial_capital': self.initial_capital,  # Capital inicial (atualiza com depósitos)
@@ -797,6 +797,21 @@ class TradingBot:
             return "standard"
         return "strong_only"
 
+    @staticmethod
+    def _normalize_strategy_type(strategy_type: str) -> str:
+        """Normaliza o tipo de estratégia do perfil."""
+        token = str(strategy_type or "").strip().lower()
+        if token in {"range_scalping", "range", "scalping", "range_scalp"}:
+            return "range_scalping"
+        return "trend_signal"
+
+    def _create_strategy_engine(self, strategy_type: str):
+        """Cria a instância da estratégia de acordo com o tipo."""
+        normalized = self._normalize_strategy_type(strategy_type)
+        if normalized == "range_scalping":
+            return RangeScalpingStrategy()
+        return HedgeStrategy()
+
     def _reload_strategy_profiles(self, reason: str = "runtime"):
         """
         Recarrega perfis de estratégia a partir do config.
@@ -830,6 +845,7 @@ class TradingBot:
                 continue
 
             profile_name = str(raw_profile.get("name") or f"strategy_{index}").strip() or f"strategy_{index}"
+            strategy_type = self._normalize_strategy_type(raw_profile.get("strategy_type", "trend_signal"))
             entry_mode = self._normalize_strategy_entry_mode(raw_profile.get("entry_mode", "strong_only"))
             pairs = self._filter_disabled_pairs(raw_profile.get("pairs", []))
 
@@ -847,11 +863,16 @@ class TradingBot:
 
             strategy_engine = previous_engines.get(profile_name)
             if strategy_engine is None:
-                strategy_engine = HedgeStrategy()
+                strategy_engine = self._create_strategy_engine(strategy_type)
+            else:
+                current_type = "range_scalping" if isinstance(strategy_engine, RangeScalpingStrategy) else "trend_signal"
+                if current_type != strategy_type:
+                    strategy_engine = self._create_strategy_engine(strategy_type)
 
             runtime_profiles.append(
                 {
                     "name": profile_name,
+                    "strategy_type": strategy_type,
                     "entry_mode": entry_mode,
                     "pairs": unique_pairs,
                     "strategy": strategy_engine,
@@ -863,6 +884,7 @@ class TradingBot:
             runtime_profiles = [
                 {
                     "name": "primary",
+                    "strategy_type": "trend_signal",
                     "entry_mode": "strong_only",
                     "pairs": self._filter_disabled_pairs(getattr(config, "TRADING_PAIRS", []) or []),
                     "strategy": fallback_strategy,
@@ -893,6 +915,7 @@ class TradingBot:
             {
                 "name": profile["name"],
                 "enabled": True,
+                "strategy_type": profile["strategy_type"],
                 "entry_mode": profile["entry_mode"],
                 "pairs": list(profile["pairs"]),
             }
@@ -922,7 +945,15 @@ class TradingBot:
         """
         raw_profiles = list(getattr(config, "STRATEGY_PROFILES", []) or [])
         if not raw_profiles:
-            raw_profiles = [{"name": "primary", "enabled": True, "entry_mode": "strong_only", "pairs": []}]
+            raw_profiles = [
+                {
+                    "name": "primary",
+                    "enabled": True,
+                    "strategy_type": "trend_signal",
+                    "entry_mode": "strong_only",
+                    "pairs": [],
+                }
+            ]
 
         normalized_profiles: List[dict] = []
         for index, raw_profile in enumerate(raw_profiles, start=1):
@@ -932,6 +963,7 @@ class TradingBot:
                 profile = {}
             profile.setdefault("name", f"strategy_{index}")
             profile.setdefault("enabled", True)
+            profile.setdefault("strategy_type", "trend_signal")
             profile.setdefault("entry_mode", "strong_only")
             profile.setdefault("pairs", [])
             normalized_profiles.append(profile)
@@ -941,7 +973,15 @@ class TradingBot:
             0,
         )
         if not normalized_profiles:
-            normalized_profiles = [{"name": "primary", "enabled": True, "entry_mode": "strong_only", "pairs": []}]
+            normalized_profiles = [
+                {
+                    "name": "primary",
+                    "enabled": True,
+                    "strategy_type": "trend_signal",
+                    "entry_mode": "strong_only",
+                    "pairs": [],
+                }
+            ]
             primary_index = 0
 
         if primary_pairs is not None:
@@ -992,6 +1032,7 @@ class TradingBot:
             if fallback_strategy is not None:
                 return {
                     "name": str(strategy_name or "primary"),
+                    "strategy_type": "trend_signal",
                     "entry_mode": "strong_only",
                     "pairs": [str(symbol).upper()],
                     "strategy": fallback_strategy,
@@ -1014,6 +1055,7 @@ class TradingBot:
             self.strategy = fallback_strategy
         return {
             "name": str(strategy_name or "primary"),
+            "strategy_type": "trend_signal",
             "entry_mode": "strong_only",
             "pairs": [normalized_symbol],
             "strategy": fallback_strategy,
@@ -2246,10 +2288,17 @@ class TradingBot:
         return self.execute_signal_trade(
             setup=setup,
             open_long=should_open_long,
-            open_short=should_open_short
+            open_short=should_open_short,
+            strategy_name=strategy_label,
         )
     
-    def execute_signal_trade(self, setup, open_long: bool = False, open_short: bool = False) -> bool:
+    def execute_signal_trade(
+        self,
+        setup,
+        open_long: bool = False,
+        open_short: bool = False,
+        strategy_name: str = "primary",
+    ) -> bool:
         """
         Executa um trade baseado no sinal (direcional).
         
@@ -2264,6 +2313,20 @@ class TradingBot:
         """
         symbol = setup.symbol
         signal_name = setup.signal.name if hasattr(setup.signal, 'name') else str(setup.signal)
+        setup_metadata = dict(getattr(setup, "metadata", {}) or {})
+
+        def _safe_float(value):
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return None
+
+        strategy_type = self._normalize_strategy_type(
+            setup_metadata.get("strategy_type", "trend_signal")
+        )
+        custom_stop_loss = _safe_float(setup_metadata.get("custom_stop_loss", setup.stop_loss))
+        custom_take_profit = _safe_float(setup_metadata.get("custom_take_profit", setup.take_profit))
+        range_mid_price = _safe_float(setup_metadata.get("range_mid_price"))
         
         # Log do funding rate (apenas informativo)
         if config.CHECK_FUNDING_RATE:
@@ -2374,7 +2437,7 @@ class TradingBot:
                     symbol=symbol,
                     position_side='LONG',
                     stop_loss_price=None,  # Sem SL na Binance
-                    take_profit_price=setup.take_profit
+                    take_profit_price=custom_take_profit if custom_take_profit else setup.take_profit
                 )
 
                 # Notifica no Telegram
@@ -2394,8 +2457,10 @@ class TradingBot:
                     'qty': long_qty,
                     'value': order_size,
                     'entry_price': price,
-                    'stop_loss': None,  # Gerenciado pelo bot
-                    'take_profit': setup.take_profit,
+                    'stop_loss': custom_stop_loss,
+                    'take_profit': custom_take_profit if custom_take_profit else setup.take_profit,
+                    'strategy_name': str(strategy_name or "primary"),
+                    'strategy_type': strategy_type,
                     'double_first': bool(double_first_applied),
                 }
                 self.trade_history.append(trade_record)
@@ -2407,7 +2472,13 @@ class TradingBot:
                     'side': 'LONG',
                     'entry_price': price,
                     'quantity': long_qty,
-                    'last_seen': datetime.now()
+                    'last_seen': datetime.now(),
+                    'strategy_name': str(strategy_name or "primary"),
+                    'strategy_type': strategy_type,
+                    'custom_stop_loss': custom_stop_loss,
+                    'custom_take_profit': custom_take_profit,
+                    'range_mid_price': range_mid_price,
+                    'range_entry_side': "LONG",
                 }
                 
                 logger.info("✅ LONG aberto com sucesso!")
@@ -2415,10 +2486,13 @@ class TradingBot:
                 if double_first_applied:
                     logger.info(
                         f"   Order Size: ${order_size} (double first aplicado sobre ${base_order_size:.2f}) | "
-                        f"TP: ${setup.take_profit:.4f}"
+                        f"TP: ${(custom_take_profit if custom_take_profit else setup.take_profit):.4f}"
                     )
                 else:
-                    logger.info(f"   Order Size: ${order_size} | TP: ${setup.take_profit:.4f}")
+                    logger.info(
+                        f"   Order Size: ${order_size} | "
+                        f"TP: ${(custom_take_profit if custom_take_profit else setup.take_profit):.4f}"
+                    )
                 
                 return True
             
@@ -2459,9 +2533,10 @@ class TradingBot:
                         applied_order_size=order_size,
                     )
 
-                # Define apenas TP para o SHORT (SL é gerenciado pelo Trailing Stop do bot)
-                # Para SHORT: TP é abaixo do preço
-                short_tp = price * (1 - config.TAKE_PROFIT_PERCENT / 100)
+                # Define apenas TP para o SHORT (SL é gerenciado pelo bot no monitoramento).
+                short_tp = custom_take_profit if custom_take_profit else setup.take_profit
+                if short_tp is None or short_tp <= 0:
+                    short_tp = price * (1 - config.TAKE_PROFIT_PERCENT / 100)
                 self.exchange.set_stop_loss_take_profit(
                     symbol=symbol,
                     position_side='SHORT',
@@ -2486,8 +2561,10 @@ class TradingBot:
                     'qty': short_qty,
                     'value': order_size,
                     'entry_price': price,
-                    'stop_loss': None,  # Gerenciado pelo bot
+                    'stop_loss': custom_stop_loss,
                     'take_profit': short_tp,
+                    'strategy_name': str(strategy_name or "primary"),
+                    'strategy_type': strategy_type,
                     'double_first': bool(double_first_applied),
                 }
                 self.trade_history.append(trade_record)
@@ -2499,7 +2576,13 @@ class TradingBot:
                     'side': 'SHORT',
                     'entry_price': price,
                     'quantity': short_qty,
-                    'last_seen': datetime.now()
+                    'last_seen': datetime.now(),
+                    'strategy_name': str(strategy_name or "primary"),
+                    'strategy_type': strategy_type,
+                    'custom_stop_loss': custom_stop_loss,
+                    'custom_take_profit': short_tp,
+                    'range_mid_price': range_mid_price,
+                    'range_entry_side': "SHORT",
                 }
                 
                 logger.info("✅ SHORT aberto com sucesso!")
@@ -2531,6 +2614,39 @@ class TradingBot:
             open_long=not has_long,
             open_short=not has_short
         )
+
+    def _should_force_exit_range_break(self, symbol: str, side: str, range_mid_price) -> bool:
+        """
+        Critério de saída antecipada para range scalping.
+
+        Se duas velas consecutivas fecham além do meio do range sem repique,
+        assume risco de breakout e reduz exposição.
+        """
+        if not bool(getattr(config, "RANGE_SCALP_EARLY_EXIT_ENABLED", True)):
+            return False
+
+        try:
+            mid_price = float(range_mid_price)
+        except (TypeError, ValueError):
+            return False
+
+        timeframe = str(getattr(config, "RANGE_SCALP_EARLY_EXIT_TIMEFRAME", "3m") or "3m")
+        try:
+            klines = self.exchange.get_klines(symbol=symbol, interval=timeframe, limit=4)
+        except Exception as e:
+            logger.warning(f"⚠️ Falha ao avaliar saída antecipada de range em {symbol}: {e}")
+            return False
+
+        if not klines or len(klines) < 2:
+            return False
+
+        closes = [float(item.get("close", 0.0) or 0.0) for item in klines][-2:]
+        if len(closes) < 2:
+            return False
+
+        if side == "LONG":
+            return (closes[0] < mid_price and closes[1] < mid_price and closes[1] <= closes[0])
+        return (closes[0] > mid_price and closes[1] > mid_price and closes[1] >= closes[0])
     
     def monitor_positions(self):
         """
@@ -2553,6 +2669,7 @@ class TradingBot:
         for pos in positions:
             position_key = f"{pos['symbol']}_{pos['side']}"
             current_position_keys.add(position_key)
+            previous = self.known_positions.get(position_key, {})
             
             # Atualiza known_positions com info atual
             self.known_positions[position_key] = {
@@ -2560,7 +2677,13 @@ class TradingBot:
                 'side': pos['side'],
                 'entry_price': pos['entry_price'],
                 'quantity': pos['quantity'],
-                'last_seen': datetime.now()
+                'last_seen': datetime.now(),
+                'strategy_name': previous.get('strategy_name', 'primary'),
+                'strategy_type': previous.get('strategy_type', 'trend_signal'),
+                'custom_stop_loss': previous.get('custom_stop_loss'),
+                'custom_take_profit': previous.get('custom_take_profit'),
+                'range_mid_price': previous.get('range_mid_price'),
+                'range_entry_side': previous.get('range_entry_side'),
             }
         
         # Verifica se alguma posição conhecida sumiu
@@ -2630,6 +2753,81 @@ class TradingBot:
                 profit_pct = ((entry_price - current_price) / entry_price) * 100
             
             logger.info(f"   {side} {symbol}: P&L ${pnl:.2f} ({profit_pct:+.2f}%) | Preço: ${current_price:.4f}")
+
+            known_meta = self.known_positions.get(position_key, {})
+            custom_take_profit = known_meta.get('custom_take_profit')
+            custom_stop_loss = known_meta.get('custom_stop_loss')
+            strategy_type = self._normalize_strategy_type(known_meta.get('strategy_type', 'trend_signal'))
+            range_mid_price = known_meta.get('range_mid_price')
+
+            # ============================================
+            # 0. TAKE PROFIT / STOP LOSS CUSTOM (por estratégia)
+            # ============================================
+            custom_tp_hit = bool(
+                custom_take_profit is not None and (
+                    (side == "LONG" and current_price >= float(custom_take_profit)) or
+                    (side == "SHORT" and current_price <= float(custom_take_profit))
+                )
+            )
+            if custom_tp_hit:
+                pos['current_price'] = current_price
+                closed = self._close_position_with_notification(
+                    pos,
+                    f"Take Profit custom ({float(custom_take_profit):.4f})"
+                )
+                if closed:
+                    self._clear_trailing_data(position_key)
+                    if position_key in self.known_positions:
+                        del self.known_positions[position_key]
+                else:
+                    logger.warning(
+                        f"⚠️ Fechamento não confirmado para {position_key} em TP custom. "
+                        "Mantendo rastreamento da posição."
+                    )
+                continue
+
+            custom_sl_hit = bool(
+                custom_stop_loss is not None and (
+                    (side == "LONG" and current_price <= float(custom_stop_loss)) or
+                    (side == "SHORT" and current_price >= float(custom_stop_loss))
+                )
+            )
+            if custom_sl_hit:
+                pos['current_price'] = current_price
+                closed = self._close_position_with_notification(
+                    pos,
+                    f"Stop Loss custom ({float(custom_stop_loss):.4f})"
+                )
+                if closed:
+                    self._clear_trailing_data(position_key)
+                    if position_key in self.known_positions:
+                        del self.known_positions[position_key]
+                else:
+                    logger.warning(
+                        f"⚠️ Fechamento não confirmado para {position_key} em SL custom. "
+                        "Mantendo rastreamento da posição."
+                    )
+                continue
+
+            if strategy_type == "range_scalping" and self._should_force_exit_range_break(
+                symbol=symbol,
+                side=side,
+                range_mid_price=range_mid_price,
+            ):
+                pos['current_price'] = current_price
+                closed = self._close_position_with_notification(
+                    pos,
+                    "Saída antecipada por possível breakout de range"
+                )
+                if closed:
+                    self._clear_trailing_data(position_key)
+                    if position_key in self.known_positions:
+                        del self.known_positions[position_key]
+                else:
+                    logger.warning(
+                        f"⚠️ Fechamento não confirmado para {position_key} em saída antecipada de range."
+                    )
+                continue
             
             # ============================================
             # 1. VERIFICA TAKE PROFIT (SEMPRE ATIVO)

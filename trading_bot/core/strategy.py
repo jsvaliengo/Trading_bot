@@ -6,8 +6,8 @@ Implementa Hedge, DCA e análise técnica simples.
 """
 
 import logging
-from typing import Dict, List, Optional, Tuple
-from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Tuple
+from dataclasses import dataclass, field
 from enum import Enum
 import numpy as np
 
@@ -40,6 +40,7 @@ class TradeSetup:
     stop_loss: float
     take_profit: float
     dca_levels: List[float]  # Preços para ordens DCA
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 class TechnicalAnalysis:
@@ -482,6 +483,256 @@ class HedgeStrategy:
             stop_loss=stop_loss,
             take_profit=take_profit,
             dca_levels=[d['price'] for d in dca_levels]
+        )
+
+
+class RangeScalpingStrategy:
+    """
+    Estratégia de range scalping com validação de estrutura antes da entrada.
+
+    Regras principais:
+    - só opera quando detectar range de qualidade
+    - compra na zona inferior e vende na zona superior
+    - não opera na zona morta (meio do range)
+    - usa stop além do limite do range + buffer
+    """
+
+    def __init__(self):
+        self.config = config
+
+    @staticmethod
+    def _timeframe_to_minutes(timeframe: str) -> int:
+        token = str(timeframe or "5m").strip().lower()
+        if token.endswith("m"):
+            return max(1, int(token[:-1] or "1"))
+        if token.endswith("h"):
+            return max(1, int(token[:-1] or "1")) * 60
+        if token.endswith("d"):
+            return max(1, int(token[:-1] or "1")) * 1440
+        return 5
+
+    @staticmethod
+    def _clip(value: float, low: float, high: float) -> float:
+        return max(low, min(high, value))
+
+    def _analyze_range_context(self, klines: List[Dict]) -> Optional[Dict[str, float]]:
+        if not klines:
+            return None
+
+        timeframe_minutes = self._timeframe_to_minutes(self.config.TIMEFRAME)
+        min_window = max(
+            10,
+            int(np.ceil(float(self.config.RANGE_SCALP_MIN_RANGE_MINUTES) / max(1, timeframe_minutes))),
+        )
+        if len(klines) < min_window:
+            return None
+
+        window_size = min(len(klines), max(min_window, 12))
+        window = klines[-window_size:]
+
+        highs = [float(item["high"]) for item in window]
+        lows = [float(item["low"]) for item in window]
+        closes = [float(item["close"]) for item in window]
+        opens = [float(item["open"]) for item in window]
+        volumes = [float(item.get("volume", 0.0) or 0.0) for item in window]
+
+        support = min(lows)
+        resistance = max(highs)
+        range_size = resistance - support
+        if range_size <= 0:
+            return None
+
+        mid_price = (support + resistance) / 2.0
+        amplitude_pct = (range_size / max(mid_price, 1e-9)) * 100.0
+        if amplitude_pct < float(self.config.RANGE_SCALP_MIN_RANGE_PERCENT):
+            return None
+
+        touch_tolerance = max(
+            range_size * float(self.config.RANGE_SCALP_TOUCH_TOLERANCE_RATIO),
+            mid_price * 0.0005,
+        )
+        rejection_min_move = range_size * float(self.config.RANGE_SCALP_REJECTION_MIN_RATIO)
+
+        support_touches = 0
+        resistance_touches = 0
+        for index, close_price in enumerate(closes):
+            candle_low = lows[index]
+            candle_high = highs[index]
+            if candle_low <= (support + touch_tolerance) and close_price >= (candle_low + rejection_min_move):
+                support_touches += 1
+            if candle_high >= (resistance - touch_tolerance) and close_price <= (candle_high - rejection_min_move):
+                resistance_touches += 1
+
+        min_touches = max(1, int(self.config.RANGE_SCALP_MIN_TOUCHES_PER_SIDE))
+        if support_touches < min_touches or resistance_touches < min_touches:
+            return None
+
+        edge_ratio = self._clip(float(self.config.RANGE_SCALP_EDGE_ZONE_RATIO), 0.05, 0.45)
+        buy_zone_upper = support + (range_size * edge_ratio)
+        sell_zone_lower = resistance - (range_size * edge_ratio)
+
+        edge_closes = sum(1 for close_price in closes if close_price <= buy_zone_upper or close_price >= sell_zone_lower)
+        edge_participation = edge_closes / max(1, len(closes))
+        if edge_participation < float(self.config.RANGE_SCALP_MIN_EDGE_PARTICIPATION):
+            return None
+
+        # Volume no range deve estar controlado versus janela anterior.
+        previous_window = klines[-(window_size * 2):-window_size] if len(klines) >= (window_size * 2) else klines[:-window_size]
+        if previous_window:
+            previous_volumes = [float(item.get("volume", 0.0) or 0.0) for item in previous_window]
+            previous_avg_volume = float(np.mean(previous_volumes)) if previous_volumes else 0.0
+            current_avg_volume = float(np.mean(volumes)) if volumes else 0.0
+            if previous_avg_volume > 0 and current_avg_volume > (previous_avg_volume * float(self.config.RANGE_SCALP_MAX_VOLUME_RATIO)):
+                return None
+
+        # Invalidação: volume crescente consecutivo dentro do range.
+        volume_streak = max(2, int(self.config.RANGE_SCALP_INVALIDATE_VOLUME_STREAK))
+        if len(window) >= volume_streak:
+            recent = window[-volume_streak:]
+            recent_vol = [float(item.get("volume", 0.0) or 0.0) for item in recent]
+            recent_close = [float(item["close"]) for item in recent]
+            recent_inside = all(support <= value <= resistance for value in recent_close)
+            increasing_vol = all(recent_vol[idx] < recent_vol[idx + 1] for idx in range(len(recent_vol) - 1))
+            if recent_inside and increasing_vol:
+                return None
+
+        # Invalidação: sequência direcional forte (sinal de breakout iminente).
+        momentum_candles = max(2, int(self.config.RANGE_SCALP_INVALIDATE_MOMENTUM_CANDLES))
+        if len(window) >= momentum_candles:
+            closes_tail = closes[-momentum_candles:]
+            opens_tail = opens[-momentum_candles:]
+            bullish_seq = all(closes_tail[idx] < closes_tail[idx + 1] for idx in range(len(closes_tail) - 1))
+            bullish_bodies = all(closes_tail[idx] > opens_tail[idx] for idx in range(len(closes_tail)))
+            bearish_seq = all(closes_tail[idx] > closes_tail[idx + 1] for idx in range(len(closes_tail) - 1))
+            bearish_bodies = all(closes_tail[idx] < opens_tail[idx] for idx in range(len(closes_tail)))
+            if bullish_seq and bullish_bodies and closes_tail[-1] > mid_price:
+                return None
+            if bearish_seq and bearish_bodies and closes_tail[-1] < mid_price:
+                return None
+
+        return {
+            "support": support,
+            "resistance": resistance,
+            "mid_price": mid_price,
+            "range_size": range_size,
+            "amplitude_pct": amplitude_pct,
+            "buy_zone_upper": buy_zone_upper,
+            "sell_zone_lower": sell_zone_lower,
+            "window_size": float(window_size),
+        }
+
+    def generate_trade_setup(
+        self,
+        symbol: str,
+        klines: List[Dict],
+        available_capital: float,
+        min_notional: float = 5.0,
+    ) -> Optional[TradeSetup]:
+        if not klines or len(klines) < 12:
+            return None
+
+        context = self._analyze_range_context(klines)
+        if not context:
+            return None
+
+        current_price = float(klines[-1]["close"])
+        support = float(context["support"])
+        resistance = float(context["resistance"])
+        range_size = float(context["range_size"])
+        buy_zone_upper = float(context["buy_zone_upper"])
+        sell_zone_lower = float(context["sell_zone_lower"])
+
+        is_buy_zone = support <= current_price <= buy_zone_upper
+        is_sell_zone = sell_zone_lower <= current_price <= resistance
+        if not is_buy_zone and not is_sell_zone:
+            return None
+
+        min_mult = float(self.config.RANGE_SCALP_MIN_POSITION_MULTIPLIER)
+        max_mult = float(self.config.RANGE_SCALP_MAX_POSITION_MULTIPLIER)
+        zone_span = max(range_size * float(self.config.RANGE_SCALP_EDGE_ZONE_RATIO), 1e-9)
+        if is_buy_zone:
+            depth = (buy_zone_upper - current_price) / zone_span
+            signal = Signal.STRONG_BUY
+            zone_side = "BUY_ZONE"
+        else:
+            depth = (current_price - sell_zone_lower) / zone_span
+            signal = Signal.STRONG_SELL
+            zone_side = "SELL_ZONE"
+        depth = self._clip(depth, 0.0, 1.0)
+        size_multiplier = min_mult + (max_mult - min_mult) * depth
+
+        min_per_position = float(min_notional) * 1.25
+        base_size = max(min_per_position, float(available_capital) * float(self.config.MAX_POSITION_PERCENT))
+        side_size = base_size * size_multiplier
+
+        # Proteção simples de capital antes de gerar setup.
+        if available_capital < (side_size * 1.05):
+            return None
+
+        stop_buffer = max(
+            range_size * float(self.config.RANGE_SCALP_STOP_BUFFER_RATIO),
+            current_price * (float(self.config.RANGE_SCALP_STOP_BUFFER_MIN_PERCENT) / 100.0),
+        )
+        tp_ratio = float(self.config.RANGE_SCALP_TAKE_PROFIT_RATIO)
+
+        if is_buy_zone:
+            stop_loss = support - stop_buffer
+            take_profit = support + (range_size * tp_ratio)
+            risk = current_price - stop_loss
+            reward = take_profit - current_price
+            long_size, short_size = side_size, 0.0
+            dca_levels = [
+                round(buy_zone_upper - (range_size * 0.10), 8),
+                round(support + (range_size * 0.02), 8),
+            ]
+        else:
+            stop_loss = resistance + stop_buffer
+            take_profit = resistance - (range_size * tp_ratio)
+            risk = stop_loss - current_price
+            reward = current_price - take_profit
+            long_size, short_size = 0.0, side_size
+            dca_levels = [
+                round(sell_zone_lower + (range_size * 0.10), 8),
+                round(resistance - (range_size * 0.02), 8),
+            ]
+
+        if risk <= 0 or reward <= 0:
+            return None
+
+        rr_ratio = reward / max(risk, 1e-9)
+        if rr_ratio < float(self.config.RANGE_SCALP_MIN_RISK_REWARD):
+            return None
+
+        logger.info(
+            "🧭 Range setup %s em %s | amp=%.2f%% | R:R=%.2f | depth=%.2f",
+            zone_side,
+            symbol,
+            context["amplitude_pct"],
+            rr_ratio,
+            depth,
+        )
+
+        return TradeSetup(
+            symbol=symbol,
+            signal=signal,
+            long_size=round(long_size, 8),
+            short_size=round(short_size, 8),
+            entry_price=current_price,
+            stop_loss=round(stop_loss, 8),
+            take_profit=round(take_profit, 8),
+            dca_levels=dca_levels,
+            metadata={
+                "strategy_type": "range_scalping",
+                "range_support": round(support, 8),
+                "range_resistance": round(resistance, 8),
+                "range_mid_price": round(context["mid_price"], 8),
+                "range_amplitude_pct": round(context["amplitude_pct"], 6),
+                "custom_stop_loss": round(stop_loss, 8),
+                "custom_take_profit": round(take_profit, 8),
+                "position_multiplier": round(size_multiplier, 6),
+                "range_window_candles": int(context["window_size"]),
+                "entry_zone": zone_side,
+            },
         )
 
 

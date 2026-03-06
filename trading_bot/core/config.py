@@ -262,9 +262,32 @@ class TradingConfig:
     # Cada item pode conter:
     # - name: identificador da estratégia
     # - enabled: ativa/desativa o perfil
+    # - strategy_type: "trend_signal" (padrão) ou "range_scalping"
     # - entry_mode: "strong_only" (padrão) ou "standard"
     # - pairs: lista de pares atribuídos ao perfil
     STRATEGY_PROFILES: list = None  # Será definido no __post_init__
+
+    # ============================================
+    # RANGE SCALPING (segunda estratégia)
+    # ============================================
+    RANGE_SCALP_MIN_RANGE_PERCENT: float = 0.8
+    RANGE_SCALP_MIN_RANGE_MINUTES: int = 45
+    RANGE_SCALP_MIN_TOUCHES_PER_SIDE: int = 2
+    RANGE_SCALP_TOUCH_TOLERANCE_RATIO: float = 0.12
+    RANGE_SCALP_REJECTION_MIN_RATIO: float = 0.08
+    RANGE_SCALP_EDGE_ZONE_RATIO: float = 0.30
+    RANGE_SCALP_MIN_EDGE_PARTICIPATION: float = 0.30
+    RANGE_SCALP_MAX_VOLUME_RATIO: float = 0.95
+    RANGE_SCALP_INVALIDATE_VOLUME_STREAK: int = 3
+    RANGE_SCALP_INVALIDATE_MOMENTUM_CANDLES: int = 3
+    RANGE_SCALP_STOP_BUFFER_RATIO: float = 0.25
+    RANGE_SCALP_STOP_BUFFER_MIN_PERCENT: float = 0.15
+    RANGE_SCALP_TAKE_PROFIT_RATIO: float = 0.70
+    RANGE_SCALP_MIN_POSITION_MULTIPLIER: float = 0.70
+    RANGE_SCALP_MAX_POSITION_MULTIPLIER: float = 1.30
+    RANGE_SCALP_MIN_RISK_REWARD: float = 1.20
+    RANGE_SCALP_EARLY_EXIT_ENABLED: bool = True
+    RANGE_SCALP_EARLY_EXIT_TIMEFRAME: str = "3m"
     
     # Diferença de preço para abrir posição oposta (em %)
     # Se o preço mover 1%, abre a posição de hedge
@@ -711,12 +734,21 @@ class TradingConfig:
             return "standard"
         return "strong_only"
 
+    @staticmethod
+    def _normalize_strategy_type(strategy_type: str) -> str:
+        """Normaliza tipo de estratégia por perfil."""
+        token = str(strategy_type or "").strip().lower()
+        if token in {"range_scalping", "range", "scalping", "range_scalp"}:
+            return "range_scalping"
+        return "trend_signal"
+
     def _normalize_strategy_profiles(self, profiles: list | None) -> List[dict]:
         """Normaliza perfis de estratégia preservando ordem e sem sobreposição de pares."""
         source = profiles if isinstance(profiles, list) and profiles else [
             {
                 "name": "primary",
                 "enabled": True,
+                "strategy_type": "trend_signal",
                 "entry_mode": "strong_only",
                 "pairs": list(self.TRADING_PAIRS),
             }
@@ -731,6 +763,7 @@ class TradingConfig:
 
             name = str(raw_profile.get("name") or f"strategy_{index}").strip() or f"strategy_{index}"
             enabled = bool(raw_profile.get("enabled", True))
+            strategy_type = self._normalize_strategy_type(raw_profile.get("strategy_type", "trend_signal"))
             entry_mode = self._normalize_entry_mode(raw_profile.get("entry_mode", "strong_only"))
             pairs = self.filter_disabled_pairs(raw_profile.get("pairs", []))
 
@@ -750,6 +783,7 @@ class TradingConfig:
                 {
                     "name": name,
                     "enabled": enabled,
+                    "strategy_type": strategy_type,
                     "entry_mode": entry_mode,
                     "pairs": unique_pairs,
                 }
@@ -762,6 +796,7 @@ class TradingConfig:
                 {
                     "name": "primary",
                     "enabled": True,
+                    "strategy_type": "trend_signal",
                     "entry_mode": "strong_only",
                     "pairs": fallback_pairs,
                 }
@@ -800,6 +835,9 @@ class TradingConfig:
             pair_owner = {}
             for profile in strategy_profiles:
                 profile_name = str(profile.get("name") or "strategy").strip()
+                strategy_type = self._normalize_strategy_type(profile.get("strategy_type", "trend_signal"))
+                if strategy_type not in {"trend_signal", "range_scalping"}:
+                    errors.append(f"⚠️  ALERTA: strategy_type inválido em {profile_name}: {strategy_type}")
                 entry_mode = self._normalize_entry_mode(profile.get("entry_mode", "strong_only"))
                 if entry_mode not in {"strong_only", "standard"}:
                     errors.append(f"⚠️  ALERTA: entry_mode inválido em {profile_name}: {entry_mode}")
@@ -887,6 +925,9 @@ class TradingConfig:
         if self.SENTIMENT_TIMEFRAME not in {"1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d"}:
             errors.append("⚠️  ALERTA: SENTIMENT_TIMEFRAME inválido!")
 
+        if self.RANGE_SCALP_EARLY_EXIT_TIMEFRAME not in {"1m", "3m", "5m", "15m", "30m", "1h"}:
+            errors.append("⚠️  ALERTA: RANGE_SCALP_EARLY_EXIT_TIMEFRAME inválido!")
+
         if self.SENTIMENT_CANDLES_LOOKBACK < 30 or self.SENTIMENT_CANDLES_LOOKBACK > 1000:
             errors.append("⚠️  ALERTA: SENTIMENT_CANDLES_LOOKBACK deve estar entre 30 e 1000!")
 
@@ -907,6 +948,26 @@ class TradingConfig:
 
         if self.DOUBLE_FIRST_MAX_MARGIN_USDT < 0:
             errors.append("⚠️  ALERTA: DOUBLE_FIRST_MAX_MARGIN_USDT deve ser >= 0!")
+
+        if self.RANGE_SCALP_MIN_RANGE_PERCENT <= 0:
+            errors.append("⚠️  ALERTA: RANGE_SCALP_MIN_RANGE_PERCENT deve ser > 0!")
+
+        if self.RANGE_SCALP_MIN_RANGE_MINUTES < 15:
+            errors.append("⚠️  ALERTA: RANGE_SCALP_MIN_RANGE_MINUTES deve ser >= 15!")
+
+        if self.RANGE_SCALP_MIN_TOUCHES_PER_SIDE < 1:
+            errors.append("⚠️  ALERTA: RANGE_SCALP_MIN_TOUCHES_PER_SIDE deve ser >= 1!")
+
+        if self.RANGE_SCALP_EDGE_ZONE_RATIO <= 0 or self.RANGE_SCALP_EDGE_ZONE_RATIO >= 0.5:
+            errors.append("⚠️  ALERTA: RANGE_SCALP_EDGE_ZONE_RATIO deve estar entre 0 e 0.5!")
+
+        if self.RANGE_SCALP_MIN_POSITION_MULTIPLIER <= 0:
+            errors.append("⚠️  ALERTA: RANGE_SCALP_MIN_POSITION_MULTIPLIER deve ser > 0!")
+
+        if self.RANGE_SCALP_MAX_POSITION_MULTIPLIER < self.RANGE_SCALP_MIN_POSITION_MULTIPLIER:
+            errors.append(
+                "⚠️  ALERTA: RANGE_SCALP_MAX_POSITION_MULTIPLIER deve ser >= RANGE_SCALP_MIN_POSITION_MULTIPLIER!"
+            )
 
         if self.DASHBOARD_PORT < 1 or self.DASHBOARD_PORT > 65535:
             errors.append("⚠️  ALERTA: DASHBOARD_PORT deve estar entre 1 e 65535!")
