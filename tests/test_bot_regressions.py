@@ -264,6 +264,41 @@ def test_analyze_and_trade_skips_reentry_when_long_is_already_open(monkeypatch):
     bot.execute_signal_trade.assert_not_called()
 
 
+def test_analyze_and_trade_ignores_weak_buy_signal(monkeypatch):
+    bot = _make_light_bot()
+
+    monkeypatch.setattr(config, "USE_DAILY_TARGETS", False)
+    monkeypatch.setattr(config, "TIMEFRAME", "5m")
+    monkeypatch.setattr(config, "CANDLES_LOOKBACK", 50)
+
+    setup = TradeSetup(
+        symbol="ETHUSDT",
+        signal=Signal.BUY,
+        long_size=5.0,
+        short_size=5.0,
+        entry_price=100.0,
+        stop_loss=98.0,
+        take_profit=102.0,
+        dca_levels=[],
+    )
+
+    bot.exchange = SimpleNamespace(
+        get_klines=lambda **_kwargs: [{"close": 100.0}],
+        get_available_balance=lambda: 1000.0,
+        get_symbol_info=lambda _symbol: {"minNotional": 5.0},
+        get_open_positions=lambda: [],
+    )
+    bot.strategy = SimpleNamespace(generate_trade_setup=lambda **_kwargs: setup)
+    bot.risk_manager = SimpleNamespace(can_open_position=lambda _total: True)
+    bot.sentiment_mode_enabled = False
+    bot.execute_signal_trade = MagicMock(return_value=True)
+
+    result = bot.analyze_and_trade("ETHUSDT")
+
+    assert result is False
+    bot.execute_signal_trade.assert_not_called()
+
+
 def test_analyze_and_trade_skips_reentry_when_short_is_already_open(monkeypatch):
     bot = _make_light_bot()
 
@@ -300,6 +335,41 @@ def test_analyze_and_trade_skips_reentry_when_short_is_already_open(monkeypatch)
         generate_trade_setup=lambda **_kwargs: setup
     )
     bot.risk_manager = SimpleNamespace(can_open_position=lambda _total: True)
+    bot.execute_signal_trade = MagicMock(return_value=True)
+
+    result = bot.analyze_and_trade("ETHUSDT")
+
+    assert result is False
+    bot.execute_signal_trade.assert_not_called()
+
+
+def test_analyze_and_trade_ignores_weak_sell_signal(monkeypatch):
+    bot = _make_light_bot()
+
+    monkeypatch.setattr(config, "USE_DAILY_TARGETS", False)
+    monkeypatch.setattr(config, "TIMEFRAME", "5m")
+    monkeypatch.setattr(config, "CANDLES_LOOKBACK", 50)
+
+    setup = TradeSetup(
+        symbol="ETHUSDT",
+        signal=Signal.SELL,
+        long_size=5.0,
+        short_size=5.0,
+        entry_price=100.0,
+        stop_loss=102.0,
+        take_profit=98.0,
+        dca_levels=[],
+    )
+
+    bot.exchange = SimpleNamespace(
+        get_klines=lambda **_kwargs: [{"close": 100.0}],
+        get_available_balance=lambda: 1000.0,
+        get_symbol_info=lambda _symbol: {"minNotional": 5.0},
+        get_open_positions=lambda: [],
+    )
+    bot.strategy = SimpleNamespace(generate_trade_setup=lambda **_kwargs: setup)
+    bot.risk_manager = SimpleNamespace(can_open_position=lambda _total: True)
+    bot.sentiment_mode_enabled = False
     bot.execute_signal_trade = MagicMock(return_value=True)
 
     result = bot.analyze_and_trade("ETHUSDT")

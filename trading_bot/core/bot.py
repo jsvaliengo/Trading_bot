@@ -1883,8 +1883,8 @@ class TradingBot:
         Analisa um par e executa trades se houver oportunidade.
         
         ESTRATÉGIA DIRECIONAL BASEADA EM SINAIS:
-        - BUY ou STRONG_BUY → Abre LONG (se não tiver LONG aberto)
-        - SELL ou STRONG_SELL → Abre SHORT (se não tiver SHORT aberto)
+        - STRONG_BUY → Abre LONG (se não tiver LONG aberto)
+        - STRONG_SELL → Abre SHORT (se não tiver SHORT aberto)
         - NEUTRAL → Não faz nada
         
         Pode ter LONG e SHORT ao mesmo tempo se o sinal mudar depois.
@@ -1936,10 +1936,10 @@ class TradingBot:
         signal = setup.signal
         signal_name = signal.name if hasattr(signal, 'name') else str(signal)
         
-        # Define se deve abrir LONG ou SHORT baseado no sinal
-        # Agora aceita BUY, STRONG_BUY para LONG e SELL, STRONG_SELL para SHORT
-        should_open_long = signal_name in ['BUY', 'STRONG_BUY']
-        should_open_short = signal_name in ['SELL', 'STRONG_SELL']
+        # Define se deve abrir LONG ou SHORT baseado no sinal.
+        # REGRA ATUAL: só entra com sinais fortes.
+        should_open_long = signal_name == 'STRONG_BUY'
+        should_open_short = signal_name == 'STRONG_SELL'
 
         # Aplica filtro direcional de sentimento (quando ativo).
         should_open_long, should_open_short = self._apply_sentiment_direction_filter(
@@ -1950,8 +1950,13 @@ class TradingBot:
 
         # Se sinal é NEUTRAL ou foi filtrado pelo sentimento, não abre posição.
         if not should_open_long and not should_open_short:
-            if self.sentiment_mode_enabled and signal_name in ['BUY', 'STRONG_BUY', 'SELL', 'STRONG_SELL']:
+            if getattr(self, "sentiment_mode_enabled", False) and signal_name in ['STRONG_BUY', 'STRONG_SELL']:
                 logger.info(f"⏸️  Entrada bloqueada por sentimento em {symbol} (sinal={signal_name})")
+            elif signal_name in ['BUY', 'SELL']:
+                logger.info(
+                    f"⏸️  Sinal {signal_name} em {symbol} é fraco para entrada - "
+                    "aguardando STRONG_BUY/STRONG_SELL"
+                )
             else:
                 logger.info(f"⏸️  Sinal {signal_name} em {symbol} - aguardando sinal de entrada")
             return False
@@ -1974,12 +1979,12 @@ class TradingBot:
         # DECIDE O QUE FAZER BASEADO NO SINAL
         # ============================================
         
-        # Se sinal é BUY/STRONG_BUY mas já tem LONG, não faz nada
+        # Se sinal forte de compra, mas já tem LONG, não faz nada.
         if should_open_long and has_long:
             logger.info(f"⏸️  Sinal {signal_name} em {symbol} mas LONG já está aberto")
             return False
         
-        # Se sinal é SELL/STRONG_SELL mas já tem SHORT, não faz nada
+        # Se sinal forte de venda, mas já tem SHORT, não faz nada.
         if should_open_short and has_short:
             logger.info(f"⏸️  Sinal {signal_name} em {symbol} mas SHORT já está aberto")
             return False
@@ -2086,7 +2091,7 @@ class TradingBot:
             )
             
             # ============================================
-            # ABRE LONG (se sinal é BUY/STRONG_BUY)
+            # ABRE LONG (quando sinal de entrada direciona para compra)
             # ============================================
             if open_long:
                 # Verifica se atende ao mínimo (minNotional é NOTIONAL; order_size é MARGEM)
@@ -2176,7 +2181,7 @@ class TradingBot:
                 return True
             
             # ============================================
-            # ABRE SHORT (se sinal é SELL/STRONG_SELL)
+            # ABRE SHORT (quando sinal de entrada direciona para venda)
             # ============================================
             if open_short:
                 # Verifica se atende ao mínimo (minNotional é NOTIONAL; order_size é MARGEM)
