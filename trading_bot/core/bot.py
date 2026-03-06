@@ -848,6 +848,13 @@ class TradingBot:
             strategy_type = self._normalize_strategy_type(raw_profile.get("strategy_type", "trend_signal"))
             entry_mode = self._normalize_strategy_entry_mode(raw_profile.get("entry_mode", "strong_only"))
             pairs = self._filter_disabled_pairs(raw_profile.get("pairs", []))
+            raw_risk_profile = raw_profile.get("risk_profile")
+            risk_profile = {}
+            if strategy_type == "trend_signal" and raw_risk_profile is not None:
+                if hasattr(config, "_normalize_trend_risk_profile"):
+                    risk_profile = config._normalize_trend_risk_profile(raw_risk_profile)
+                elif isinstance(raw_risk_profile, dict):
+                    risk_profile = dict(raw_risk_profile)
 
             unique_pairs = []
             for symbol in pairs:
@@ -869,15 +876,16 @@ class TradingBot:
                 if current_type != strategy_type:
                     strategy_engine = self._create_strategy_engine(strategy_type)
 
-            runtime_profiles.append(
-                {
-                    "name": profile_name,
-                    "strategy_type": strategy_type,
-                    "entry_mode": entry_mode,
-                    "pairs": unique_pairs,
-                    "strategy": strategy_engine,
-                }
-            )
+            runtime_profile = {
+                "name": profile_name,
+                "strategy_type": strategy_type,
+                "entry_mode": entry_mode,
+                "pairs": unique_pairs,
+                "strategy": strategy_engine,
+            }
+            if risk_profile:
+                runtime_profile["risk_profile"] = risk_profile
+            runtime_profiles.append(runtime_profile)
 
         if not runtime_profiles:
             fallback_strategy = previous_engines.get("primary") or getattr(self, "strategy", None) or HedgeStrategy()
@@ -911,16 +919,19 @@ class TradingBot:
             profile["pairs"] = dedup_pairs
 
         config.TRADING_PAIRS = list(consolidated_pairs)
-        config.STRATEGY_PROFILES = [
-            {
+        config_profiles = []
+        for profile in runtime_profiles:
+            serialized = {
                 "name": profile["name"],
                 "enabled": True,
                 "strategy_type": profile["strategy_type"],
                 "entry_mode": profile["entry_mode"],
                 "pairs": list(profile["pairs"]),
             }
-            for profile in runtime_profiles
-        ]
+            if profile.get("risk_profile"):
+                serialized["risk_profile"] = dict(profile["risk_profile"])
+            config_profiles.append(serialized)
+        config.STRATEGY_PROFILES = config_profiles
 
         self._strategy_engines = {profile["name"]: profile["strategy"] for profile in runtime_profiles}
         self.strategy_profiles = runtime_profiles
@@ -985,7 +996,19 @@ class TradingBot:
             primary_index = 0
 
         if primary_pairs is not None:
-            normalized_profiles[primary_index]["pairs"] = self._filter_disabled_pairs(primary_pairs)
+            # Mantém o primário dinâmico, mas sem sobreposição com perfis secundários.
+            reserved_pairs = set()
+            for idx, profile in enumerate(normalized_profiles):
+                if idx == primary_index:
+                    continue
+                if not bool(profile.get("enabled", True)):
+                    continue
+                reserved_pairs.update(self._filter_disabled_pairs(profile.get("pairs", [])))
+
+            candidate_primary_pairs = self._filter_disabled_pairs(primary_pairs)
+            normalized_profiles[primary_index]["pairs"] = [
+                symbol for symbol in candidate_primary_pairs if symbol not in reserved_pairs
+            ]
 
         # Se TRADING_PAIRS contém pares fora dos profiles, injeta no primário.
         trading_pairs = self._filter_disabled_pairs(getattr(config, "TRADING_PAIRS", []) or [])
@@ -2176,20 +2199,46 @@ class TradingBot:
         strategy_context = self._resolve_strategy_context(symbol=symbol, strategy_name=strategy_name)
         strategy_engine = strategy_context.get("strategy", getattr(self, "strategy", None) or HedgeStrategy())
         strategy_label = str(strategy_context.get("name", "primary"))
+        strategy_type = self._normalize_strategy_type(strategy_context.get("strategy_type", "trend_signal"))
         entry_mode = self._normalize_strategy_entry_mode(strategy_context.get("entry_mode", "strong_only"))
+        risk_profile = strategy_context.get("risk_profile")
+        execution_timeframe = str(config.TIMEFRAME)
+        analysis_lookback = int(config.CANDLES_LOOKBACK)
+        confirmation_timeframe = None
+        confirmation_klines = None
+
+        is_trend_strong = strategy_type == "trend_signal" and strategy_label == "trend_strong"
+        if is_trend_strong:
+            execution_timeframe = str(getattr(config, "TREND_STRONG_EXECUTION_TIMEFRAME", "3m"))
+            analysis_lookback = max(
+                220,
+                int(getattr(config, "TREND_STRONG_CANDLES_LOOKBACK", 260)),
+                int(config.CANDLES_LOOKBACK),
+            )
+            confirmation_timeframe = str(getattr(config, "TREND_STRONG_CONFIRM_TIMEFRAME", "5m"))
 
         logger.info(f"🔍 [{strategy_label}] Analisando {symbol}...")
         
         # Obtém candles
         klines = self.exchange.get_klines(
             symbol=symbol,
-            interval=config.TIMEFRAME,
-            limit=config.CANDLES_LOOKBACK
+            interval=execution_timeframe,
+            limit=analysis_lookback
         )
         
         if not klines:
             logger.warning(f"⚠️  Sem dados para {symbol}")
             return False
+
+        if is_trend_strong and confirmation_timeframe:
+            confirmation_klines = self.exchange.get_klines(
+                symbol=symbol,
+                interval=confirmation_timeframe,
+                limit=analysis_lookback,
+            )
+            if not confirmation_klines:
+                logger.warning(f"⚠️  Sem dados de confirmação ({confirmation_timeframe}) para {symbol}")
+                return False
         
         # Verifica saldo DISPONÍVEL para novos trades
         available_balance = self.exchange.get_available_balance()
@@ -2200,11 +2249,20 @@ class TradingBot:
         min_notional = symbol_info.get('minNotional', 5.0)
         
         # Gera setup de trade
+        setup_kwargs = {
+            "symbol": symbol,
+            "klines": klines,
+            "available_capital": available_balance,
+            "min_notional": min_notional,
+            "risk_profile": risk_profile,
+        }
+        if confirmation_klines is not None:
+            setup_kwargs["confirmation_klines"] = confirmation_klines
+            setup_kwargs["execution_timeframe"] = execution_timeframe
+            setup_kwargs["confirmation_timeframe"] = confirmation_timeframe
+
         setup = strategy_engine.generate_trade_setup(
-            symbol=symbol,
-            klines=klines,
-            available_capital=available_balance,
-            min_notional=min_notional
+            **setup_kwargs,
         )
         
         if not setup:

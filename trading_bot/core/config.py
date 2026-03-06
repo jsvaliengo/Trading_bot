@@ -265,7 +265,22 @@ class TradingConfig:
     # - strategy_type: "trend_signal" (padrão) ou "range_scalping"
     # - entry_mode: "strong_only" (padrão) ou "standard"
     # - pairs: lista de pares atribuídos ao perfil
+    # - risk_profile (opcional para trend_signal): limites de SL/TP e alvo de risk/reward
     STRATEGY_PROFILES: list = None  # Será definido no __post_init__
+
+    # ============================================
+    # TREND STRONG (pullback multi-timeframe)
+    # ============================================
+    # Execução rápida (entrada) em 1m ou 3m + confirmação de tendência em 5m.
+    TREND_STRONG_EXECUTION_TIMEFRAME: str = "3m"
+    TREND_STRONG_CONFIRM_TIMEFRAME: str = "5m"
+    TREND_STRONG_CANDLES_LOOKBACK: int = 260
+    TREND_STRONG_PULLBACK_TOLERANCE_PERCENT: float = 0.10
+    TREND_STRONG_LONG_RSI_MIN: float = 40.0
+    TREND_STRONG_LONG_RSI_MAX: float = 55.0
+    TREND_STRONG_SHORT_RSI_MIN: float = 45.0
+    TREND_STRONG_SHORT_RSI_MAX: float = 60.0
+    TREND_STRONG_MIN_VOLUME_RATIO: float = 0.90
 
     # ============================================
     # RANGE SCALPING (segunda estratégia)
@@ -631,7 +646,16 @@ class TradingConfig:
                     "enabled": True,
                     "strategy_type": "trend_signal",
                     "entry_mode": "strong_only",
-                    "pairs": ["BTCUSDT", "BNBUSDT", "XRPUSDT"],
+                    # Dinâmico via Binance strategy no runtime
+                    "pairs": [],
+                    # Perfil equilibrado: SL 0.4%-0.6%, TP 0.8%-1.2%, RR alvo ~1:2
+                    "risk_profile": {
+                        "stop_loss_min_percent": 0.4,
+                        "stop_loss_max_percent": 0.6,
+                        "take_profit_min_percent": 0.8,
+                        "take_profit_max_percent": 1.2,
+                        "risk_reward_target": 2.0,
+                    },
                 },
                 {
                     "name": "range_scalp_v1",
@@ -759,6 +783,40 @@ class TradingConfig:
             return "range_scalping"
         return "trend_signal"
 
+    @staticmethod
+    def _normalize_trend_risk_profile(risk_profile: dict | None) -> dict:
+        """Normaliza limites de risco/retorno para perfis trend_signal."""
+        source = risk_profile if isinstance(risk_profile, dict) else {}
+
+        def _to_float(*keys: str, default: float) -> float:
+            for key in keys:
+                if key in source:
+                    try:
+                        return float(source.get(key))
+                    except (TypeError, ValueError):
+                        break
+            return float(default)
+
+        stop_loss_min = _to_float("stop_loss_min_percent", "stop_loss_percent_min", default=0.4)
+        stop_loss_max = _to_float("stop_loss_max_percent", "stop_loss_percent_max", default=0.6)
+        take_profit_min = _to_float("take_profit_min_percent", "take_profit_percent_min", default=0.8)
+        take_profit_max = _to_float("take_profit_max_percent", "take_profit_percent_max", default=1.2)
+        rr_target = _to_float("risk_reward_target", "risk_reward_ratio", default=2.0)
+
+        stop_loss_min = max(0.05, stop_loss_min)
+        stop_loss_max = max(stop_loss_min, stop_loss_max)
+        take_profit_min = max(0.05, take_profit_min)
+        take_profit_max = max(take_profit_min, take_profit_max)
+        rr_target = max(1.0, rr_target)
+
+        return {
+            "stop_loss_min_percent": round(stop_loss_min, 4),
+            "stop_loss_max_percent": round(stop_loss_max, 4),
+            "take_profit_min_percent": round(take_profit_min, 4),
+            "take_profit_max_percent": round(take_profit_max, 4),
+            "risk_reward_target": round(rr_target, 4),
+        }
+
     def _normalize_strategy_profiles(self, profiles: list | None) -> List[dict]:
         """Normaliza perfis de estratégia preservando ordem e sem sobreposição de pares."""
         source = profiles if isinstance(profiles, list) and profiles else [
@@ -783,6 +841,9 @@ class TradingConfig:
             strategy_type = self._normalize_strategy_type(raw_profile.get("strategy_type", "trend_signal"))
             entry_mode = self._normalize_entry_mode(raw_profile.get("entry_mode", "strong_only"))
             pairs = self.filter_disabled_pairs(raw_profile.get("pairs", []))
+            risk_profile = {}
+            if strategy_type == "trend_signal" and raw_profile.get("risk_profile") is not None:
+                risk_profile = self._normalize_trend_risk_profile(raw_profile.get("risk_profile"))
 
             unique_pairs = []
             for symbol in pairs:
@@ -796,15 +857,16 @@ class TradingConfig:
                     used_pairs.add(symbol)
                 unique_pairs.append(symbol)
 
-            normalized_profiles.append(
-                {
-                    "name": name,
-                    "enabled": enabled,
-                    "strategy_type": strategy_type,
-                    "entry_mode": entry_mode,
-                    "pairs": unique_pairs,
-                }
-            )
+            normalized_profile = {
+                "name": name,
+                "enabled": enabled,
+                "strategy_type": strategy_type,
+                "entry_mode": entry_mode,
+                "pairs": unique_pairs,
+            }
+            if risk_profile:
+                normalized_profile["risk_profile"] = risk_profile
+            normalized_profiles.append(normalized_profile)
 
         enabled_profiles = [profile for profile in normalized_profiles if profile.get("enabled", True)]
         if not enabled_profiles:
@@ -858,8 +920,19 @@ class TradingConfig:
                 entry_mode = self._normalize_entry_mode(profile.get("entry_mode", "strong_only"))
                 if entry_mode not in {"strong_only", "standard"}:
                     errors.append(f"⚠️  ALERTA: entry_mode inválido em {profile_name}: {entry_mode}")
+                if profile.get("risk_profile") is not None:
+                    if strategy_type != "trend_signal":
+                        errors.append(
+                            f"⚠️  ALERTA: risk_profile só é suportado para trend_signal ({profile_name})."
+                        )
+                    else:
+                        self._normalize_trend_risk_profile(profile.get("risk_profile"))
                 profile_pairs = self.normalize_pair_list(profile.get("pairs", []))
-                if not profile_pairs:
+                dynamic_profile_allowed_empty = (
+                    strategy_type == "trend_signal" and
+                    bool(self.USE_BINANCE_STRATEGY)
+                )
+                if not profile_pairs and not dynamic_profile_allowed_empty:
                     errors.append(f"⚠️  ALERTA: Perfil {profile_name} está sem pares atribuídos.")
                 for symbol in profile_pairs:
                     previous_owner = pair_owner.get(symbol)
@@ -944,6 +1017,27 @@ class TradingConfig:
 
         if self.RANGE_SCALP_EARLY_EXIT_TIMEFRAME not in {"1m", "3m", "5m", "15m", "30m", "1h"}:
             errors.append("⚠️  ALERTA: RANGE_SCALP_EARLY_EXIT_TIMEFRAME inválido!")
+
+        if self.TREND_STRONG_EXECUTION_TIMEFRAME not in {"1m", "3m"}:
+            errors.append("⚠️  ALERTA: TREND_STRONG_EXECUTION_TIMEFRAME deve ser '1m' ou '3m'!")
+
+        if self.TREND_STRONG_CONFIRM_TIMEFRAME != "5m":
+            errors.append("⚠️  ALERTA: TREND_STRONG_CONFIRM_TIMEFRAME deve ser '5m'!")
+
+        if self.TREND_STRONG_CANDLES_LOOKBACK < 220 or self.TREND_STRONG_CANDLES_LOOKBACK > 1000:
+            errors.append("⚠️  ALERTA: TREND_STRONG_CANDLES_LOOKBACK deve estar entre 220 e 1000!")
+
+        if self.TREND_STRONG_PULLBACK_TOLERANCE_PERCENT < 0 or self.TREND_STRONG_PULLBACK_TOLERANCE_PERCENT > 2:
+            errors.append("⚠️  ALERTA: TREND_STRONG_PULLBACK_TOLERANCE_PERCENT deve estar entre 0 e 2!")
+
+        if not (0 <= self.TREND_STRONG_LONG_RSI_MIN < self.TREND_STRONG_LONG_RSI_MAX <= 100):
+            errors.append("⚠️  ALERTA: Faixa RSI LONG do trend_strong é inválida!")
+
+        if not (0 <= self.TREND_STRONG_SHORT_RSI_MIN < self.TREND_STRONG_SHORT_RSI_MAX <= 100):
+            errors.append("⚠️  ALERTA: Faixa RSI SHORT do trend_strong é inválida!")
+
+        if self.TREND_STRONG_MIN_VOLUME_RATIO <= 0 or self.TREND_STRONG_MIN_VOLUME_RATIO > 3:
+            errors.append("⚠️  ALERTA: TREND_STRONG_MIN_VOLUME_RATIO deve estar entre 0 e 3!")
 
         if self.SENTIMENT_CANDLES_LOOKBACK < 30 or self.SENTIMENT_CANDLES_LOOKBACK > 1000:
             errors.append("⚠️  ALERTA: SENTIMENT_CANDLES_LOOKBACK deve estar entre 30 e 1000!")

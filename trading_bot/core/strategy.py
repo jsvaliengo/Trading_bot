@@ -164,6 +164,47 @@ class TechnicalAnalysis:
         
         return np.mean(true_ranges[-period:])
 
+    @staticmethod
+    def calculate_vwap(
+        highs: List[float],
+        lows: List[float],
+        closes: List[float],
+        volumes: List[float],
+        period: Optional[int] = None,
+    ) -> float:
+        """
+        Calcula VWAP (Volume Weighted Average Price).
+
+        Usa o preço típico ((H+L+C)/3) ponderado pelo volume.
+        """
+        if not closes or not volumes:
+            return closes[-1] if closes else 0.0
+
+        size = min(len(highs), len(lows), len(closes), len(volumes))
+        if size <= 0:
+            return 0.0
+
+        highs_slice = highs[-size:]
+        lows_slice = lows[-size:]
+        closes_slice = closes[-size:]
+        volumes_slice = volumes[-size:]
+
+        if period is not None and period > 0 and period < size:
+            highs_slice = highs_slice[-period:]
+            lows_slice = lows_slice[-period:]
+            closes_slice = closes_slice[-period:]
+            volumes_slice = volumes_slice[-period:]
+
+        typical_prices = (
+            (np.array(highs_slice) + np.array(lows_slice) + np.array(closes_slice)) / 3.0
+        )
+        volumes_array = np.array(volumes_slice)
+        total_volume = float(np.sum(volumes_array))
+        if total_volume <= 0:
+            return float(closes_slice[-1])
+
+        return float(np.sum(typical_prices * volumes_array) / total_volume)
+
 
 class HedgeStrategy:
     """
@@ -248,6 +289,202 @@ class HedgeStrategy:
             return Signal.SELL
         else:
             return Signal.NEUTRAL
+
+    @staticmethod
+    def _to_float(value: Any, default: float = 0.0) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return float(default)
+
+    def _build_trend_context(self, klines: List[Dict]) -> Optional[Dict[str, float]]:
+        """Monta contexto técnico com EMA9/21/200, VWAP, RSI e volume."""
+        if not klines or len(klines) < 210:
+            return None
+
+        closes = [self._to_float(k.get("close")) for k in klines]
+        highs = [self._to_float(k.get("high")) for k in klines]
+        lows = [self._to_float(k.get("low")) for k in klines]
+        volumes = [self._to_float(k.get("volume")) for k in klines]
+
+        current_price = closes[-1]
+        if current_price <= 0:
+            return None
+
+        ema9 = self.ta.calculate_ema(closes, 9)
+        ema21 = self.ta.calculate_ema(closes, 21)
+        ema200 = self.ta.calculate_ema(closes, 200)
+        rsi = self.ta.calculate_rsi(closes, 14)
+        vwap = self.ta.calculate_vwap(highs, lows, closes, volumes)
+
+        if current_price > ema200 and ema9 > ema21 and current_price > vwap:
+            direction = "LONG"
+        elif current_price < ema200 and ema9 < ema21 and current_price < vwap:
+            direction = "SHORT"
+        else:
+            direction = "NEUTRAL"
+
+        volume_window = volumes[-20:] if len(volumes) >= 20 else volumes
+        avg_volume = float(np.mean(volume_window)) if volume_window else 0.0
+        current_volume = float(volumes[-1]) if volumes else 0.0
+        min_volume_ratio = max(0.1, float(getattr(self.config, "TREND_STRONG_MIN_VOLUME_RATIO", 0.9)))
+        volume_ok = avg_volume <= 0 or current_volume >= (avg_volume * min_volume_ratio)
+
+        return {
+            "price": float(current_price),
+            "ema9": float(ema9),
+            "ema21": float(ema21),
+            "ema200": float(ema200),
+            "vwap": float(vwap),
+            "rsi": float(rsi),
+            "direction": direction,
+            "volume_ok": bool(volume_ok),
+        }
+
+    def _is_pullback_to_ema_long(self, candle: Dict[str, Any], ema9: float, ema21: float) -> bool:
+        tolerance_pct = max(0.0, float(getattr(self.config, "TREND_STRONG_PULLBACK_TOLERANCE_PERCENT", 0.10)))
+        tolerance = tolerance_pct / 100.0
+        candle_low = self._to_float(candle.get("low"))
+        return candle_low <= (ema9 * (1 + tolerance)) or candle_low <= (ema21 * (1 + tolerance))
+
+    def _is_pullback_to_ema_short(self, candle: Dict[str, Any], ema9: float, ema21: float) -> bool:
+        tolerance_pct = max(0.0, float(getattr(self.config, "TREND_STRONG_PULLBACK_TOLERANCE_PERCENT", 0.10)))
+        tolerance = tolerance_pct / 100.0
+        candle_high = self._to_float(candle.get("high"))
+        return candle_high >= (ema9 * (1 - tolerance)) or candle_high >= (ema21 * (1 - tolerance))
+
+    def _is_bullish_rejection(self, candle: Dict[str, Any]) -> bool:
+        open_price = self._to_float(candle.get("open"))
+        close_price = self._to_float(candle.get("close"))
+        high_price = self._to_float(candle.get("high"))
+        low_price = self._to_float(candle.get("low"))
+
+        if high_price <= low_price:
+            return False
+
+        body = abs(close_price - open_price)
+        range_size = max(high_price - low_price, 1e-9)
+        lower_wick = max(0.0, min(open_price, close_price) - low_price)
+        upper_wick = max(0.0, high_price - max(open_price, close_price))
+
+        if close_price <= open_price:
+            return False
+
+        return (
+            lower_wick >= max(body * 1.2, range_size * 0.30)
+            and lower_wick > upper_wick * 1.1
+        )
+
+    def _is_bearish_rejection(self, candle: Dict[str, Any]) -> bool:
+        open_price = self._to_float(candle.get("open"))
+        close_price = self._to_float(candle.get("close"))
+        high_price = self._to_float(candle.get("high"))
+        low_price = self._to_float(candle.get("low"))
+
+        if high_price <= low_price:
+            return False
+
+        body = abs(close_price - open_price)
+        range_size = max(high_price - low_price, 1e-9)
+        upper_wick = max(0.0, high_price - max(open_price, close_price))
+        lower_wick = max(0.0, min(open_price, close_price) - low_price)
+
+        if close_price >= open_price:
+            return False
+
+        return (
+            upper_wick >= max(body * 1.2, range_size * 0.30)
+            and upper_wick > lower_wick * 1.1
+        )
+
+    def _is_bullish_engulfing(self, previous: Dict[str, Any], current: Dict[str, Any]) -> bool:
+        prev_open = self._to_float(previous.get("open"))
+        prev_close = self._to_float(previous.get("close"))
+        curr_open = self._to_float(current.get("open"))
+        curr_close = self._to_float(current.get("close"))
+
+        return (
+            prev_close < prev_open
+            and curr_close > curr_open
+            and curr_open <= prev_close
+            and curr_close >= prev_open
+        )
+
+    def _is_bearish_engulfing(self, previous: Dict[str, Any], current: Dict[str, Any]) -> bool:
+        prev_open = self._to_float(previous.get("open"))
+        prev_close = self._to_float(previous.get("close"))
+        curr_open = self._to_float(current.get("open"))
+        curr_close = self._to_float(current.get("close"))
+
+        return (
+            prev_close > prev_open
+            and curr_close < curr_open
+            and curr_open >= prev_close
+            and curr_close <= prev_open
+        )
+
+    def analyze_market_pullback(
+        self,
+        execution_klines: List[Dict],
+        confirmation_klines: List[Dict],
+    ) -> Signal:
+        """
+        Sinal do trend_strong:
+        - tendência alinhada em execução (1m/3m) e confirmação (5m)
+        - entrada apenas em pullback para EMA9/EMA21
+        - RSI em faixa + candle de rejeição/engolfo + filtro de volume
+        """
+        if not execution_klines or not confirmation_klines or len(execution_klines) < 2:
+            return Signal.NEUTRAL
+
+        exec_ctx = self._build_trend_context(execution_klines)
+        confirm_ctx = self._build_trend_context(confirmation_klines)
+        if not exec_ctx or not confirm_ctx:
+            return Signal.NEUTRAL
+
+        exec_direction = str(exec_ctx.get("direction", "NEUTRAL"))
+        confirm_direction = str(confirm_ctx.get("direction", "NEUTRAL"))
+        if exec_direction == "NEUTRAL" or exec_direction != confirm_direction:
+            return Signal.NEUTRAL
+
+        previous_candle = execution_klines[-2]
+        current_candle = execution_klines[-1]
+        rsi = float(exec_ctx.get("rsi", 50.0))
+        volume_ok = bool(exec_ctx.get("volume_ok", False))
+
+        if exec_direction == "LONG":
+            pullback_ok = self._is_pullback_to_ema_long(
+                current_candle,
+                float(exec_ctx["ema9"]),
+                float(exec_ctx["ema21"]),
+            )
+            rsi_ok = float(getattr(self.config, "TREND_STRONG_LONG_RSI_MIN", 40.0)) <= rsi <= float(
+                getattr(self.config, "TREND_STRONG_LONG_RSI_MAX", 55.0)
+            )
+            candle_ok = (
+                self._is_bullish_rejection(current_candle)
+                or self._is_bullish_engulfing(previous_candle, current_candle)
+            )
+            if pullback_ok and rsi_ok and candle_ok and volume_ok:
+                return Signal.STRONG_BUY
+            return Signal.NEUTRAL
+
+        pullback_ok = self._is_pullback_to_ema_short(
+            current_candle,
+            float(exec_ctx["ema9"]),
+            float(exec_ctx["ema21"]),
+        )
+        rsi_ok = float(getattr(self.config, "TREND_STRONG_SHORT_RSI_MIN", 45.0)) <= rsi <= float(
+            getattr(self.config, "TREND_STRONG_SHORT_RSI_MAX", 60.0)
+        )
+        candle_ok = (
+            self._is_bearish_rejection(current_candle)
+            or self._is_bearish_engulfing(previous_candle, current_candle)
+        )
+        if pullback_ok and rsi_ok and candle_ok and volume_ok:
+            return Signal.STRONG_SELL
+
+        return Signal.NEUTRAL
     
     def calculate_position_sizes(
         self, 
@@ -377,7 +614,8 @@ class HedgeStrategy:
         self, 
         entry_price: float, 
         signal: Signal,
-        atr: float = None
+        atr: float = None,
+        risk_profile: Optional[Dict[str, Any]] = None,
     ) -> Tuple[float, float]:
         """
         Calcula Stop Loss e Take Profit.
@@ -388,6 +626,37 @@ class HedgeStrategy:
         
         O ATR ajusta o SL/TP à volatilidade atual do mercado.
         """
+        profile = risk_profile if isinstance(risk_profile, dict) else None
+        if profile:
+            if hasattr(self.config, "_normalize_trend_risk_profile"):
+                profile = self.config._normalize_trend_risk_profile(profile)
+            stop_loss_min = float(profile.get("stop_loss_min_percent", 0.3))
+            stop_loss_max = float(profile.get("stop_loss_max_percent", 0.8))
+            take_profit_min = float(profile.get("take_profit_min_percent", 0.5))
+            take_profit_max = float(profile.get("take_profit_max_percent", 1.5))
+            risk_reward_target = max(1.0, float(profile.get("risk_reward_target", 2.0)))
+
+            if atr and atr > 0 and entry_price > 0:
+                base_stop_loss_pct = (float(atr) * 2.0 / float(entry_price)) * 100.0
+            else:
+                base_stop_loss_pct = (stop_loss_min + stop_loss_max) / 2.0
+
+            stop_loss_pct = max(stop_loss_min, min(base_stop_loss_pct, stop_loss_max))
+            take_profit_pct = stop_loss_pct * risk_reward_target
+            take_profit_pct = max(take_profit_min, min(take_profit_pct, take_profit_max))
+
+            adjusted_stop_loss_pct = take_profit_pct / risk_reward_target
+            if stop_loss_min <= adjusted_stop_loss_pct <= stop_loss_max:
+                stop_loss_pct = adjusted_stop_loss_pct
+
+            if signal in [Signal.STRONG_BUY, Signal.BUY, Signal.NEUTRAL]:
+                stop_loss = entry_price * (1 - stop_loss_pct / 100.0)
+                take_profit = entry_price * (1 + take_profit_pct / 100.0)
+            else:
+                stop_loss = entry_price * (1 + stop_loss_pct / 100.0)
+                take_profit = entry_price * (1 - take_profit_pct / 100.0)
+            return (round(stop_loss, 2), round(take_profit, 2))
+
         if signal in [Signal.STRONG_BUY, Signal.BUY, Signal.NEUTRAL]:
             # Posição principal é LONG
             if atr and atr > 0:
@@ -414,7 +683,11 @@ class HedgeStrategy:
         symbol: str, 
         klines: List[Dict],
         available_capital: float,
-        min_notional: float = 5.0
+        min_notional: float = 5.0,
+        risk_profile: Optional[Dict[str, Any]] = None,
+        confirmation_klines: Optional[List[Dict]] = None,
+        execution_timeframe: Optional[str] = None,
+        confirmation_timeframe: Optional[str] = None,
     ) -> Optional[TradeSetup]:
         """
         Gera uma configuração completa de trade.
@@ -431,8 +704,11 @@ class HedgeStrategy:
         if not klines:
             return None
         
-        # Analisa o mercado
-        signal = self.analyze_market(klines)
+        # Analisa o mercado (pullback multi-timeframe para trend_strong, fallback legado para demais casos).
+        if confirmation_klines:
+            signal = self.analyze_market_pullback(klines, confirmation_klines)
+        else:
+            signal = self.analyze_market(klines)
         
         # Preço atual
         entry_price = klines[-1]['close']
@@ -457,7 +733,7 @@ class HedgeStrategy:
         
         # Calcula SL e TP
         stop_loss, take_profit = self.calculate_stop_loss_take_profit(
-            entry_price, signal, atr
+            entry_price, signal, atr, risk_profile=risk_profile
         )
         
         # Calcula níveis de DCA
@@ -627,6 +903,10 @@ class RangeScalpingStrategy:
         klines: List[Dict],
         available_capital: float,
         min_notional: float = 5.0,
+        risk_profile: Optional[Dict[str, Any]] = None,
+        confirmation_klines: Optional[List[Dict]] = None,
+        execution_timeframe: Optional[str] = None,
+        confirmation_timeframe: Optional[str] = None,
     ) -> Optional[TradeSetup]:
         if not klines or len(klines) < 12:
             return None
