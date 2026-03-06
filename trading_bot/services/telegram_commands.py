@@ -296,7 +296,8 @@ class TelegramCommandHandler:
             
             # Extrai comando e argumentos
             parts = text.split()
-            command = parts[0].lower()
+            command_token = parts[0].lower()
+            command = command_token.split("@", 1)[0]
             args = parts[1:] if len(parts) > 1 else []
             
             # Executa o comando
@@ -308,6 +309,13 @@ class TelegramCommandHandler:
                 
         except Exception as e:
             logger.error(f"Erro ao processar update: {e}")
+            try:
+                self.send_message(
+                    "❌ Erro ao executar comando.\n"
+                    "Verifique os parâmetros e tente novamente."
+                )
+            except Exception:
+                logger.error("Falha ao enviar mensagem de erro para o Telegram.")
     
     # ============================================
     # COMANDOS DE CONTROLE
