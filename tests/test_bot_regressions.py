@@ -1,5 +1,4 @@
 from datetime import datetime
-from threading import Lock
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -264,6 +263,41 @@ def test_analyze_and_trade_skips_reentry_when_long_is_already_open(monkeypatch):
     bot.execute_signal_trade.assert_not_called()
 
 
+def test_analyze_and_trade_ignores_weak_buy_signal(monkeypatch):
+    bot = _make_light_bot()
+
+    monkeypatch.setattr(config, "USE_DAILY_TARGETS", False)
+    monkeypatch.setattr(config, "TIMEFRAME", "5m")
+    monkeypatch.setattr(config, "CANDLES_LOOKBACK", 50)
+
+    setup = TradeSetup(
+        symbol="ETHUSDT",
+        signal=Signal.BUY,
+        long_size=5.0,
+        short_size=5.0,
+        entry_price=100.0,
+        stop_loss=98.0,
+        take_profit=102.0,
+        dca_levels=[],
+    )
+
+    bot.exchange = SimpleNamespace(
+        get_klines=lambda **_kwargs: [{"close": 100.0}],
+        get_available_balance=lambda: 1000.0,
+        get_symbol_info=lambda _symbol: {"minNotional": 5.0},
+        get_open_positions=lambda: [],
+    )
+    bot.strategy = SimpleNamespace(generate_trade_setup=lambda **_kwargs: setup)
+    bot.risk_manager = SimpleNamespace(can_open_position=lambda _total: True)
+    bot.sentiment_mode_enabled = False
+    bot.execute_signal_trade = MagicMock(return_value=True)
+
+    result = bot.analyze_and_trade("ETHUSDT")
+
+    assert result is False
+    bot.execute_signal_trade.assert_not_called()
+
+
 def test_analyze_and_trade_skips_reentry_when_short_is_already_open(monkeypatch):
     bot = _make_light_bot()
 
@@ -300,6 +334,41 @@ def test_analyze_and_trade_skips_reentry_when_short_is_already_open(monkeypatch)
         generate_trade_setup=lambda **_kwargs: setup
     )
     bot.risk_manager = SimpleNamespace(can_open_position=lambda _total: True)
+    bot.execute_signal_trade = MagicMock(return_value=True)
+
+    result = bot.analyze_and_trade("ETHUSDT")
+
+    assert result is False
+    bot.execute_signal_trade.assert_not_called()
+
+
+def test_analyze_and_trade_ignores_weak_sell_signal(monkeypatch):
+    bot = _make_light_bot()
+
+    monkeypatch.setattr(config, "USE_DAILY_TARGETS", False)
+    monkeypatch.setattr(config, "TIMEFRAME", "5m")
+    monkeypatch.setattr(config, "CANDLES_LOOKBACK", 50)
+
+    setup = TradeSetup(
+        symbol="ETHUSDT",
+        signal=Signal.SELL,
+        long_size=5.0,
+        short_size=5.0,
+        entry_price=100.0,
+        stop_loss=102.0,
+        take_profit=98.0,
+        dca_levels=[],
+    )
+
+    bot.exchange = SimpleNamespace(
+        get_klines=lambda **_kwargs: [{"close": 100.0}],
+        get_available_balance=lambda: 1000.0,
+        get_symbol_info=lambda _symbol: {"minNotional": 5.0},
+        get_open_positions=lambda: [],
+    )
+    bot.strategy = SimpleNamespace(generate_trade_setup=lambda **_kwargs: setup)
+    bot.risk_manager = SimpleNamespace(can_open_position=lambda _total: True)
+    bot.sentiment_mode_enabled = False
     bot.execute_signal_trade = MagicMock(return_value=True)
 
     result = bot.analyze_and_trade("ETHUSDT")
@@ -568,31 +637,6 @@ def test_normalize_double_first_state_accepts_legacy_formats():
         {"short": True, "BTCUSDT_LONG": 1, "foo": True, "ADAUSDT_SHORT": False}
     )
     assert normalized_from_dict == {"SHORT": True, "BTCUSDT_LONG": True}
-
-
-def test_format_duration_short_renders_expected_units():
-    bot = _make_light_bot()
-
-    assert bot._format_duration_short(9.1) == "9s"
-    assert bot._format_duration_short(80) == "1m 20s"
-    assert bot._format_duration_short(3660) == "1h 01m"
-
-
-def test_estimate_analysis_step_seconds_uses_runtime_average_with_fallback():
-    bot = _make_light_bot()
-
-    bot._runtime_stats_lock = Lock()
-    bot._runtime_stats_since_report = {
-        "analysis_steps": 4,
-        "analysis_total_seconds": 10.0,
-    }
-    assert bot._estimate_analysis_step_seconds(0.8) == 2.5
-
-    bot._runtime_stats_since_report = {
-        "analysis_steps": 0,
-        "analysis_total_seconds": 0.0,
-    }
-    assert bot._estimate_analysis_step_seconds(0.8) == 0.8
 
 
 def test_analyze_and_trade_blocks_signal_when_sentiment_conflicts(monkeypatch):

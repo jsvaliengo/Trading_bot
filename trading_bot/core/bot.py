@@ -370,42 +370,6 @@ class TradingBot:
             self._runtime_stats_since_report['loop_errors'] += 1
             self._runtime_stats_since_report['last_error'] = str(error)[:240]
 
-    @staticmethod
-    def _format_duration_short(seconds: float) -> str:
-        """Formata duração curta para mensagens operacionais."""
-        total = max(0, int(round(float(seconds))))
-        if total < 60:
-            return f"{total}s"
-
-        minutes, sec = divmod(total, 60)
-        if minutes < 60:
-            return f"{minutes}m {sec:02d}s"
-
-        hours, mins = divmod(minutes, 60)
-        return f"{hours}h {mins:02d}m"
-
-    def _estimate_analysis_step_seconds(self, fallback_seconds: float) -> float:
-        """
-        Estima duração média por símbolo no ciclo de análise.
-        Usa telemetria recente e fallback para o delay configurado.
-        """
-        fallback = max(0.1, float(fallback_seconds or 0.1))
-        if not hasattr(self, "_runtime_stats_lock") or not hasattr(self, "_runtime_stats_since_report"):
-            return fallback
-
-        try:
-            with self._runtime_stats_lock:
-                steps = int(self._runtime_stats_since_report.get("analysis_steps", 0) or 0)
-                total = float(self._runtime_stats_since_report.get("analysis_total_seconds", 0.0) or 0.0)
-        except Exception:
-            return fallback
-
-        if steps <= 0 or total <= 0:
-            return fallback
-
-        avg = total / steps
-        return max(fallback, avg)
-
     def get_runtime_stats_report(self, reset: bool = True) -> Dict[str, Any]:
         """
         Retorna estatísticas de runtime acumuladas desde o último report.
@@ -1883,8 +1847,8 @@ class TradingBot:
         Analisa um par e executa trades se houver oportunidade.
         
         ESTRATÉGIA DIRECIONAL BASEADA EM SINAIS:
-        - BUY ou STRONG_BUY → Abre LONG (se não tiver LONG aberto)
-        - SELL ou STRONG_SELL → Abre SHORT (se não tiver SHORT aberto)
+        - STRONG_BUY → Abre LONG (se não tiver LONG aberto)
+        - STRONG_SELL → Abre SHORT (se não tiver SHORT aberto)
         - NEUTRAL → Não faz nada
         
         Pode ter LONG e SHORT ao mesmo tempo se o sinal mudar depois.
@@ -1936,10 +1900,10 @@ class TradingBot:
         signal = setup.signal
         signal_name = signal.name if hasattr(signal, 'name') else str(signal)
         
-        # Define se deve abrir LONG ou SHORT baseado no sinal
-        # Agora aceita BUY, STRONG_BUY para LONG e SELL, STRONG_SELL para SHORT
-        should_open_long = signal_name in ['BUY', 'STRONG_BUY']
-        should_open_short = signal_name in ['SELL', 'STRONG_SELL']
+        # Define se deve abrir LONG ou SHORT baseado no sinal.
+        # REGRA ATUAL: só entra com sinais fortes.
+        should_open_long = signal_name == 'STRONG_BUY'
+        should_open_short = signal_name == 'STRONG_SELL'
 
         # Aplica filtro direcional de sentimento (quando ativo).
         should_open_long, should_open_short = self._apply_sentiment_direction_filter(
@@ -1950,8 +1914,13 @@ class TradingBot:
 
         # Se sinal é NEUTRAL ou foi filtrado pelo sentimento, não abre posição.
         if not should_open_long and not should_open_short:
-            if self.sentiment_mode_enabled and signal_name in ['BUY', 'STRONG_BUY', 'SELL', 'STRONG_SELL']:
+            if getattr(self, "sentiment_mode_enabled", False) and signal_name in ['STRONG_BUY', 'STRONG_SELL']:
                 logger.info(f"⏸️  Entrada bloqueada por sentimento em {symbol} (sinal={signal_name})")
+            elif signal_name in ['BUY', 'SELL']:
+                logger.info(
+                    f"⏸️  Sinal {signal_name} em {symbol} é fraco para entrada - "
+                    "aguardando STRONG_BUY/STRONG_SELL"
+                )
             else:
                 logger.info(f"⏸️  Sinal {signal_name} em {symbol} - aguardando sinal de entrada")
             return False
@@ -1974,12 +1943,12 @@ class TradingBot:
         # DECIDE O QUE FAZER BASEADO NO SINAL
         # ============================================
         
-        # Se sinal é BUY/STRONG_BUY mas já tem LONG, não faz nada
+        # Se sinal forte de compra, mas já tem LONG, não faz nada.
         if should_open_long and has_long:
             logger.info(f"⏸️  Sinal {signal_name} em {symbol} mas LONG já está aberto")
             return False
         
-        # Se sinal é SELL/STRONG_SELL mas já tem SHORT, não faz nada
+        # Se sinal forte de venda, mas já tem SHORT, não faz nada.
         if should_open_short and has_short:
             logger.info(f"⏸️  Sinal {signal_name} em {symbol} mas SHORT já está aberto")
             return False
@@ -2086,7 +2055,7 @@ class TradingBot:
             )
             
             # ============================================
-            # ABRE LONG (se sinal é BUY/STRONG_BUY)
+            # ABRE LONG (quando sinal de entrada direciona para compra)
             # ============================================
             if open_long:
                 # Verifica se atende ao mínimo (minNotional é NOTIONAL; order_size é MARGEM)
@@ -2176,7 +2145,7 @@ class TradingBot:
                 return True
             
             # ============================================
-            # ABRE SHORT (se sinal é SELL/STRONG_SELL)
+            # ABRE SHORT (quando sinal de entrada direciona para venda)
             # ============================================
             if open_short:
                 # Verifica se atende ao mínimo (minNotional é NOTIONAL; order_size é MARGEM)
@@ -3641,12 +3610,6 @@ class TradingBot:
         analysis_cycle_active = False
         analysis_symbols = []
         analysis_index = 0
-        analysis_cycle_started_at = 0.0
-        analysis_last_symbol = ""
-        analysis_progress_sent_in_cycle = False
-        analysis_progress_next_time = now + max(
-            30, int(getattr(config, "TELEGRAM_ANALYSIS_PROGRESS_INTERVAL_SECONDS", 180))
-        )
         
         # Inicia polling de comandos do Telegram
         logger.info("🎮 Iniciando polling de comandos Telegram...")
@@ -3773,9 +3736,6 @@ class TradingBot:
                         analysis_cycle_active = False
                         analysis_symbols = []
                         analysis_index = 0
-                        analysis_cycle_started_at = 0.0
-                        analysis_last_symbol = ""
-                        analysis_progress_sent_in_cycle = False
 
                     if now >= next_analysis_cycle_time:
                         next_analysis_cycle_time = now + analysis_cycle_interval
@@ -3787,52 +3747,12 @@ class TradingBot:
                         analysis_cycle_active = True
                         analysis_cycle += 1
                         next_analysis_step_time = now
-                        analysis_cycle_started_at = now
-                        analysis_last_symbol = ""
-                        analysis_progress_sent_in_cycle = False
 
                         logger.info(
                             f"🔍 Iniciando ciclo de análise #{analysis_cycle} "
                             f"em {len(analysis_symbols)} pares: "
                             f"{', '.join([p.replace('USDT', '') for p in analysis_symbols])}"
                         )
-
-                        progress_enabled = bool(
-                            getattr(config, "TELEGRAM_ANALYSIS_PROGRESS_ENABLED", True)
-                        )
-                        progress_min_cycle_seconds = max(
-                            0, int(getattr(config, "TELEGRAM_ANALYSIS_PROGRESS_MIN_CYCLE_SECONDS", 90))
-                        )
-
-                        estimated_step_seconds = self._estimate_analysis_step_seconds(
-                            analysis_symbol_delay
-                        )
-                        estimated_cycle_seconds = len(analysis_symbols) * estimated_step_seconds
-
-                        if (
-                            progress_enabled
-                            and estimated_cycle_seconds >= progress_min_cycle_seconds
-                            and now >= analysis_progress_next_time
-                        ):
-                            self.telegram.send_message(
-                                "🔎 <b>ANÁLISE DE PARES EM ANDAMENTO</b>\n\n"
-                                f"🔁 <b>Ciclo:</b> <code>#{analysis_cycle}</code>\n"
-                                f"📊 <b>Pares:</b> <code>{len(analysis_symbols)}</code>\n"
-                                f"⏱️ <b>Estimativa:</b> <code>{self._format_duration_short(estimated_cycle_seconds)}</code>\n\n"
-                                "<i>Estou ativo e analisando os pares. "
-                                "Avisarei o progresso periodicamente.</i>"
-                            )
-                            analysis_progress_sent_in_cycle = True
-                            analysis_progress_next_time = now + max(
-                                30,
-                                int(
-                                    getattr(
-                                        config,
-                                        "TELEGRAM_ANALYSIS_PROGRESS_INTERVAL_SECONDS",
-                                        180,
-                                    )
-                                ),
-                            )
 
                     # Analisa um símbolo por vez (intercalado com monitoramento)
                     if analysis_cycle_active and now >= next_analysis_step_time:
@@ -3848,74 +3768,11 @@ class TradingBot:
                                 target_interval_seconds=analysis_symbol_delay,
                                 symbol=symbol
                             )
-                            analysis_last_symbol = symbol
                             next_analysis_step_time = now + analysis_symbol_delay
-
-                            progress_enabled = bool(
-                                getattr(config, "TELEGRAM_ANALYSIS_PROGRESS_ENABLED", True)
-                            )
-                            if progress_enabled and now >= analysis_progress_next_time:
-                                total_symbols = len(analysis_symbols)
-                                progress_pct = (
-                                    int((analysis_index / total_symbols) * 100)
-                                    if total_symbols
-                                    else 100
-                                )
-                                elapsed_seconds = max(0.0, time.monotonic() - analysis_cycle_started_at)
-                                estimated_step_seconds = self._estimate_analysis_step_seconds(
-                                    analysis_symbol_delay
-                                )
-                                remaining_symbols = max(0, total_symbols - analysis_index)
-                                remaining_seconds = remaining_symbols * estimated_step_seconds
-                                symbol_display = analysis_last_symbol or "-"
-
-                                self.telegram.send_message(
-                                    "🔎 <b>ANÁLISE DE PARES EM ANDAMENTO</b>\n\n"
-                                    f"🔁 <b>Ciclo:</b> <code>#{analysis_cycle}</code>\n"
-                                    f"📈 <b>Progresso:</b> <code>{analysis_index}/{total_symbols} ({progress_pct}%)</code>\n"
-                                    f"🪙 <b>Último par:</b> <code>{symbol_display}</code>\n"
-                                    f"⏳ <b>Tempo decorrido:</b> <code>{self._format_duration_short(elapsed_seconds)}</code>\n"
-                                    f"⌛ <b>Estimativa restante:</b> <code>{self._format_duration_short(remaining_seconds)}</code>"
-                                )
-                                analysis_progress_sent_in_cycle = True
-                                analysis_progress_next_time = now + max(
-                                    30,
-                                    int(
-                                        getattr(
-                                            config,
-                                            "TELEGRAM_ANALYSIS_PROGRESS_INTERVAL_SECONDS",
-                                            180,
-                                        )
-                                    ),
-                                )
 
                         # Finaliza ciclo quando todos os pares forem processados
                         if analysis_index >= len(analysis_symbols):
-                            cycle_elapsed_seconds = max(
-                                0.0, time.monotonic() - analysis_cycle_started_at
-                            )
-                            if (
-                                bool(getattr(config, "TELEGRAM_ANALYSIS_PROGRESS_ENABLED", True))
-                                and analysis_progress_sent_in_cycle
-                            ):
-                                self.telegram.send_message(
-                                    "✅ <b>CICLO DE ANÁLISE CONCLUÍDO</b>\n\n"
-                                    f"🔁 <b>Ciclo:</b> <code>#{analysis_cycle}</code>\n"
-                                    f"📊 <b>Pares analisados:</b> <code>{len(analysis_symbols)}</code>\n"
-                                    f"⏱️ <b>Duração:</b> <code>{self._format_duration_short(cycle_elapsed_seconds)}</code>\n"
-                                    f"🕒 <b>Próximo ciclo em:</b> <code>{self._format_duration_short(analysis_cycle_interval)}</code>"
-                                )
-
-                                # Evita mensagens em sequência imediata entre ciclos.
-                                analysis_progress_next_time = max(
-                                    analysis_progress_next_time,
-                                    now + max(30, analysis_cycle_interval),
-                                )
-
                             analysis_cycle_active = False
-                            analysis_cycle_started_at = 0.0
-                            analysis_last_symbol = ""
-                            analysis_progress_sent_in_cycle = False
                             next_analysis_cycle_time = now + analysis_cycle_interval
 
                 # Sleep curto para não ocupar CPU em busy-loop
