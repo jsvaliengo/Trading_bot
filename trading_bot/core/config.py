@@ -624,6 +624,23 @@ class TradingConfig:
         self.TRADING_PAIRS = self.filter_disabled_pairs(self.TRADING_PAIRS)
 
         # Perfis de estratégia (mantém compatibilidade com TRADING_PAIRS legado)
+        if self.STRATEGY_PROFILES is None:
+            self.STRATEGY_PROFILES = [
+                {
+                    "name": "trend_strong",
+                    "enabled": True,
+                    "strategy_type": "trend_signal",
+                    "entry_mode": "strong_only",
+                    "pairs": ["BTCUSDT", "BNBUSDT", "XRPUSDT"],
+                },
+                {
+                    "name": "range_scalp_v1",
+                    "enabled": True,
+                    "strategy_type": "range_scalping",
+                    "entry_mode": "strong_only",
+                    "pairs": ["DOGEUSDT", "AVAXUSDT", "MATICUSDT"],
+                },
+            ]
         self.STRATEGY_PROFILES = self._normalize_strategy_profiles(self.STRATEGY_PROFILES)
         strategy_pairs = []
         for profile in self.get_enabled_strategy_profiles():
