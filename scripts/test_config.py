@@ -72,7 +72,6 @@ MOCK_PAIRS_DATA = {
     "SOLUSDT": {"volume": 200_000_000, "volatility": 4.5, "trend": 2.1, "funding": 0.025, "spread": 0.03, "min_notional": 5},
     "XRPUSDT": {"volume": 180_000_000, "volatility": 3.2, "trend": 1.0, "funding": 0.01, "spread": 0.02, "min_notional": 5},
     "DOGEUSDT": {"volume": 120_000_000, "volatility": 5.0, "trend": 1.8, "funding": 0.03, "spread": 0.04, "min_notional": 5},
-    "AVAXUSDT": {"volume": 100_000_000, "volatility": 4.0, "trend": 2.5, "funding": 0.02, "spread": 0.03, "min_notional": 5},
     "LINKUSDT": {"volume": 90_000_000, "volatility": 3.5, "trend": 1.5, "funding": 0.015, "spread": 0.03, "min_notional": 5},
     "ADAUSDT": {"volume": 80_000_000, "volatility": 2.5, "trend": 0.5, "funding": 0.01, "spread": 0.03, "min_notional": 5},
     "MATICUSDT": {"volume": 70_000_000, "volatility": 3.8, "trend": 1.2, "funding": 0.02, "spread": 0.04, "min_notional": 5},

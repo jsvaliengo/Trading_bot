@@ -633,7 +633,6 @@ class TradingConfig:
                     "XRPUSDT",
                     "DOGEUSDT",
                     "ADAUSDT",
-                    "AVAXUSDT",
                 ]
         self.FIXED_PAIRS = self.filter_disabled_pairs(self.FIXED_PAIRS)
         self.TRADING_PAIRS = self.filter_disabled_pairs(self.TRADING_PAIRS)

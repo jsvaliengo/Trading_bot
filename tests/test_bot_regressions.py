@@ -735,23 +735,23 @@ def test_sync_strategy_profiles_excludes_reserved_pairs_from_dynamic_primary(mon
                 "enabled": True,
                 "strategy_type": "range_scalping",
                 "entry_mode": "strong_only",
-                "pairs": ["DOGEUSDT", "AVAXUSDT"],
+                "pairs": ["DOGEUSDT", "XRPUSDT"],
             },
         ],
     )
-    monkeypatch.setattr(config, "TRADING_PAIRS", ["BTCUSDT", "DOGEUSDT", "ETHUSDT", "AVAXUSDT"])
+    monkeypatch.setattr(config, "TRADING_PAIRS", ["BTCUSDT", "DOGEUSDT", "ETHUSDT", "XRPUSDT"])
 
     bot._sync_strategy_profiles_with_trading_pairs(
         reason="test-dynamic-primary",
-        primary_pairs=["BTCUSDT", "DOGEUSDT", "ETHUSDT", "AVAXUSDT"],
+        primary_pairs=["BTCUSDT", "DOGEUSDT", "ETHUSDT", "XRPUSDT"],
     )
 
     primary = config.STRATEGY_PROFILES[0]
     secondary = config.STRATEGY_PROFILES[1]
 
     assert primary["pairs"] == ["BTCUSDT", "ETHUSDT"]
-    assert secondary["pairs"] == ["DOGEUSDT", "AVAXUSDT"]
-    assert config.TRADING_PAIRS == ["BTCUSDT", "ETHUSDT", "DOGEUSDT", "AVAXUSDT"]
+    assert secondary["pairs"] == ["DOGEUSDT", "XRPUSDT"]
+    assert config.TRADING_PAIRS == ["BTCUSDT", "ETHUSDT", "DOGEUSDT", "XRPUSDT"]
 
 
 def test_setup_exchange_restores_open_positions_for_reentry_tracking(monkeypatch):
