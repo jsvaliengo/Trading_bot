@@ -156,7 +156,9 @@ class BinanceConnection:
             f"retries={total_retries} ({retry_rate:.1f}%) | "
             f"failures={total_failures} ({failure_rate:.1f}%)"
         )
-        if total_failures > 0:
+        # Só eleva para WARNING quando a taxa de falhas é relevante (>=2% ou >=3 falhas).
+        significant_failure = total_failures >= 3 or failure_rate >= 2.0
+        if significant_failure:
             logger.warning(header)
         else:
             logger.info(header)
@@ -175,7 +177,8 @@ class BinanceConnection:
                 f"   • {label}: calls={data['calls']} | "
                 f"retries={data['retries']} | failures={data['failures']}"
             )
-            if data['failures'] > 0:
+            endpoint_failure_rate = (data['failures'] / data['calls']) * 100 if data['calls'] else 0.0
+            if data['failures'] >= 3 or endpoint_failure_rate >= 2.0:
                 logger.warning(msg)
             else:
                 logger.info(msg)
