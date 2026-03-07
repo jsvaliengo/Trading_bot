@@ -659,7 +659,7 @@ class TradingConfig:
                 },
                 {
                     "name": "range_scalp_v1",
-                    "enabled": True,
+                    "enabled": False,
                     "strategy_type": "range_scalping",
                     "entry_mode": "strong_only",
                     "pairs": ["DOGEUSDT", "XRPUSDT", "POLUSDT", "LTCUSDT", "LINKUSDT", "DOTUSDT", "BNBUSDT"],

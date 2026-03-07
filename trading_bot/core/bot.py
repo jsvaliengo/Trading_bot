@@ -3954,6 +3954,58 @@ class TradingBot:
             bot_start_time=self.start_time if hasattr(self, 'start_time') else now_brt
         )
 
+    def set_strategy_enabled(self, name: str, enabled: bool) -> str:
+        """
+        Ativa ou desativa uma estratégia pelo nome em runtime.
+
+        Retorna mensagem de resultado para exibir no Telegram.
+        """
+        profiles = list(getattr(config, "STRATEGY_PROFILES", []) or [])
+        target = next((p for p in profiles if p.get("name") == name), None)
+        if target is None:
+            available = ", ".join(p.get("name", "?") for p in profiles)
+            return f"❌ Estratégia <code>{name}</code> não encontrada.\nDisponíveis: <code>{available}</code>"
+
+        current = bool(target.get("enabled", True))
+        if current == enabled:
+            state = "ativa" if enabled else "desativada"
+            return f"ℹ️ Estratégia <code>{name}</code> já está {state}."
+
+        target["enabled"] = enabled
+        config.STRATEGY_PROFILES = profiles
+        self._sync_strategy_profiles_with_trading_pairs(
+            reason=f"strategy-{'enable' if enabled else 'disable'}"
+        )
+        self.save_state()
+
+        state = "✅ ativada" if enabled else "⏸️ desativada"
+        pairs = target.get("pairs") or []
+        pairs_info = f"{len(pairs)} pares fixos" if pairs else "seleção automática"
+        return (
+            f"{state} — <b>{name}</b>\n"
+            f"📋 Tipo: <code>{target.get('strategy_type', '?')}</code>\n"
+            f"🪙 Pares: <code>{pairs_info}</code>"
+        )
+
+    def list_strategies(self) -> str:
+        """Retorna resumo das estratégias configuradas para exibir no Telegram."""
+        profiles = list(getattr(config, "STRATEGY_PROFILES", []) or [])
+        if not profiles:
+            return "⚠️ Nenhuma estratégia configurada."
+
+        lines = ["📋 <b>ESTRATÉGIAS</b>\n"]
+        for p in profiles:
+            name = p.get("name", "?")
+            enabled = bool(p.get("enabled", True))
+            stype = p.get("strategy_type", "?")
+            pairs = p.get("pairs") or []
+            icon = "✅" if enabled else "⏸️"
+            pairs_info = f"{len(pairs)} pares fixos" if pairs else f"auto (max {p.get('max_pairs', '?')})"
+            lines.append(f"{icon} <b>{name}</b> — <code>{stype}</code> — {pairs_info}")
+
+        lines.append("\n<i>Use /strategy enable|disable &lt;nome&gt;</i>")
+        return "\n".join(lines)
+
     def send_api_health_report(self, force: bool = False, trigger_reason: str = "") -> bool:
         """
         Envia resumo operacional consolidado (API + ordens + runtime) no Telegram.
