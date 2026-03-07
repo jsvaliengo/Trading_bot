@@ -1300,23 +1300,25 @@ class TradingBot:
             logger.info("📊 Usando ESTRATÉGIA BINANCE PADRÃO...")
             strategy = config.get_binance_strategy_for_capital(current_balance)
 
-            all_profiles_fixed = all(
-                bool(p.get("pairs"))
-                for p in (config.get_enabled_strategy_profiles() or [])
-            )
+            # Determina quantos pares selecionar para o perfil primário dinâmico.
+            # Usa "max_pairs" do perfil quando definido; caso contrário, usa o tier.
+            enabled_profiles = config.get_enabled_strategy_profiles() or []
+            primary_profile = enabled_profiles[0] if enabled_profiles else {}
+            primary_is_dynamic = not bool(primary_profile.get("pairs"))
+            num_primary_pairs = int(primary_profile.get("max_pairs") or strategy['num_coins'])
 
-            if all_profiles_fixed:
-                # Todos os perfis têm pares fixos: pula seleção dinâmica por score.
-                logger.info("📌 Pares fixos detectados — ignorando seleção dinâmica por score.")
-                strategy['coins'] = []
-                self.binance_strategy = strategy
-                self._sync_strategy_profiles_with_trading_pairs(reason="setup-binance")
-            else:
-                # Ordena as moedas da lista Binance pelo score (spread, volume, volatility, etc)
-                logger.info("🔄 Ordenando moedas pelo score...")
+            if primary_is_dynamic:
+                # Perfil primário em modo automático: seleciona top N por score,
+                # excluindo pares reservados pelos perfis secundários fixos.
+                logger.info(f"🔄 Selecionando top {num_primary_pairs} pares por score...")
                 if not hasattr(self, "pair_selector") or self.pair_selector is None:
                     self.pair_selector = PairSelector(self.exchange, config)
-                sorted_coins = self.sort_binance_coins_by_score(strategy['num_coins'])
+                # Coleta pares fixos dos perfis secundários para excluir da seleção.
+                reserved = set()
+                for p in enabled_profiles[1:]:
+                    if p.get("pairs"):
+                        reserved.update(p["pairs"])
+                sorted_coins = self.sort_binance_coins_by_score(num_primary_pairs, exclude=reserved)
                 strategy['coins'] = sorted_coins
                 config.TRADING_PAIRS = self._filter_disabled_pairs(sorted_coins)
                 self.binance_strategy = strategy
@@ -1324,6 +1326,12 @@ class TradingBot:
                     reason="setup-binance",
                     primary_pairs=config.TRADING_PAIRS,
                 )
+            else:
+                # Todos os perfis têm pares fixos: pula seleção dinâmica por score.
+                logger.info("📌 Pares fixos detectados — ignorando seleção dinâmica por score.")
+                strategy['coins'] = []
+                self.binance_strategy = strategy
+                self._sync_strategy_profiles_with_trading_pairs(reason="setup-binance")
 
             # Atualiza pnl_by_symbol para incluir os pares
             for symbol in config.TRADING_PAIRS:
@@ -1710,17 +1718,17 @@ class TradingBot:
                     logger.info(f"   Anterior: {old_strategy['capital_range']} ({old_strategy['num_coins']} moedas)")
                 logger.info(f"   Nova: {new_strategy['capital_range']} ({new_strategy['num_coins']} moedas)")
                 
-                # Ordena as moedas pelo score (apenas em modo dinâmico)
-                all_profiles_fixed = all(
-                    bool(p.get("pairs"))
-                    for p in (config.get_enabled_strategy_profiles() or [])
-                )
-                if all_profiles_fixed:
-                    new_strategy['coins'] = []
-                    self.binance_strategy = new_strategy
-                    self._sync_strategy_profiles_with_trading_pairs(reason="binance-tier-change")
-                else:
-                    sorted_coins = self.sort_binance_coins_by_score(new_strategy['num_coins'])
+                # Reseleciona pares do perfil primário dinâmico ao mudar de faixa.
+                enabled_profiles = config.get_enabled_strategy_profiles() or []
+                primary_profile = enabled_profiles[0] if enabled_profiles else {}
+                primary_is_dynamic = not bool(primary_profile.get("pairs"))
+                if primary_is_dynamic:
+                    num_primary_pairs = int(primary_profile.get("max_pairs") or new_strategy['num_coins'])
+                    reserved = set()
+                    for p in enabled_profiles[1:]:
+                        if p.get("pairs"):
+                            reserved.update(p["pairs"])
+                    sorted_coins = self.sort_binance_coins_by_score(num_primary_pairs, exclude=reserved)
                     new_strategy['coins'] = sorted_coins
                     self.binance_strategy = new_strategy
                     config.TRADING_PAIRS = self._filter_disabled_pairs(sorted_coins)
@@ -1728,6 +1736,10 @@ class TradingBot:
                         reason="binance-tier-change",
                         primary_pairs=config.TRADING_PAIRS,
                     )
+                else:
+                    new_strategy['coins'] = []
+                    self.binance_strategy = new_strategy
+                    self._sync_strategy_profiles_with_trading_pairs(reason="binance-tier-change")
                 
                 # Atualiza pnl_by_symbol para incluir novos pares
                 for symbol in config.TRADING_PAIRS:
@@ -1877,20 +1889,21 @@ class TradingBot:
         
         logger.info("✅ Lista de pares atualizada!")
     
-    def sort_binance_coins_by_score(self, num_coins: int) -> list:
+    def sort_binance_coins_by_score(self, num_coins: int, exclude: set | None = None) -> list:
         """
         Ordena os pares tradáveis da Binance pelo score e retorna os melhores.
-        
+
         Usa os critérios de seleção:
         - spread: 35% (menor = melhor)
         - volume: 30% (maior = melhor)
         - volatility: 20% (maior = melhor)
         - trend: 10% (mais forte = melhor)
         - funding: 5% (menor = melhor)
-        
+
         Args:
             num_coins: Quantidade de moedas para retornar
-            
+            exclude: Conjunto de símbolos a excluir da seleção (ex.: pares fixos de outras estratégias)
+
         Returns:
             Lista das melhores moedas ordenadas por score
         """
@@ -1905,11 +1918,14 @@ class TradingBot:
             logger.warning("⚠️ Sem pares candidatos para calcular score")
             return []
 
+        if exclude:
+            candidate_coins = [c for c in candidate_coins if c not in exclude]
+
         logger.info(f"📊 Calculando scores para {len(candidate_coins)} moedas...")
-        
+
         # Calcula score de cada moeda da lista Binance
         coins_with_scores = []
-        
+
         for symbol in candidate_coins:
             try:
                 # Busca métricas do par usando PairSelector
@@ -1960,27 +1976,31 @@ class TradingBot:
         if not hasattr(self, 'binance_strategy') or self.binance_strategy is None:
             return
 
-        # Pula reordenação quando todos os perfis têm pares fixos.
-        all_profiles_fixed = all(
-            bool(p.get("pairs"))
-            for p in (config.get_enabled_strategy_profiles() or [])
-        )
-        if all_profiles_fixed:
+        # Pula reordenação quando o perfil primário tem pares fixos.
+        enabled_profiles = config.get_enabled_strategy_profiles() or []
+        primary_profile = enabled_profiles[0] if enabled_profiles else {}
+        primary_is_dynamic = not bool(primary_profile.get("pairs"))
+        if not primary_is_dynamic:
             return
 
-        logger.info("🔄 Atualizando ordenação das moedas Binance...")
-        
-        num_coins = self.binance_strategy['num_coins']
+        logger.info("🔄 Atualizando seleção de pares do trend_strong por score...")
+
+        num_primary_pairs = int(primary_profile.get("max_pairs") or self.binance_strategy['num_coins'])
+        reserved = set()
+        for p in enabled_profiles[1:]:
+            if p.get("pairs"):
+                reserved.update(p["pairs"])
+
         old_coins = list(config.TRADING_PAIRS)
-        
-        # Reordena as moedas pelo score
-        new_coins = self.sort_binance_coins_by_score(num_coins)
-        
+
+        # Reseleciona os melhores pares excluindo os fixos do range_scalp_v1
+        new_coins = self.sort_binance_coins_by_score(num_primary_pairs, exclude=reserved)
+
         # Verifica se mudou
         if new_coins == old_coins:
-            logger.info("✅ Ordenação das moedas não mudou")
+            logger.info("✅ Seleção de pares não mudou")
             return
-        
+
         # Atualiza
         config.TRADING_PAIRS = self._filter_disabled_pairs(new_coins)
         self.binance_strategy['coins'] = new_coins
@@ -2006,7 +2026,7 @@ class TradingBot:
         coins_display = ', '.join([c.replace('USDT', '') for c in new_coins])
         self.telegram.send_message(
             f"🔄 <b>MOEDAS REORDENADAS POR SCORE</b>\n\n"
-            f"🪙 <b>Nova Ordem ({num_coins}):</b>\n{coins_display}\n\n"
+            f"🪙 <b>Nova Ordem ({num_primary_pairs}):</b>\n{coins_display}\n\n"
             f"<i>Baseado em: spread, volume, volatilidade, tendência, funding</i>"
         )
         
