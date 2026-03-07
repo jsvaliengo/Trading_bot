@@ -586,7 +586,7 @@ class TradingConfig:
 
         # Pares desabilitados por padrão (podem ser reabilitados via Telegram)
         if self.DISABLED_PAIRS is None:
-            self.DISABLED_PAIRS = ["ETHUSDT", "SOLUSDT", "ADAUSDT", "SIGNUSDT"]
+            self.DISABLED_PAIRS = ["ADAUSDT", "SIGNUSDT"]
         self.DISABLED_PAIRS = self.normalize_pair_list(self.DISABLED_PAIRS)
         
         # ============================================
@@ -645,8 +645,7 @@ class TradingConfig:
                     "enabled": True,
                     "strategy_type": "trend_signal",
                     "entry_mode": "strong_only",
-                    # Dinâmico via Binance strategy no runtime
-                    "pairs": [],
+                    "pairs": ["BTCUSDT", "ETHUSDT", "SOLUSDT", "SUIUSDT", "NEARUSDT", "APTUSDT"],
                     # Perfil equilibrado: SL 0.4%-0.6%, TP 0.8%-1.2%, RR alvo ~1:2
                     "risk_profile": {
                         "stop_loss_min_percent": 0.4,
@@ -661,7 +660,7 @@ class TradingConfig:
                     "enabled": True,
                     "strategy_type": "range_scalping",
                     "entry_mode": "strong_only",
-                    "pairs": ["DOGEUSDT", "XRPUSDT", "MATICUSDT"],
+                    "pairs": ["DOGEUSDT", "XRPUSDT", "MATICUSDT", "LTCUSDT", "LINKUSDT", "DOTUSDT", "BNBUSDT"],
                 },
             ]
         self.STRATEGY_PROFILES = self._normalize_strategy_profiles(self.STRATEGY_PROFILES)
