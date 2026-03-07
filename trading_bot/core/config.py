@@ -213,7 +213,7 @@ class TradingConfig:
     DISABLED_PAIRS: List[str] = None  # Será definido no __post_init__
     
     # Número total de pares a operar (fixos + dinâmicos)
-    MAX_TRADING_PAIRS: int = 6
+    MAX_TRADING_PAIRS: int = 20
     
     # ============================================
     # SELEÇÃO INTELIGENTE DE PARES (IA)
