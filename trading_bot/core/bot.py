@@ -1299,38 +1299,48 @@ class TradingBot:
         if config.USE_BINANCE_STRATEGY:
             logger.info("📊 Usando ESTRATÉGIA BINANCE PADRÃO...")
             strategy = config.get_binance_strategy_for_capital(current_balance)
-            
-            # Ordena as moedas da lista Binance pelo score (spread, volume, volatility, etc)
-            logger.info("🔄 Ordenando moedas pelo score...")
-            if not hasattr(self, "pair_selector") or self.pair_selector is None:
-                self.pair_selector = PairSelector(self.exchange, config)
-            sorted_coins = self.sort_binance_coins_by_score(strategy['num_coins'])
-            
-            # Atualiza estratégia com moedas ordenadas
-            strategy['coins'] = sorted_coins
-            config.TRADING_PAIRS = self._filter_disabled_pairs(sorted_coins)  # IMPORTANTE: Atualiza TRADING_PAIRS
-            self.binance_strategy = strategy
-            self._sync_strategy_profiles_with_trading_pairs(
-                reason="setup-binance",
-                primary_pairs=config.TRADING_PAIRS,
+
+            all_profiles_fixed = all(
+                bool(p.get("pairs"))
+                for p in (config.get_enabled_strategy_profiles() or [])
             )
-            
+
+            if all_profiles_fixed:
+                # Todos os perfis têm pares fixos: pula seleção dinâmica por score.
+                logger.info("📌 Pares fixos detectados — ignorando seleção dinâmica por score.")
+                strategy['coins'] = []
+                self.binance_strategy = strategy
+                self._sync_strategy_profiles_with_trading_pairs(reason="setup-binance")
+            else:
+                # Ordena as moedas da lista Binance pelo score (spread, volume, volatility, etc)
+                logger.info("🔄 Ordenando moedas pelo score...")
+                if not hasattr(self, "pair_selector") or self.pair_selector is None:
+                    self.pair_selector = PairSelector(self.exchange, config)
+                sorted_coins = self.sort_binance_coins_by_score(strategy['num_coins'])
+                strategy['coins'] = sorted_coins
+                config.TRADING_PAIRS = self._filter_disabled_pairs(sorted_coins)
+                self.binance_strategy = strategy
+                self._sync_strategy_profiles_with_trading_pairs(
+                    reason="setup-binance",
+                    primary_pairs=config.TRADING_PAIRS,
+                )
+
             # Atualiza pnl_by_symbol para incluir os pares
             for symbol in config.TRADING_PAIRS:
                 if symbol not in self.pnl_by_symbol:
                     self.pnl_by_symbol[symbol] = 0.0
-            
+
             # Define alavancagem para os pares
             for symbol in config.TRADING_PAIRS:
                 self.exchange.set_leverage(symbol, config.LEVERAGE)
-            
+
             logger.info(f"   📈 Faixa de Capital: {strategy['capital_range']}")
             logger.info(f"   💵 Order Size: ${strategy['order_size']}")
             logger.info(
                 f"   🪙 Moedas ({len(config.TRADING_PAIRS)}): "
                 f"{', '.join([c.replace('USDT', '') for c in config.TRADING_PAIRS])}"
             )
-            
+
             # Notifica no Telegram
             coins_display = ', '.join([c.replace('USDT', '') for c in config.TRADING_PAIRS])
             self.telegram.send_message(
@@ -1338,7 +1348,7 @@ class TradingBot:
                 f"💰 <b>Saldo:</b> ${current_balance:.2f}\n"
                 f"📈 <b>Faixa:</b> {strategy['capital_range']}\n"
                 f"💵 <b>Order Size:</b> ${strategy['order_size']}\n"
-                f"🪙 <b>Moedas ({len(config.TRADING_PAIRS)}) - Ordenadas por Score:</b>\n{coins_display}\n\n"
+                f"🪙 <b>Moedas ({len(config.TRADING_PAIRS)}):</b>\n{coins_display}\n\n"
                 f"<i>Atualização a cada 6 horas</i>"
             )
         
@@ -1700,17 +1710,24 @@ class TradingBot:
                     logger.info(f"   Anterior: {old_strategy['capital_range']} ({old_strategy['num_coins']} moedas)")
                 logger.info(f"   Nova: {new_strategy['capital_range']} ({new_strategy['num_coins']} moedas)")
                 
-                # Ordena as moedas pelo score
-                sorted_coins = self.sort_binance_coins_by_score(new_strategy['num_coins'])
-                new_strategy['coins'] = sorted_coins
-                
-                # Atualiza configurações
-                self.binance_strategy = new_strategy
-                config.TRADING_PAIRS = self._filter_disabled_pairs(sorted_coins)
-                self._sync_strategy_profiles_with_trading_pairs(
-                    reason="binance-tier-change",
-                    primary_pairs=config.TRADING_PAIRS,
+                # Ordena as moedas pelo score (apenas em modo dinâmico)
+                all_profiles_fixed = all(
+                    bool(p.get("pairs"))
+                    for p in (config.get_enabled_strategy_profiles() or [])
                 )
+                if all_profiles_fixed:
+                    new_strategy['coins'] = []
+                    self.binance_strategy = new_strategy
+                    self._sync_strategy_profiles_with_trading_pairs(reason="binance-tier-change")
+                else:
+                    sorted_coins = self.sort_binance_coins_by_score(new_strategy['num_coins'])
+                    new_strategy['coins'] = sorted_coins
+                    self.binance_strategy = new_strategy
+                    config.TRADING_PAIRS = self._filter_disabled_pairs(sorted_coins)
+                    self._sync_strategy_profiles_with_trading_pairs(
+                        reason="binance-tier-change",
+                        primary_pairs=config.TRADING_PAIRS,
+                    )
                 
                 # Atualiza pnl_by_symbol para incluir novos pares
                 for symbol in config.TRADING_PAIRS:
@@ -1939,10 +1956,18 @@ class TradingBot:
         """
         if not config.USE_BINANCE_STRATEGY:
             return
-        
+
         if not hasattr(self, 'binance_strategy') or self.binance_strategy is None:
             return
-        
+
+        # Pula reordenação quando todos os perfis têm pares fixos.
+        all_profiles_fixed = all(
+            bool(p.get("pairs"))
+            for p in (config.get_enabled_strategy_profiles() or [])
+        )
+        if all_profiles_fixed:
+            return
+
         logger.info("🔄 Atualizando ordenação das moedas Binance...")
         
         num_coins = self.binance_strategy['num_coins']
