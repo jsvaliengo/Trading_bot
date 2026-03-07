@@ -406,7 +406,8 @@ class TelegramNotifier:
         pnl_gross: float,
         fees: float,
         pnl_net: float,
-        reason: str = ""
+        reason: str = "",
+        strategy_name: str = None
     ) -> bool:
         """
         Envia notificação quando uma posição é fechada.
@@ -464,9 +465,12 @@ class TelegramNotifier:
         
         if reason:
             message += f"\n\n📝 <b>Motivo:</b> {reason}"
-        
+
+        if strategy_name:
+            message += f"\n🤖 <b>Estratégia:</b> {strategy_name}"
+
         message += "\n━━━━━━━━━━━━━━━━━━━━━"
-        
+
         return self.send_message(message)
     
     def send_global_stop_loss_alert(
@@ -507,7 +511,8 @@ class TelegramNotifier:
         entry_price: float,
         current_price: float,
         trailing_stop_price: float,
-        current_profit_pct: float
+        current_profit_pct: float,
+        strategy_name: str = None
     ) -> bool:
         """
         Envia notificação quando o Trailing Stop é ativado.
@@ -516,12 +521,14 @@ class TelegramNotifier:
         name = symbol.replace("USDT", "")
         side_emoji = "📈" if side == "LONG" else "📉"
         
+        strategy_line = f"\n🤖 <b>Estratégia:</b> {strategy_name}" if strategy_name else ""
+
         message = f"""
 🔔 <b>TRAILING STOP ATIVADO</b> <i>({timestamp})</i>
 ━━━━━━━━━━━━━━━━━━━━━
 
 📍 <b>Par:</b> {name}/USDT
-{side_emoji} <b>Lado:</b> {side}
+{side_emoji} <b>Lado:</b> {side}{strategy_line}
 
 💰 <b>Preço entrada:</b> ${entry_price:.4f}
 📊 <b>Preço atual:</b> ${current_price:.4f}
@@ -530,7 +537,7 @@ class TelegramNotifier:
 
 <i>O stop vai subir automaticamente se o preço continuar favorável!</i>
 ━━━━━━━━━━━━━━━━━━━━━"""
-        
+
         return self.send_message(message)
     
     def send_portfolio_evolution(
@@ -547,7 +554,8 @@ class TelegramNotifier:
         trades_win_total: float = 0.0,
         trades_loss_total: float = 0.0,
         history: list = None,
-        bot_start_time = None
+        bot_start_time = None,
+        trades_by_strategy: dict = None
     ) -> bool:
         """
         Envia relatório de evolução da carteira com gráfico em texto.
@@ -623,6 +631,20 @@ class TelegramNotifier:
 <b>📊 PROGRESSO (REALIZADO):</b>
 {bar} {realized_pct_change:+.2f}%"""
         
+        # Breakdown por estratégia
+        if trades_by_strategy and len(trades_by_strategy) > 1:
+            message += "\n\n<b>🤖 POR ESTRATÉGIA:</b>"
+            for strat, data in trades_by_strategy.items():
+                strat_trades = data['wins'] + data['losses']
+                strat_pnl = data['win_value'] + data['loss_value']
+                strat_wr = (data['wins'] / strat_trades * 100) if strat_trades > 0 else 0
+                strat_emoji = "🟢" if strat_pnl > 0 else ("🔴" if strat_pnl < 0 else "⚪")
+                message += (
+                    f"\n   {strat_emoji} <b>{strat}</b>: "
+                    f"<code>{self._format_usd_brl(strat_pnl, 2, True)}</code> "
+                    f"({strat_trades} trades, WR {strat_wr:.0f}%)"
+                )
+
         # Adiciona histórico se tiver dados
         if history and len(history) > 1:
             message += "\n\n<b>📜 HISTÓRICO (REALIZADO):</b>"

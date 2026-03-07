@@ -3139,6 +3139,7 @@ class TradingBot:
                     f"⚠️ <b>POSIÇÃO FECHADA PELA BINANCE</b>\n\n"
                     f"📍 <b>Par:</b> {symbol.replace('USDT', '')}/USDT\n"
                     f"📊 <b>Lado:</b> {side}\n"
+                    f"🤖 <b>Estratégia:</b> {strat_key}\n"
                     f"📝 <b>Motivo:</b> {reason}\n\n"
                     f"<b>💵 RESULTADO:</b>\n"
                     f"   • P&L Bruto: <code>${pnl_gross:+.4f}</code>\n"
@@ -3215,13 +3216,16 @@ class TradingBot:
                 logger.info(f"   Pico: ${peak_price:.4f} | Stop em: ${trailing_stop_price:.4f}")
                 
                 # Envia notificação
+                trailing_pos_meta = getattr(self, 'known_positions', {}).get(position_key, {})
+                trailing_strategy_name = str(trailing_pos_meta.get('strategy_name') or 'primary')
                 self.telegram.send_trailing_stop_activated(
                     symbol=symbol,
                     side=side,
                     entry_price=entry_price,
                     current_price=current_price,
                     trailing_stop_price=trailing_stop_price,
-                    current_profit_pct=profit_pct
+                    current_profit_pct=profit_pct,
+                    strategy_name=trailing_strategy_name
                 )
         
         # Se o trailing está ativado, verifica se foi atingido
@@ -3295,6 +3299,9 @@ class TradingBot:
         side = pos['side']
         entry_price = pos['entry_price']
         quantity = pos['quantity']
+        position_key = f"{symbol}_{side}"
+        pos_meta = getattr(self, 'known_positions', {}).get(position_key, {})
+        strategy_name = str(pos_meta.get('strategy_name') or 'primary')
         logger.info(f"🚨 Fechando posição: {reason}")
         
         # Pega o preço atual ANTES de fechar (será o preço de saída aproximado)
@@ -3383,18 +3390,29 @@ class TradingBot:
         
         # Atualiza taxas por símbolo
         self.trades_by_symbol[symbol]['fees'] = self.trades_by_symbol[symbol].get('fees', 0.0) + total_fees
-        
+
+        # Atualiza trades por estratégia
+        if strategy_name not in self.trades_by_strategy:
+            self.trades_by_strategy[strategy_name] = {'wins': 0, 'losses': 0, 'win_value': 0.0, 'loss_value': 0.0, 'fees': 0.0}
+        if pnl_net > 0:
+            self.trades_by_strategy[strategy_name]['wins'] += 1
+            self.trades_by_strategy[strategy_name]['win_value'] += pnl_net
+        else:
+            self.trades_by_strategy[strategy_name]['losses'] += 1
+            self.trades_by_strategy[strategy_name]['loss_value'] += pnl_net
+        self.trades_by_strategy[strategy_name]['fees'] = self.trades_by_strategy[strategy_name].get('fees', 0.0) + total_fees
+
         # Atualiza P&L por símbolo
         if symbol in self.pnl_by_symbol:
             self.pnl_by_symbol[symbol] += pnl_net
         else:
             self.pnl_by_symbol[symbol] = pnl_net
-        
+
         # Log com estatísticas
         win_rate = (self.trades_win_count / self.closed_trades_count * 100) if self.closed_trades_count > 0 else 0
         logger.info(f"💰 P&L Bruto: ${pnl_gross:.4f} | Taxas: ${total_fees:.4f} | P&L Líquido: ${pnl_net:.4f}")
         logger.info(f"📊 Trade #{self.closed_trades_count} | Win Rate: {win_rate:.1f}% | P&L Diário: ${self.daily_realized_pnl:.2f}")
-        
+
         # Envia notificação no Telegram
         telegram_sent = self.telegram.send_position_closed(
             symbol=symbol,
@@ -3405,7 +3423,8 @@ class TradingBot:
             pnl_gross=pnl_gross,
             fees=total_fees,
             pnl_net=pnl_net,
-            reason=reason
+            reason=reason,
+            strategy_name=strategy_name
         )
         
         if telegram_sent:
@@ -3951,7 +3970,8 @@ class TradingBot:
             trades_win_total=self.trades_win_total,
             trades_loss_total=self.trades_loss_total,
             history=history_data,
-            bot_start_time=self.start_time if hasattr(self, 'start_time') else now_brt
+            bot_start_time=self.start_time if hasattr(self, 'start_time') else now_brt,
+            trades_by_strategy=self.trades_by_strategy if self.trades_by_strategy else None
         )
 
     def set_strategy_enabled(self, name: str, enabled: bool) -> str:
