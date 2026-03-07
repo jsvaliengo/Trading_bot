@@ -645,7 +645,7 @@ class TradingConfig:
                     "enabled": True,
                     "strategy_type": "trend_signal",
                     "entry_mode": "strong_only",
-                    "pairs": ["BTCUSDT", "ETHUSDT", "SOLUSDT", "SUIUSDT", "NEARUSDT", "APTUSDT"],
+                    "pairs": ["BTCUSDT", "ETHUSDT", "SOLUSDT", "SUIUSDT", "NEARUSDT", "APTUSDT", "INJUSDT", "ATOMUSDT", "ARBUSDT", "OPUSDT"],
                     # Perfil equilibrado: SL 0.4%-0.6%, TP 0.8%-1.2%, RR alvo ~1:2
                     "risk_profile": {
                         "stop_loss_min_percent": 0.4,
