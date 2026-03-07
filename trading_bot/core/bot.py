@@ -903,12 +903,15 @@ class TradingBot:
                 }
             ]
 
-        # Mantém pares legados no profile primário quando surgirem fora dos profiles.
-        legacy_pairs = self._filter_disabled_pairs(getattr(config, "TRADING_PAIRS", []) or [])
-        mapped_pairs = {symbol for profile in runtime_profiles for symbol in profile["pairs"]}
-        missing_pairs = [symbol for symbol in legacy_pairs if symbol not in mapped_pairs]
-        if missing_pairs:
-            runtime_profiles[0]["pairs"].extend(missing_pairs)
+        # Mantém pares legados no profile primário quando surgirem fora dos profiles,
+        # mas apenas se o primário não tem pares fixos configurados (modo dinâmico).
+        primary_runtime_has_pairs = bool(runtime_profiles[0]["pairs"]) if runtime_profiles else False
+        if not primary_runtime_has_pairs:
+            legacy_pairs = self._filter_disabled_pairs(getattr(config, "TRADING_PAIRS", []) or [])
+            mapped_pairs = {symbol for profile in runtime_profiles for symbol in profile["pairs"]}
+            missing_pairs = [symbol for symbol in legacy_pairs if symbol not in mapped_pairs]
+            if missing_pairs:
+                runtime_profiles[0]["pairs"].extend(missing_pairs)
 
         consolidated_pairs = []
         seen_pairs = set()
@@ -999,8 +1002,13 @@ class TradingBot:
             ]
             primary_index = 0
 
-        if primary_pairs is not None:
-            # Mantém o primário dinâmico, mas sem sobreposição com perfis secundários.
+        existing_primary_pairs = self._filter_disabled_pairs(
+            normalized_profiles[primary_index].get("pairs", [])
+        )
+        primary_has_fixed_pairs = bool(existing_primary_pairs)
+
+        if primary_pairs is not None and not primary_has_fixed_pairs:
+            # Perfil primário sem pares fixos — usa a seleção dinâmica externa.
             reserved_pairs = set()
             for idx, profile in enumerate(normalized_profiles):
                 if idx == primary_index:
@@ -1014,19 +1022,35 @@ class TradingBot:
                 symbol for symbol in candidate_primary_pairs if symbol not in reserved_pairs
             ]
 
-        # Se TRADING_PAIRS contém pares fora dos profiles, injeta no primário.
-        trading_pairs = self._filter_disabled_pairs(getattr(config, "TRADING_PAIRS", []) or [])
-        profile_pairs = []
-        for profile in normalized_profiles:
-            profile_pairs.extend(self._filter_disabled_pairs(profile.get("pairs", [])))
-        profile_pairs_set = set(profile_pairs)
-        missing = [symbol for symbol in trading_pairs if symbol not in profile_pairs_set]
-        if missing:
-            base_pairs = self._filter_disabled_pairs(normalized_profiles[primary_index].get("pairs", []))
-            normalized_profiles[primary_index]["pairs"] = base_pairs + [symbol for symbol in missing if symbol not in set(base_pairs)]
+        # Se TRADING_PAIRS contém pares fora dos profiles, injeta no primário
+        # apenas quando não há pares fixos configurados (modo dinâmico).
+        if not primary_has_fixed_pairs:
+            trading_pairs = self._filter_disabled_pairs(getattr(config, "TRADING_PAIRS", []) or [])
+            profile_pairs = []
+            for profile in normalized_profiles:
+                profile_pairs.extend(self._filter_disabled_pairs(profile.get("pairs", [])))
+            profile_pairs_set = set(profile_pairs)
+            missing = [symbol for symbol in trading_pairs if symbol not in profile_pairs_set]
+            if missing:
+                base_pairs = self._filter_disabled_pairs(normalized_profiles[primary_index].get("pairs", []))
+                normalized_profiles[primary_index]["pairs"] = base_pairs + [symbol for symbol in missing if symbol not in set(base_pairs)]
 
         config.STRATEGY_PROFILES = normalized_profiles
         self._reload_strategy_profiles(reason=reason)
+
+        # Atualiza TRADING_PAIRS para refletir todos os pares dos perfis ativos,
+        # garantindo que alavancagem e monitoramento cubram todos os pares configurados.
+        all_profile_pairs: List[str] = []
+        seen_profile_pairs: set = set()
+        for profile in normalized_profiles:
+            if not bool(profile.get("enabled", True)):
+                continue
+            for symbol in self._filter_disabled_pairs(profile.get("pairs", [])):
+                if symbol not in seen_profile_pairs:
+                    seen_profile_pairs.add(symbol)
+                    all_profile_pairs.append(symbol)
+        if all_profile_pairs:
+            config.TRADING_PAIRS = all_profile_pairs
 
     def _build_analysis_tasks(self) -> List[Dict[str, str]]:
         """Monta fila de análise com contexto de estratégia por par."""
