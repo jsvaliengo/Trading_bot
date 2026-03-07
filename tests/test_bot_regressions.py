@@ -611,7 +611,9 @@ def test_build_analysis_tasks_keeps_strategy_context(monkeypatch):
     ]
 
 
-def test_sync_strategy_profiles_adds_legacy_pairs_to_primary(monkeypatch):
+def test_sync_strategy_profiles_preserves_fixed_pairs_ignores_trading_pairs(monkeypatch):
+    """Quando o perfil primário já tem pares fixos, TRADING_PAIRS externo não deve
+    injetar novos pares no perfil — o perfil é a fonte de verdade."""
     bot = _make_light_bot()
     bot.strategy = SimpleNamespace(generate_trade_setup=lambda **_kwargs: None)
     bot._strategy_engines = {}
@@ -627,6 +629,38 @@ def test_sync_strategy_profiles_adds_legacy_pairs_to_primary(monkeypatch):
                 "enabled": True,
                 "entry_mode": "strong_only",
                 "pairs": ["BTCUSDT"],
+            }
+        ],
+    )
+    # TRADING_PAIRS externo (ex.: seleção dinâmica Binance) não deve sobrescrever pares fixos
+    monkeypatch.setattr(config, "TRADING_PAIRS", ["BTCUSDT", "XRPUSDT"])
+
+    bot._sync_strategy_profiles_with_trading_pairs(reason="test-sync")
+
+    # Pares fixos preservados, XRPUSDT não injetado
+    assert config.STRATEGY_PROFILES[0]["pairs"] == ["BTCUSDT"]
+    # TRADING_PAIRS derivado dos perfis (fonte de verdade)
+    assert config.TRADING_PAIRS == ["BTCUSDT"]
+
+
+def test_sync_strategy_profiles_adds_legacy_pairs_when_primary_empty(monkeypatch):
+    """Quando o perfil primário não tem pares, TRADING_PAIRS externo é injetado
+    (modo dinâmico / compatibilidade com configuração legada)."""
+    bot = _make_light_bot()
+    bot.strategy = SimpleNamespace(generate_trade_setup=lambda **_kwargs: None)
+    bot._strategy_engines = {}
+    bot.strategy_profiles = []
+
+    monkeypatch.setattr(config, "DISABLED_PAIRS", [])
+    monkeypatch.setattr(
+        config,
+        "STRATEGY_PROFILES",
+        [
+            {
+                "name": "alpha",
+                "enabled": True,
+                "entry_mode": "strong_only",
+                "pairs": [],
             }
         ],
     )
