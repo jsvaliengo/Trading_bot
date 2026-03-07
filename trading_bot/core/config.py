@@ -301,7 +301,7 @@ class TradingConfig:
     RANGE_SCALP_MIN_POSITION_MULTIPLIER: float = 0.70
     RANGE_SCALP_MAX_POSITION_MULTIPLIER: float = 1.30
     RANGE_SCALP_MIN_RISK_REWARD: float = 1.20
-    RANGE_SCALP_EARLY_EXIT_ENABLED: bool = True
+    RANGE_SCALP_EARLY_EXIT_ENABLED: bool = False
     RANGE_SCALP_EARLY_EXIT_TIMEFRAME: str = "3m"
     
     # Diferença de preço para abrir posição oposta (em %)
