@@ -2,6 +2,15 @@ name: Deploy Oracle
 
 on:
   workflow_dispatch:
+    inputs:
+      reset_state:
+        description: 'Zerar histórico do bot (renomeia bot_state para backup)'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
   push:
     branches:
       - main
@@ -130,6 +139,33 @@ jobs:
             --exclude "deploy_backups/" \
             -e "ssh -p $PORT" \
             ./ "$OCI_USER@$OCI_HOST:$REMOTE_PATH/"
+
+      - name: Reset bot state (opcional)
+        if: ${{ github.event.inputs.reset_state == 'true' }}
+        env:
+          OCI_HOST: ${{ secrets.OCI_HOST }}
+          OCI_USER: ${{ secrets.OCI_USER }}
+          OCI_PORT: ${{ secrets.OCI_PORT }}
+          OCI_PATH: ${{ secrets.OCI_PATH }}
+        run: |
+          set -euo pipefail
+          PORT="${OCI_PORT:-22}"
+          REMOTE_PATH="${OCI_PATH:-/home/ubuntu/trading_bot}"
+          if [[ "$REMOTE_PATH" == "~/"* ]]; then
+            REMOTE_PATH="/home/${OCI_USER}/${REMOTE_PATH#~/}"
+          fi
+
+          ssh -p "$PORT" "$OCI_USER@$OCI_HOST" "REMOTE_PATH='$REMOTE_PATH' bash -s" <<'EOF'
+          set -euo pipefail
+          RUNTIME_DIR="$REMOTE_PATH/runtime"
+          TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+          for STATE_FILE in "$RUNTIME_DIR"/bot_state.*.json "$RUNTIME_DIR/bot_state.json"; do
+            if [[ -f "$STATE_FILE" ]]; then
+              mv "$STATE_FILE" "${STATE_FILE%.json}.backup-${TIMESTAMP}.json"
+              echo "✅ Estado renomeado para backup: $(basename ${STATE_FILE%.json}.backup-${TIMESTAMP}.json)"
+            fi
+          done
+          EOF
 
       - name: Deploy on server
         env:

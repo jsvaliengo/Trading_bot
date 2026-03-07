@@ -321,14 +321,15 @@ class TelegramNotifier:
         action: str,  # "OPEN_LONG", "OPEN_SHORT", "CLOSE_LONG", "CLOSE_SHORT"
         price: float,
         quantity: float,
-        pnl: float = None
+        pnl: float = None,
+        strategy_name: str = None
     ) -> bool:
         """
         Envia alerta quando um trade é executado.
         """
         timestamp = get_brt_timestamp()
         name = symbol.replace("USDT", "")
-        
+
         if "OPEN" in action:
             emoji = "🚀"
             action_text = "ABERTO"
@@ -337,7 +338,7 @@ class TelegramNotifier:
             emoji = "✅"
             action_text = "FECHADO"
             side = "LONG 📈" if "LONG" in action else "SHORT 📉"
-        
+
         message = f"""
 {emoji} <b>TRADE {action_text}</b> <i>({timestamp})</i>
 ━━━━━━━━━━━━━━━━━━━━━
@@ -346,13 +347,16 @@ class TelegramNotifier:
 📊 <b>Lado:</b> {side}
 💵 <b>Preço:</b> ${price:.4f}
 📦 <b>Quantidade:</b> {quantity:.4f}"""
-        
+
+        if strategy_name:
+            message += f"\n🤖 <b>Estratégia:</b> <code>{strategy_name}</code>"
+
         if pnl is not None:
             pnl_emoji = "🟢" if pnl >= 0 else "🔴"
             message += f"\n{pnl_emoji} <b>P&L:</b> <code>${pnl:.2f}</code>"
-        
+
         message += "\n━━━━━━━━━━━━━━━━━━━━━"
-        
+
         return self.send_message(message)
     
     def send_startup_message(self, pairs: list, capital: float, leverage: int) -> bool:
@@ -658,7 +662,8 @@ class TelegramNotifier:
         total_losses: int,
         total_win_value: float,
         total_loss_value: float,
-        total_fees: float = 0.0
+        total_fees: float = 0.0,
+        trades_by_strategy: dict = None
     ) -> bool:
         """
         Envia relatório detalhado de trades por moeda.
@@ -764,6 +769,20 @@ class TelegramNotifier:
             worst = negative_trades[0]
             message += f"\n   • 💀 Pior: {worst['name']} (<code>{self._format_usd_brl(worst['value'], 2, True)}</code>)"
         
+        # BREAKDOWN POR ESTRATÉGIA
+        if trades_by_strategy:
+            message += "\n\n━━━━━━━━━━━━━━━━━━━━━\n🤖 <b>POR ESTRATÉGIA:</b>"
+            for strat, data in trades_by_strategy.items():
+                strat_trades = data['wins'] + data['losses']
+                strat_pnl = data['win_value'] + data['loss_value']
+                strat_wr = (data['wins'] / strat_trades * 100) if strat_trades > 0 else 0
+                strat_emoji = "🟢" if strat_pnl > 0 else ("🔴" if strat_pnl < 0 else "⚪")
+                message += (
+                    f"\n   {strat_emoji} <b>{strat}</b>: "
+                    f"<code>{self._format_usd_brl(strat_pnl, 2, True)}</code> "
+                    f"({strat_trades} trades, WR {strat_wr:.0f}%)"
+                )
+
         # TAXAS PAGAS
         message += f"""
 
@@ -771,13 +790,13 @@ class TelegramNotifier:
 💸 <b>TAXAS BINANCE:</b>
    • Total pago: <code>{self._format_usd_brl(-total_fees, 4, True)}</code>
    • Média por trade: <code>{self._format_usd_brl(-(total_fees/total_trades), 4, True)}</code>"""
-        
+
         # Calcula % das taxas sobre o lucro bruto
         gross_profit = total_win_value - total_loss_value  # Diferença bruta (sem taxas)
         if gross_profit != 0:
             fees_pct = (total_fees / abs(gross_profit)) * 100
             message += f"\n   • % do lucro bruto: <code>{fees_pct:.1f}%</code>"
-        
+
         message += "\n━━━━━━━━━━━━━━━━━━━━━"
         
         return self.send_message(message)
