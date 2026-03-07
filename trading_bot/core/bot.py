@@ -3216,7 +3216,7 @@ class TradingBot:
                 logger.info(f"   Pico: ${peak_price:.4f} | Stop em: ${trailing_stop_price:.4f}")
                 
                 # Envia notificação
-                trailing_pos_meta = self.known_positions.get(position_key, {})
+                trailing_pos_meta = getattr(self, 'known_positions', {}).get(position_key, {})
                 trailing_strategy_name = str(trailing_pos_meta.get('strategy_name') or 'primary')
                 self.telegram.send_trailing_stop_activated(
                     symbol=symbol,
@@ -3300,7 +3300,7 @@ class TradingBot:
         entry_price = pos['entry_price']
         quantity = pos['quantity']
         position_key = f"{symbol}_{side}"
-        pos_meta = self.known_positions.get(position_key, {})
+        pos_meta = getattr(self, 'known_positions', {}).get(position_key, {})
         strategy_name = str(pos_meta.get('strategy_name') or 'primary')
         logger.info(f"🚨 Fechando posição: {reason}")
         
