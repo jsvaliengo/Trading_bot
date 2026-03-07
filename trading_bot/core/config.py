@@ -468,7 +468,7 @@ class TradingConfig:
     SENTIMENT_TIMEFRAME: str = os.getenv("TRADING_BOT_SENTIMENT_TIMEFRAME", "1h").strip() or "1h"
     SENTIMENT_CANDLES_LOOKBACK: int = _env_int("TRADING_BOT_SENTIMENT_LOOKBACK_CANDLES", 120)
     SENTIMENT_MIN_SCORE: int = _env_int("TRADING_BOT_SENTIMENT_MIN_SCORE", 2)
-    SENTIMENT_MIN_MOMENTUM_PERCENT: float = _env_float("TRADING_BOT_SENTIMENT_MIN_MOMENTUM_PERCENT", 0.20)
+    SENTIMENT_MIN_MOMENTUM_PERCENT: float = _env_float("TRADING_BOT_SENTIMENT_MIN_MOMENTUM_PERCENT", 0.10)
     SENTIMENT_CACHE_SECONDS: int = _env_int("TRADING_BOT_SENTIMENT_CACHE_SECONDS", 300)
 
     # ============================================
@@ -586,7 +586,7 @@ class TradingConfig:
 
         # Pares desabilitados por padrão (podem ser reabilitados via Telegram)
         if self.DISABLED_PAIRS is None:
-            self.DISABLED_PAIRS = ["ETHUSDT", "SOLUSDT", "ADAUSDT"]
+            self.DISABLED_PAIRS = ["ETHUSDT", "SOLUSDT", "ADAUSDT", "SIGNUSDT"]
         self.DISABLED_PAIRS = self.normalize_pair_list(self.DISABLED_PAIRS)
         
         # ============================================
