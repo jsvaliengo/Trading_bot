@@ -661,7 +661,7 @@ class TradingConfig:
                     "enabled": True,
                     "strategy_type": "range_scalping",
                     "entry_mode": "strong_only",
-                    "pairs": ["DOGEUSDT", "XRPUSDT", "MATICUSDT"],
+                    "pairs": ["DOGEUSDT", "XRPUSDT", "MATICUSDT", "LTCUSDT", "LINKUSDT", "DOTUSDT", "BNBUSDT"],
                 },
             ]
         self.STRATEGY_PROFILES = self._normalize_strategy_profiles(self.STRATEGY_PROFILES)
