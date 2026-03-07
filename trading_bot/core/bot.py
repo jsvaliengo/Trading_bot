@@ -3993,15 +3993,36 @@ class TradingBot:
         if not profiles:
             return "⚠️ Nenhuma estratégia configurada."
 
+        # Pares em uso por cada perfil ativo (runtime)
+        runtime_pairs: dict = {
+            rp.get("name"): rp.get("pairs", [])
+            for rp in (getattr(self, "strategy_profiles", []) or [])
+        }
+
         lines = ["📋 <b>ESTRATÉGIAS</b>\n"]
         for p in profiles:
             name = p.get("name", "?")
             enabled = bool(p.get("enabled", True))
             stype = p.get("strategy_type", "?")
-            pairs = p.get("pairs") or []
+            config_pairs = p.get("pairs") or []
             icon = "✅" if enabled else "⏸️"
-            pairs_info = f"{len(pairs)} pares fixos" if pairs else f"auto (max {p.get('max_pairs', '?')})"
-            lines.append(f"{icon} <b>{name}</b> — <code>{stype}</code> — {pairs_info}")
+
+            if enabled:
+                active_pairs = runtime_pairs.get(name, [])
+                display_pairs = active_pairs or config_pairs
+                if display_pairs:
+                    symbols = ", ".join(s.replace("USDT", "") for s in display_pairs)
+                    pairs_info = f"{len(display_pairs)} pares ativos: <code>{symbols}</code>"
+                else:
+                    pairs_info = f"seleção automática (max {p.get('max_pairs', '?')})"
+            else:
+                if config_pairs:
+                    symbols = ", ".join(s.replace("USDT", "") for s in config_pairs)
+                    pairs_info = f"{len(config_pairs)} pares configurados: <code>{symbols}</code>"
+                else:
+                    pairs_info = f"seleção automática (max {p.get('max_pairs', '?')})"
+
+            lines.append(f"{icon} <b>{name}</b> — <code>{stype}</code>\n   🪙 {pairs_info}")
 
         lines.append("\n<i>Use /strategy enable|disable &lt;nome&gt;</i>")
         return "\n".join(lines)
