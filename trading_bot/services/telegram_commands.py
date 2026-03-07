@@ -77,6 +77,7 @@ class TelegramCommandHandler:
             '/trailing': self.cmd_trailing,
             '/closeall': self.cmd_close_all,
             '/help': self.cmd_help,
+            '/strategy': self.cmd_strategy,
         }
         
         logger.info("📱 Telegram Command Handler inicializado")
@@ -1364,6 +1365,43 @@ class TelegramCommandHandler:
         except Exception as e:
             self.send_message(f"❌ Erro ao fechar posições: {e}")
     
+    def cmd_strategy(self, args: list):
+        """Ativa, desativa ou lista estratégias em runtime.
+
+        Uso:
+          /strategy              → lista estratégias
+          /strategy enable  <nome>  → ativa
+          /strategy disable <nome>  → desativa
+        """
+        if self.bot is None:
+            self.send_message("❌ Bot não configurado")
+            return
+
+        try:
+            if not args:
+                self.send_message(self.bot.list_strategies())
+                return
+
+            action = args[0].lower()
+            if action not in ("enable", "disable"):
+                self.send_message(
+                    "❌ Ação inválida. Use:\n"
+                    "• <code>/strategy enable &lt;nome&gt;</code>\n"
+                    "• <code>/strategy disable &lt;nome&gt;</code>"
+                )
+                return
+
+            if len(args) < 2:
+                self.send_message(f"❌ Informe o nome da estratégia. Ex: <code>/strategy {action} range_scalp_v1</code>")
+                return
+
+            name = args[1]
+            result = self.bot.set_strategy_enabled(name, enabled=(action == "enable"))
+            self.send_message(result)
+
+        except Exception as e:
+            self.send_message(f"❌ Erro ao alterar estratégia: {e}")
+
     def cmd_help(self, args: list):
         """Mostra lista de comandos."""
         message = """
@@ -1396,6 +1434,11 @@ class TelegramCommandHandler:
 /tp [valor] - Take Profit %
 /sl [valor/on/off] - Stop Loss %
 /trailing [ativ] [dist] - Trailing
+
+<b>🧠 ESTRATÉGIAS:</b>
+/strategy - Listar estratégias
+/strategy enable &lt;nome&gt; - Ativar
+/strategy disable &lt;nome&gt; - Desativar
 
 <b>⚡ AÇÕES:</b>
 /closeall - Fechar todas posições
