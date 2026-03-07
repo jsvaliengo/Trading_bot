@@ -147,6 +147,10 @@ class TradingBot:
         # Rastreamento de trades por símbolo (para relatório detalhado)
         # Formato: {symbol: {'wins': int, 'losses': int, 'win_value': float, 'loss_value': float, 'fees': float}}
         self.trades_by_symbol = {}
+
+        # Rastreamento de trades por estratégia (para relatório por estratégia)
+        # Formato: {strategy_name: {'wins': int, 'losses': int, 'win_value': float, 'loss_value': float, 'fees': float}}
+        self.trades_by_strategy = {}
         
         # Controle de metas diárias
         self.daily_target_reached = False  # Se a meta do dia foi atingida
@@ -1298,7 +1302,6 @@ class TradingBot:
             
             logger.info(f"   📈 Faixa de Capital: {strategy['capital_range']}")
             logger.info(f"   💵 Order Size: ${strategy['order_size']}")
-            logger.info(f"   🛑 Stop Loss: ${strategy['stop_loss']}")
             logger.info(
                 f"   🪙 Moedas ({len(config.TRADING_PAIRS)}): "
                 f"{', '.join([c.replace('USDT', '') for c in config.TRADING_PAIRS])}"
@@ -1311,7 +1314,6 @@ class TradingBot:
                 f"💰 <b>Saldo:</b> ${current_balance:.2f}\n"
                 f"📈 <b>Faixa:</b> {strategy['capital_range']}\n"
                 f"💵 <b>Order Size:</b> ${strategy['order_size']}\n"
-                f"🛑 <b>Stop Loss:</b> ${strategy['stop_loss']}\n"
                 f"🪙 <b>Moedas ({len(config.TRADING_PAIRS)}) - Ordenadas por Score:</b>\n{coins_display}\n\n"
                 f"<i>Atualização a cada 6 horas</i>"
             )
@@ -1705,7 +1707,6 @@ class TradingBot:
                     f"💰 <b>Saldo Atual:</b> ${current_balance:.2f}\n"
                     f"📈 <b>Nova Faixa:</b> {new_strategy['capital_range']}\n"
                     f"💵 <b>Order Size:</b> ${new_strategy['order_size']}\n"
-                    f"🛑 <b>Stop Loss:</b> ${new_strategy['stop_loss']}\n"
                     f"🪙 <b>Moedas ({len(config.TRADING_PAIRS)}) - Por Score:</b>\n{coins_display}"
                 )
                 
@@ -2503,7 +2504,8 @@ class TradingBot:
                     symbol=symbol,
                     action="OPEN_LONG",
                     price=price,
-                    quantity=long_qty
+                    quantity=long_qty,
+                    strategy_name=strategy_name
                 )
 
                 # Registra o trade
@@ -2607,7 +2609,8 @@ class TradingBot:
                     symbol=symbol,
                     action="OPEN_SHORT",
                     price=price,
-                    quantity=short_qty
+                    quantity=short_qty,
+                    strategy_name=strategy_name
                 )
 
                 # Registra o trade
@@ -3023,16 +3026,29 @@ class TradingBot:
                 # Atualiza trades por símbolo (para relatório detalhado)
                 if symbol not in self.trades_by_symbol:
                     self.trades_by_symbol[symbol] = {'wins': 0, 'losses': 0, 'win_value': 0.0, 'loss_value': 0.0, 'fees': 0.0}
-                
+
                 if pnl_net > 0:
                     self.trades_by_symbol[symbol]['wins'] += 1
                     self.trades_by_symbol[symbol]['win_value'] += pnl_net
                 else:
                     self.trades_by_symbol[symbol]['losses'] += 1
                     self.trades_by_symbol[symbol]['loss_value'] += pnl_net
-                
+
                 # Atualiza taxas por símbolo
                 self.trades_by_symbol[symbol]['fees'] = self.trades_by_symbol[symbol].get('fees', 0.0) + total_fees
+
+                # Atualiza trades por estratégia
+                pos_meta = self.known_positions.get(f"{symbol}_{side}", {})
+                strat_key = str(pos_meta.get('strategy_name') or 'primary')
+                if strat_key not in self.trades_by_strategy:
+                    self.trades_by_strategy[strat_key] = {'wins': 0, 'losses': 0, 'win_value': 0.0, 'loss_value': 0.0, 'fees': 0.0}
+                if pnl_net > 0:
+                    self.trades_by_strategy[strat_key]['wins'] += 1
+                    self.trades_by_strategy[strat_key]['win_value'] += pnl_net
+                else:
+                    self.trades_by_strategy[strat_key]['losses'] += 1
+                    self.trades_by_strategy[strat_key]['loss_value'] += pnl_net
+                self.trades_by_strategy[strat_key]['fees'] = self.trades_by_strategy[strat_key].get('fees', 0.0) + total_fees
                 
                 # Atualiza P&L por símbolo
                 if symbol in self.pnl_by_symbol:
@@ -3746,7 +3762,8 @@ class TradingBot:
             total_losses=self.trades_loss_count,
             total_win_value=self.trades_win_total,
             total_loss_value=self.trades_loss_total,
-            total_fees=self.total_fees_paid
+            total_fees=self.total_fees_paid,
+            trades_by_strategy=self.trades_by_strategy
         )
     
     def take_portfolio_snapshot(self):
