@@ -2474,6 +2474,9 @@ class TradingBot:
         try:
             # Calcula quantidades
             price = self.exchange.get_symbol_price(symbol)
+            if price <= 0:
+                logger.error(f"❌ Preço inválido para {symbol}: {price} — abortando abertura")
+                return False
             info = self.exchange.get_symbol_info(symbol)
 
             # Tamanho mínimo (minNotional) vindo da Binance

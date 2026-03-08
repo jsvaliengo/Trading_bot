@@ -1077,7 +1077,8 @@ class TelegramCommandHandler:
             
             old_leverage = self.config.LEVERAGE
             self.config.LEVERAGE = new_leverage
-            
+            self._persist_runtime_state()
+
             # Atualiza na Binance para cada par
             for symbol in self.config.TRADING_PAIRS:
                 self.bot.exchange.set_leverage(symbol, new_leverage)
@@ -1168,7 +1169,8 @@ class TelegramCommandHandler:
             
             old_tp = self.config.TAKE_PROFIT_PERCENT
             self.config.TAKE_PROFIT_PERCENT = new_tp
-            
+            self._persist_runtime_state()
+
             self.send_message(
                 f"✅ <b>TAKE PROFIT ALTERADO</b>\n\n"
                 f"   Anterior: <code>{old_tp}%</code>\n"
@@ -1202,11 +1204,13 @@ class TelegramCommandHandler:
         
         if arg == 'on':
             self.config.USE_INDIVIDUAL_STOP_LOSS = True
+            self._persist_runtime_state()
             self.send_message(f"✅ Stop Loss <b>ATIVADO</b> ({self.config.STOP_LOSS_PERCENT}%)")
             return
-        
+
         if arg == 'off':
             self.config.USE_INDIVIDUAL_STOP_LOSS = False
+            self._persist_runtime_state()
             self.send_message("✅ Stop Loss <b>DESATIVADO</b>")
             return
         
@@ -1219,7 +1223,8 @@ class TelegramCommandHandler:
             
             old_sl = self.config.STOP_LOSS_PERCENT
             self.config.STOP_LOSS_PERCENT = new_sl
-            
+            self._persist_runtime_state()
+
             self.send_message(
                 f"✅ <b>STOP LOSS ALTERADO</b>\n\n"
                 f"   Anterior: <code>{old_sl}%</code>\n"
