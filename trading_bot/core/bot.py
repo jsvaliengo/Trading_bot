@@ -889,6 +889,9 @@ class TradingBot:
             }
             if risk_profile:
                 runtime_profile["risk_profile"] = risk_profile
+            max_pairs_val = raw_profile.get("max_pairs")
+            if max_pairs_val:
+                runtime_profile["max_pairs"] = int(max_pairs_val)
             runtime_profiles.append(runtime_profile)
 
         if not runtime_profiles:
@@ -937,6 +940,8 @@ class TradingBot:
             }
             if profile.get("risk_profile"):
                 serialized["risk_profile"] = dict(profile["risk_profile"])
+            if profile.get("max_pairs"):
+                serialized["max_pairs"] = int(profile["max_pairs"])
             config_profiles.append(serialized)
         config.STRATEGY_PROFILES = config_profiles
 
@@ -1005,7 +1010,10 @@ class TradingBot:
         existing_primary_pairs = self._filter_disabled_pairs(
             normalized_profiles[primary_index].get("pairs", [])
         )
-        primary_has_fixed_pairs = bool(existing_primary_pairs)
+        # Perfil com max_pairs > 0 é dinâmico — pares foram atribuídos em runtime,
+        # não são fixos de config. Não deve bloquear nova seleção dinâmica.
+        profile_is_dynamic = bool(normalized_profiles[primary_index].get("max_pairs", 0))
+        primary_has_fixed_pairs = bool(existing_primary_pairs) and not profile_is_dynamic
 
         if primary_pairs is not None and not primary_has_fixed_pairs:
             # Perfil primário sem pares fixos — usa a seleção dinâmica externa.
