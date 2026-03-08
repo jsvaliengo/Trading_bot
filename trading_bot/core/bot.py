@@ -1914,7 +1914,7 @@ class TradingBot:
             return None
 
         coins_with_scores = []
-        max_workers = min(16, total_candidates or 1)
+        max_workers = min(10, total_candidates or 1)
         completed = 0
         _progress_steps = {max(1, int(total_candidates * p / 100)) for p in (25, 50, 75)}
 
