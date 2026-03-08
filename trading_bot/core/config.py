@@ -501,12 +501,6 @@ class TradingConfig:
     # Cooldown entre alertas críticos imediatos
     API_HEALTH_CRITICAL_COOLDOWN_SECONDS: int = 300
 
-    # Limiares de criticidade para disparo imediato
-    API_HEALTH_CRITICAL_MIN_API_FAILURES: int = 1
-    API_HEALTH_CRITICAL_MIN_ORDER_FAILURES: int = 1
-    API_HEALTH_CRITICAL_MIN_ORDER_REJECTIONS: int = 2
-    API_HEALTH_CRITICAL_MIN_LOOP_ERRORS: int = 1
-
     # Relatório diário consolidado para decisão de risco/SL (Telegram)
     DAILY_PERFORMANCE_REPORT_ENABLED: bool = _env_bool("TRADING_BOT_DAILY_REPORT_ENABLED", True)
     DAILY_PERFORMANCE_REPORT_HOUR_BRT: int = _env_int("TRADING_BOT_DAILY_REPORT_HOUR_BRT", 23)
@@ -990,18 +984,6 @@ class TradingConfig:
 
         if self.API_HEALTH_CRITICAL_COOLDOWN_SECONDS <= 0:
             errors.append("⚠️  ALERTA: API_HEALTH_CRITICAL_COOLDOWN_SECONDS deve ser > 0!")
-
-        if self.API_HEALTH_CRITICAL_MIN_API_FAILURES < 1:
-            errors.append("⚠️  ALERTA: API_HEALTH_CRITICAL_MIN_API_FAILURES deve ser >= 1!")
-
-        if self.API_HEALTH_CRITICAL_MIN_ORDER_FAILURES < 1:
-            errors.append("⚠️  ALERTA: API_HEALTH_CRITICAL_MIN_ORDER_FAILURES deve ser >= 1!")
-
-        if self.API_HEALTH_CRITICAL_MIN_ORDER_REJECTIONS < 1:
-            errors.append("⚠️  ALERTA: API_HEALTH_CRITICAL_MIN_ORDER_REJECTIONS deve ser >= 1!")
-
-        if self.API_HEALTH_CRITICAL_MIN_LOOP_ERRORS < 1:
-            errors.append("⚠️  ALERTA: API_HEALTH_CRITICAL_MIN_LOOP_ERRORS deve ser >= 1!")
 
         if self.DAILY_PERFORMANCE_REPORT_HOUR_BRT < 0 or self.DAILY_PERFORMANCE_REPORT_HOUR_BRT > 23:
             errors.append("⚠️  ALERTA: DAILY_PERFORMANCE_REPORT_HOUR_BRT deve estar entre 0 e 23!")

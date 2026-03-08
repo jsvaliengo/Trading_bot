@@ -913,6 +913,52 @@ class BinanceConnection:
             logger.error(f"Erro ao obter ticker 24h de {symbol}: {e}")
             return {}
 
+    def get_all_tickers_24h(self) -> Dict[str, Dict]:
+        """
+        Retorna tickers de 24h de TODOS os pares em uma única chamada.
+        Muito mais eficiente do que chamar get_ticker_24h() por símbolo.
+
+        Returns:
+            Dict {symbol: ticker_data} com quoteVolume, lastPrice, etc.
+        """
+        try:
+            tickers = self._api_call(
+                "futures_ticker_all",
+                self.client.futures_ticker
+            )
+            if isinstance(tickers, list):
+                return {t['symbol']: t for t in tickers if 'symbol' in t}
+            if isinstance(tickers, dict):
+                return {tickers['symbol']: tickers}
+            return {}
+        except Exception as e:
+            logger.error(f"Erro ao obter todos os tickers 24h: {e}")
+            return {}
+
+    def get_all_funding_rates(self) -> Dict[str, float]:
+        """
+        Retorna o funding rate atual de TODOS os pares em uma única chamada.
+
+        Returns:
+            Dict {symbol: funding_rate_percent}
+        """
+        try:
+            marks = self._api_call(
+                "futures_mark_price_all",
+                self.client.futures_mark_price
+            )
+            result = {}
+            if isinstance(marks, list):
+                for item in marks:
+                    sym = item.get('symbol', '')
+                    rate = item.get('lastFundingRate') or item.get('fundingRate')
+                    if sym and rate is not None:
+                        result[sym] = float(rate) * 100
+            return result
+        except Exception as e:
+            logger.error(f"Erro ao obter todos os funding rates: {e}")
+            return {}
+
     def get_order_book(self, symbol: str, limit: int = 5) -> Dict:
         """
         Retorna livro de ofertas para um símbolo.

@@ -835,10 +835,18 @@ def test_setup_exchange_restores_open_positions_for_reentry_tracking(monkeypatch
 
 def test_sort_binance_coins_by_score_uses_dynamic_binance_universe(monkeypatch):
     bot = _make_light_bot()
-    bot.exchange = SimpleNamespace()
+
+    all_symbols = ["XRPUSDT", "ETHUSDT", "ADAUSDT"]
+    fake_tickers = {s: {"quoteVolume": "1000000000", "lastPrice": "1.0"} for s in all_symbols}
+
+    bot.exchange = SimpleNamespace(
+        get_all_tickers_24h=lambda: fake_tickers,
+        get_all_funding_rates=lambda: {},
+    )
 
     monkeypatch.setattr(config, "DISABLED_PAIRS", ["ETHUSDT"])
     monkeypatch.setattr(config, "BINANCE_COIN_LIST", ["OLDUSDT"])
+    monkeypatch.setattr(config, "MIN_VOLUME_24H_USD", 0)
 
     score_map = {
         "ADAUSDT": 90.0,
@@ -848,9 +856,9 @@ def test_sort_binance_coins_by_score_uses_dynamic_binance_universe(monkeypatch):
 
     class PairSelectorStub:
         def get_all_futures_pairs(self):
-            return ["XRPUSDT", "ETHUSDT", "ADAUSDT"]
+            return all_symbols
 
-        def get_pair_metrics(self, symbol):
+        def get_pair_metrics(self, symbol, prefetched_ticker=None, prefetched_funding_rate=None):
             return {"symbol": symbol}
 
         def score_pair(self, metrics):
@@ -866,10 +874,18 @@ def test_sort_binance_coins_by_score_uses_dynamic_binance_universe(monkeypatch):
 
 def test_sort_binance_coins_by_score_keeps_previous_universe_on_refresh_failure(monkeypatch):
     bot = _make_light_bot()
-    bot.exchange = SimpleNamespace()
+
+    all_symbols = ["BNBUSDT", "XRPUSDT"]
+    fake_tickers = {s: {"quoteVolume": "1000000000", "lastPrice": "1.0"} for s in all_symbols}
+
+    bot.exchange = SimpleNamespace(
+        get_all_tickers_24h=lambda: fake_tickers,
+        get_all_funding_rates=lambda: {},
+    )
 
     monkeypatch.setattr(config, "DISABLED_PAIRS", [])
     monkeypatch.setattr(config, "BINANCE_COIN_LIST", ["BNBUSDT", "XRPUSDT"])
+    monkeypatch.setattr(config, "MIN_VOLUME_24H_USD", 0)
 
     score_map = {"BNBUSDT": 80.0, "XRPUSDT": 60.0}
 
@@ -877,7 +893,7 @@ def test_sort_binance_coins_by_score_keeps_previous_universe_on_refresh_failure(
         def get_all_futures_pairs(self):
             return []
 
-        def get_pair_metrics(self, symbol):
+        def get_pair_metrics(self, symbol, prefetched_ticker=None, prefetched_funding_rate=None):
             return {"symbol": symbol}
 
         def score_pair(self, metrics):
