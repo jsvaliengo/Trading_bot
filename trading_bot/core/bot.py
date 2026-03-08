@@ -1205,7 +1205,6 @@ class TradingBot:
         for symbol in added_pairs:
             self.exchange.set_leverage(symbol, config.LEVERAGE)
 
-        self.cache_pairs_min_notional()
         logger.info(
             "🔄 Lista de pares atualizada (%s): %s",
             trigger_reason,
@@ -1384,10 +1383,6 @@ class TradingBot:
             self._sync_strategy_profiles_with_trading_pairs(reason="setup-static")
 
         # ============================================
-        # CACHEIA VALORES MÍNIMOS (DEPOIS da estratégia)
-        # ============================================
-        # Isso garante que usamos os pares corretos da estratégia
-        self.cache_pairs_min_notional()
         logger.info(f"📋 Pares finais configurados: {len(config.TRADING_PAIRS)}")
         for symbol in config.TRADING_PAIRS:
             logger.info(f"   • {symbol}")
@@ -1729,9 +1724,6 @@ class TradingBot:
                 for symbol in config.TRADING_PAIRS:
                     self.exchange.set_leverage(symbol, config.LEVERAGE)
                 
-                # Re-cacheia
-                self.cache_pairs_min_notional()
-                
                 # Notifica no Telegram
                 coins_display = ', '.join([c.replace('USDT', '') for c in config.TRADING_PAIRS])
                 self.telegram.send_message(
@@ -1744,36 +1736,6 @@ class TradingBot:
                 
         except Exception as e:
             logger.error(f"Erro ao verificar estratégia Binance: {e}")
-    
-    def cache_pairs_min_notional(self):
-        """
-        Busca e cacheia o valor mínimo de cada par uma vez no início.
-        Evita chamadas repetidas à API durante o loop principal.
-        
-        Também ordena os pares do menor mínimo para o maior, permitindo
-        operar o máximo de pares possível com o capital disponível.
-        """
-        self.pairs_min_notional = {}
-        pairs_with_min = []
-        
-        logger.info("📊 Buscando valores mínimos dos pares...")
-        
-        for symbol in config.TRADING_PAIRS:
-            info = self.exchange.get_symbol_info(symbol)
-            min_notional = info.get('minNotional', 5.0)
-            self.pairs_min_notional[symbol] = min_notional
-            pairs_with_min.append((symbol, min_notional))
-        
-        # Ordena do menor mínimo para o maior
-        pairs_with_min.sort(key=lambda x: x[1])
-        
-        # Guarda a lista ordenada
-        self.sorted_pairs = pairs_with_min
-        
-        # Log da ordem de processamento
-        logger.info("📋 Ordem de processamento (menor mínimo primeiro):")
-        for symbol, min_val in pairs_with_min:
-            logger.info(f"   • {symbol}: mínimo ${min_val:.2f}")
     
     def update_trading_pairs(self):
         """
@@ -1843,9 +1805,6 @@ class TradingBot:
         for symbol in config.TRADING_PAIRS:
             if symbol not in self.pnl_by_symbol:
                 self.pnl_by_symbol[symbol] = 0.0
-        
-        # Re-cacheia com os novos pares
-        self.cache_pairs_min_notional()
         
         # Define alavancagem para os novos pares
         for symbol in added_pairs:
@@ -2035,9 +1994,6 @@ class TradingBot:
         for symbol in new_coins:
             if symbol not in old_coins:
                 self.exchange.set_leverage(symbol, config.LEVERAGE)
-        
-        # Re-cacheia
-        self.cache_pairs_min_notional()
         
         # Notifica
         coins_display = ', '.join([c.replace('USDT', '') for c in new_coins])
