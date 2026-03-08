@@ -2638,12 +2638,14 @@ class TradingBot:
                 
                 # Adiciona ao rastreamento de posições conhecidas
                 position_key = f"{symbol}_LONG"
+                _now = datetime.now()
                 self.known_positions[position_key] = {
                     'symbol': symbol,
                     'side': 'LONG',
                     'entry_price': price,
                     'quantity': long_qty,
-                    'last_seen': datetime.now(),
+                    'entry_time': _now,
+                    'last_seen': _now,
                     'strategy_name': str(strategy_name or "primary"),
                     'strategy_type': strategy_type,
                     'custom_stop_loss': custom_stop_loss,
@@ -2749,12 +2751,14 @@ class TradingBot:
                 
                 # Adiciona ao rastreamento de posições conhecidas
                 position_key = f"{symbol}_SHORT"
+                _now = datetime.now()
                 self.known_positions[position_key] = {
                     'symbol': symbol,
                     'side': 'SHORT',
                     'entry_price': price,
                     'quantity': short_qty,
-                    'last_seen': datetime.now(),
+                    'entry_time': _now,
+                    'last_seen': _now,
                     'strategy_name': str(strategy_name or "primary"),
                     'strategy_type': strategy_type,
                     'custom_stop_loss': custom_stop_loss,
@@ -3082,31 +3086,51 @@ class TradingBot:
         
         logger.info(f"🔍 Buscando P&L real para {side} {symbol}...")
         
+        # Usa entry_time para filtrar income apenas deste trade (evita pegar PnL de trade anterior)
+        entry_time = pos_info.get('entry_time')
+        start_time_ms = int(entry_time.timestamp() * 1000) if entry_time else None
+
+        pnl_gross = None
         try:
-            # Busca o último REALIZED_PNL deste símbolo na API
             income_list = self.exchange.get_income_history(
                 income_type='REALIZED_PNL',
                 symbol=symbol,
-                limit=10  # Últimos 10 registros
+                limit=10,
+                start_time=start_time_ms,
             )
-            
             if income_list:
-                # Pega o mais recente (último fechamento)
                 latest = income_list[-1]
                 pnl_gross = float(latest.get('income', 0))
-                # Calcula taxas
-                taker_fee_rate = self.get_taker_fee_rate()
-                notional = entry_price * quantity
-                total_fees = notional * taker_fee_rate * 2  # Abertura + Fechamento
-                
-                # P&L líquido
-                pnl_net = pnl_gross - total_fees
-                
+            else:
+                logger.warning(f"⚠️ REALIZED_PNL não encontrado para {symbol} após {entry_time} — usando estimativa")
+        except Exception as e:
+            logger.error(f"❌ Erro ao buscar P&L da Binance para {symbol}: {e} — usando estimativa")
+
+        taker_fee_rate = self.get_taker_fee_rate()
+        notional = entry_price * quantity
+        total_fees = notional * taker_fee_rate * 2
+
+        if pnl_gross is None:
+            # Fallback: estima P&L com base no preço atual (igual ao _close_position_with_notification)
+            try:
+                close_price = self.exchange.get_current_price(symbol)
+                if side == 'LONG':
+                    pnl_gross = (close_price - entry_price) * quantity
+                else:
+                    pnl_gross = (entry_price - close_price) * quantity
+                logger.info(f"   📐 P&L estimado via preço atual ${close_price:.4f}: ${pnl_gross:.4f}")
+            except Exception:
+                pnl_gross = 0.0
+                logger.warning(f"   ⚠️ Não foi possível estimar P&L para {symbol} — registrando como $0")
+
+        pnl_net = pnl_gross - total_fees
+
+        if True:  # bloco mantido para preservar indentação dos contadores abaixo
                 logger.info("📊 P&L encontrado na Binance:")
                 logger.info(f"   P&L Bruto: ${pnl_gross:.4f}")
                 logger.info(f"   Taxas: ${total_fees:.4f}")
                 logger.info(f"   P&L Líquido: ${pnl_net:.4f}")
-                
+
                 # ============================================
                 # ATUALIZA CONTADORES
                 # ============================================
@@ -3114,7 +3138,7 @@ class TradingBot:
                 self.daily_realized_pnl += pnl_net
                 self.total_pnl += pnl_net
                 self.risk_manager.update_pnl(pnl_net)
-                
+
                 # Atualiza estatísticas de trades
                 if pnl_net > 0:
                     self.trades_win_count += 1
@@ -3124,10 +3148,10 @@ class TradingBot:
                     self.trades_loss_count += 1
                     self.trades_loss_total += pnl_net
                     result = "PREJUÍZO 🔴"
-                
+
                 # Atualiza total de taxas pagas
                 self.total_fees_paid += total_fees
-                
+
                 # Atualiza trades por símbolo (para relatório detalhado)
                 if symbol not in self.trades_by_symbol:
                     self.trades_by_symbol[symbol] = {'wins': 0, 'losses': 0, 'win_value': 0.0, 'loss_value': 0.0, 'fees': 0.0}
@@ -3185,12 +3209,6 @@ class TradingBot:
                     f"   • Taxas: <code>-${total_fees:.4f}</code>\n"
                     f"   • <b>P&L Líquido: <code>${pnl_net:+.4f}</code></b>"
                 )
-                
-            else:
-                logger.warning(f"⚠️ Não encontrou REALIZED_PNL para {symbol} na API")
-                
-        except Exception as e:
-            logger.error(f"❌ Erro ao buscar P&L da Binance: {e}")
     
     def _check_trailing_stop(
         self, 
