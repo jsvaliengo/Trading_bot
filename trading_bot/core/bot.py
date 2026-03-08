@@ -119,94 +119,14 @@ class TradingBot:
         )
         self.command_handler.set_bot_reference(self, config)
         
-        # Estado do bot
-        self.running = False
-        self.paused = False  # Quando pausado, não abre novas posições
-        self.positions = {}  # Rastreia posições abertas
-        self.trade_history = []  # Histórico de trades (abertura)
-        
-        # Contador de posições FECHADAS (não abertas)
-        self.closed_trades_count = 0
-        
-        # Rastreamento de P&L
-        self.total_pnl = 0.0  # P&L total acumulado desde o início
-        self.daily_realized_pnl = 0.0  # P&L realizado do dia (soma quando fecha posição)
-        self.pnl_by_symbol = {}  # P&L separado por par de moeda
+        # Inicializa atributos de estado (sem side effects externos)
+        self._init_runtime_state()
+
+        # Preenche pnl_by_symbol com os pares configurados
         for symbol in config.TRADING_PAIRS:
             self.pnl_by_symbol[symbol] = 0.0
-        
-        # Estatísticas de trades (lucro vs prejuízo)
-        self.trades_win_count = 0      # Quantidade de trades com lucro
-        self.trades_loss_count = 0     # Quantidade de trades com prejuízo
-        self.trades_win_total = 0.0    # Valor total dos lucros
-        self.trades_loss_total = 0.0   # Valor total dos prejuízos
-        
-        # Rastreamento de taxas
-        self.total_fees_paid = 0.0  # Total de taxas pagas (para relatório)
-        
-        # Rastreamento de trades por símbolo (para relatório detalhado)
-        # Formato: {symbol: {'wins': int, 'losses': int, 'win_value': float, 'loss_value': float, 'fees': float}}
-        self.trades_by_symbol = {}
 
-        # Rastreamento de trades por estratégia (para relatório por estratégia)
-        # Formato: {strategy_name: {'wins': int, 'losses': int, 'win_value': float, 'loss_value': float, 'fees': float}}
-        self.trades_by_strategy = {}
-        
-        # Controle de metas diárias
-        self.daily_target_reached = False  # Se a meta do dia foi atingida
-        self.daily_target_type = None      # 'PROFIT' ou 'LOSS'
-        self.last_daily_reset = datetime.now().date()  # Data do último reset
-        self.last_daily_performance_report_date = ""
-        
-        # Histórico de evolução da carteira (para relatório)
-        # Guarda snapshots: {'timestamp': datetime, 'balance': float, 'pnl': float}
-        self.portfolio_history = []
-        self.last_snapshot_time = None
-        self.snapshot_interval_minutes = 30  # Snapshot a cada 30 minutos
-        self.start_time = datetime.now()  # Hora que o bot iniciou
-        
-        # Capital inicial para cálculo do Stop Loss Global
-        # Será preenchido com o saldo real da carteira no setup_exchange()
-        self.initial_capital = None  # Dinâmico - busca da carteira
-
-        # Rastreamento de transferências de capital (depósito/saque em Futures)
-        self.last_transfer_check_ts_ms = 0
-        self.processed_transfer_ids = []
-        
-        # Rastreamento do Trailing Stop
-        # Guarda o preço máximo (LONG) ou mínimo (SHORT) atingido por cada posição
-        # Chave: "symbol_side" (ex: "ETHUSDT_LONG")
-        self.peak_prices = {}  # Preço máximo/mínimo atingido
-        self.trailing_activated = {}  # Se o trailing já foi ativado
-        
-        # Rastreamento de posições conhecidas
-        # Usado para detectar quando a Binance fecha posições via SL/TP
-        # Chave: "symbol_side" (ex: "ETHUSDT_LONG"), Valor: dict com info da posição
-        self.known_positions = {}
-
-        # Controle de uso da regra "Double First" (primeira entrada dobrada)
-        # Chaves:
-        # - escopo global: LONG / SHORT
-        # - escopo symbol: SYMBOL_LONG / SYMBOL_SHORT
-        self.double_first_used = {}
-        
-        # Cache de taxas de comissão (busca da API da Binance)
-        # Atualizado periodicamente para refletir mudanças (VIP, BNB, etc)
-        self.commission_rates = None  # Será preenchido no setup
-        self.last_commission_update = None
-        
-        # Seletor de pares (será inicializado no setup_exchange)
-        self.pair_selector = None
-        self.last_pair_update = None
-
-        # Filtro direcional por sentimento (opcional e com fallback seguro)
-        self.sentiment_mode_enabled = bool(getattr(config, "USE_MARKET_SENTIMENT_FILTER", False))
-        self.sentiment_cache: Dict[str, Dict[str, Any]] = {}
-
-        # Lock de instância única (evita dois bots simultâneos)
-        self._instance_lock_handle = None
-
-        # Observabilidade de runtime (loops/erros)
+        # Observabilidade de runtime (loops/erros — depende de threading)
         self._runtime_stats_lock = threading.Lock()
         self._runtime_stats_since_report = self._new_runtime_stats()
         self._next_critical_health_alert_time = 0.0
@@ -219,6 +139,56 @@ class TradingBot:
         self.load_state()
         
         logger.info("✅ Bot inicializado com sucesso!")
+
+    def _init_runtime_state(self):
+        """
+        Inicializa todos os atributos de estado do bot com valores padrão.
+
+        Extraído do __init__ para que testes possam criar um bot leve via
+        TradingBot.__new__(TradingBot) e chamar este método sem precisar
+        de conexões externas (exchange, Telegram, etc.).
+
+        Qualquer novo atributo de estado deve ser adicionado aqui.
+        """
+        self.running = False
+        self.paused = False
+        self.positions = {}
+        self.trade_history = []
+        self.closed_trades_count = 0
+        self.total_pnl = 0.0
+        self.daily_realized_pnl = 0.0
+        self.pnl_by_symbol = {}
+        self.trades_win_count = 0
+        self.trades_loss_count = 0
+        self.trades_win_total = 0.0
+        self.trades_loss_total = 0.0
+        self.total_fees_paid = 0.0
+        self.trades_by_symbol = {}
+        self.trades_by_strategy = {}
+        self.daily_target_reached = False
+        self.daily_target_type = None
+        self.last_daily_reset = datetime.now().date()
+        self.last_daily_performance_report_date = ""
+        self.portfolio_history = []
+        self.last_snapshot_time = None
+        self.snapshot_interval_minutes = 30
+        self.start_time = datetime.now()
+        self.initial_capital = None
+        self.last_transfer_check_ts_ms = 0
+        self.processed_transfer_ids = []
+        self.peak_prices = {}
+        self.trailing_activated = {}
+        self.known_positions = {}
+        self.double_first_used = {}
+        self.commission_rates = None
+        self.last_commission_update = None
+        self.pair_selector = None
+        self.last_pair_update = None
+        self.sentiment_mode_enabled = bool(getattr(config, "USE_MARKET_SENTIMENT_FILTER", False))
+        self.sentiment_cache: Dict[str, Dict[str, Any]] = {}
+        self._instance_lock_handle = None
+        self._strategy_engines: Dict[str, Any] = {}
+        self.strategy_profiles: List[Dict[str, Any]] = []
 
     def _migrate_legacy_runtime_files(self):
         """
@@ -3124,10 +3094,9 @@ class TradingBot:
                 # Atualiza trades por estratégia
                 pos_meta = self.known_positions.get(f"{symbol}_{side}", {})
                 strat_key = pos_meta.get('strategy_name')
-                if not strat_key and hasattr(self, '_get_strategy_profile_for_symbol'):
-                    _sp = self._get_strategy_profile_for_symbol(symbol)
+                if not strat_key:
+                    _sp = self._resolve_strategy_context(symbol)
                     strat_key = _sp.get('name', 'primary')
-                strat_key = strat_key or 'primary'
                 if strat_key not in self.trades_by_strategy:
                     self.trades_by_strategy[strat_key] = {'wins': 0, 'losses': 0, 'win_value': 0.0, 'loss_value': 0.0, 'fees': 0.0}
                 if pnl_net > 0:
@@ -3235,12 +3204,11 @@ class TradingBot:
                 logger.info(f"   Pico: ${peak_price:.4f} | Stop em: ${trailing_stop_price:.4f}")
                 
                 # Envia notificação
-                trailing_pos_meta = getattr(self, 'known_positions', {}).get(position_key, {})
+                trailing_pos_meta = self.known_positions.get(position_key, {})
                 trailing_strategy_name = trailing_pos_meta.get('strategy_name')
-                if not trailing_strategy_name and hasattr(self, '_get_strategy_profile_for_symbol'):
-                    _tp = self._get_strategy_profile_for_symbol(symbol)
+                if not trailing_strategy_name:
+                    _tp = self._resolve_strategy_context(symbol)
                     trailing_strategy_name = _tp.get('name', 'primary')
-                trailing_strategy_name = trailing_strategy_name or 'primary'
                 self.telegram.send_trailing_stop_activated(
                     symbol=symbol,
                     side=side,
@@ -3323,12 +3291,11 @@ class TradingBot:
         entry_price = pos['entry_price']
         quantity = pos['quantity']
         position_key = f"{symbol}_{side}"
-        pos_meta = getattr(self, 'known_positions', {}).get(position_key, {})
+        pos_meta = self.known_positions.get(position_key, {})
         strategy_name = pos_meta.get('strategy_name')
-        if not strategy_name and hasattr(self, '_get_strategy_profile_for_symbol'):
-            profile = self._get_strategy_profile_for_symbol(symbol)
+        if not strategy_name:
+            profile = self._resolve_strategy_context(symbol)
             strategy_name = profile.get('name', 'primary')
-        strategy_name = strategy_name or 'primary'
         logger.info(f"🚨 Fechando posição: {reason}")
         
         # Pega o preço atual ANTES de fechar (será o preço de saída aproximado)

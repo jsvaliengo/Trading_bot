@@ -8,7 +8,9 @@ from trading_bot.core.strategy import HedgeStrategy, RangeScalpingStrategy, Sign
 
 
 def _make_light_bot():
-    return TradingBot.__new__(TradingBot)
+    bot = TradingBot.__new__(TradingBot)
+    bot._init_runtime_state()
+    return bot
 
 
 def _make_range_klines(last_close: float) -> list[dict]:
