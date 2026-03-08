@@ -420,32 +420,6 @@ class TradingBot:
             'symbols': []
         }
 
-    def _evaluate_critical_health_issue(
-        self,
-        api_report: Dict[str, Any],
-        order_report: Dict[str, Any],
-        runtime_report: Dict[str, Any]
-    ) -> Tuple[bool, str]:
-        """Avalia se há incidente crítico para disparo imediato."""
-        reasons = []
-
-        if api_report.get('failures', 0) >= int(config.API_HEALTH_CRITICAL_MIN_API_FAILURES):
-            reasons.append(f"falhas_api={api_report.get('failures', 0)}")
-
-        if order_report.get('failures', 0) >= int(config.API_HEALTH_CRITICAL_MIN_ORDER_FAILURES):
-            reasons.append(f"falhas_ordem={order_report.get('failures', 0)}")
-
-        if order_report.get('rejections', 0) >= int(config.API_HEALTH_CRITICAL_MIN_ORDER_REJECTIONS):
-            reasons.append(f"rejeicoes_ordem={order_report.get('rejections', 0)}")
-
-        if runtime_report.get('loop_errors', 0) >= int(config.API_HEALTH_CRITICAL_MIN_LOOP_ERRORS):
-            reasons.append(f"erros_loop={runtime_report.get('loop_errors', 0)}")
-
-        if not reasons:
-            return (False, "")
-
-        return (True, ", ".join(reasons[:4]))
-
     def save_state(self):
         """
         Salva o estado atual do bot em um arquivo JSON.
@@ -2718,18 +2692,6 @@ class TradingBot:
             logger.error(f"❌ Erro ao executar trade: {e}")
             return False
     
-    # Mantém execute_hedge_trade como alias para compatibilidade
-    def execute_hedge_trade(self, setup, has_long: bool = False, has_short: bool = False) -> bool:
-        """
-        DEPRECATED: Use execute_signal_trade instead.
-        Mantido apenas para compatibilidade.
-        """
-        return self.execute_signal_trade(
-            setup=setup,
-            open_long=not has_long,
-            open_short=not has_short
-        )
-
     def _should_force_exit_range_break(self, symbol: str, side: str, range_mid_price) -> bool:
         """
         Critério de saída antecipada para range scalping.
