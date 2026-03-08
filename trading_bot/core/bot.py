@@ -1921,27 +1921,34 @@ class TradingBot:
         if exclude:
             candidate_coins = [c for c in candidate_coins if c not in exclude]
 
-        logger.info(f"📊 Calculando scores para {len(candidate_coins)} moedas...")
+        total_candidates = len(candidate_coins)
+        logger.info(f"📊 Calculando scores para {total_candidates} moedas...")
 
         # Calcula score de cada moeda da lista Binance
         coins_with_scores = []
+        _progress_steps = {int(total_candidates * p / 100) for p in (25, 50, 75)}
 
-        for symbol in candidate_coins:
+        for idx, symbol in enumerate(candidate_coins, 1):
             try:
                 # Busca métricas do par usando PairSelector
                 metrics = self.pair_selector.get_pair_metrics(symbol)
-                
+
                 if metrics:
                     # Calcula o score usando a função do PairSelector
                     score = self.pair_selector.score_pair(metrics)
-                    
+
                     if score > 0:
                         coins_with_scores.append((symbol, score))
                         logger.debug(f"   {symbol}: score {score:.2f}")
-                    
+
             except Exception as e:
                 logger.warning(f"   ⚠️ Erro ao calcular score de {symbol}: {e}")
                 continue
+
+            if idx in _progress_steps:
+                pct = int(idx / total_candidates * 100)
+                remaining = total_candidates - idx
+                logger.info(f"   ⏳ Progresso: {idx}/{total_candidates} ({pct}%) — faltam {remaining} moedas")
         
         # Ordena pelo score (maior primeiro)
         coins_with_scores.sort(key=lambda x: x[1], reverse=True)
