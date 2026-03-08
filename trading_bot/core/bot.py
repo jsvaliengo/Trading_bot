@@ -2541,16 +2541,17 @@ class TradingBot:
                 )
                 return False
 
-            # Improvement 10: verifica concentração individual da posição
+            # Improvement 10: verifica concentração individual da posição (baseado em margem)
             try:
                 _balance_for_conc = self.exchange.get_account_balance()
                 if _balance_for_conc > 0:
-                    _position_notional = order_size * leverage
-                    _conc_pct = (_position_notional / _balance_for_conc) * 100
+                    # Compara margem (order_size) contra saldo, não notional.
+                    # Notional = order_size * leverage seria sempre alto e bloquearia trades normais.
+                    _conc_pct = (order_size / _balance_for_conc) * 100
                     _max_conc = float(getattr(config, "MAX_POSITION_CONCENTRATION_PERCENT", 15.0))
                     if _conc_pct > _max_conc:
                         logger.warning(
-                            f"⚠️ {symbol}: Concentração da posição {_conc_pct:.1f}% "
+                            f"⚠️ {symbol}: Margem da posição {_conc_pct:.1f}% do saldo "
                             f"excede limite {_max_conc:.0f}%"
                         )
                         return False

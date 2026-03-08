@@ -444,9 +444,10 @@ class TradingConfig:
     # Ex: 80% = soma de todos os notionais abertos não pode exceder 80% do saldo
     MAX_TOTAL_NOTIONAL_PERCENT: float = float(os.getenv("TRADING_BOT_MAX_TOTAL_NOTIONAL_PERCENT", "80.0"))
 
-    # Concentração máxima por posição individual em % do saldo (Improvement 10)
-    # Ex: 15% = uma única posição não pode representar mais de 15% do saldo
-    MAX_POSITION_CONCENTRATION_PERCENT: float = float(os.getenv("TRADING_BOT_MAX_CONCENTRATION_PERCENT", "15.0"))
+    # Concentração máxima de margem por posição em % do saldo (Improvement 10)
+    # Baseado em margem (order_size / saldo), não em notional.
+    # Ex: 30% = order_size de uma posição não pode superar 30% do saldo.
+    MAX_POSITION_CONCENTRATION_PERCENT: float = float(os.getenv("TRADING_BOT_MAX_CONCENTRATION_PERCENT", "30.0"))
     
     # ============================================
     # INTERVALOS E TIMING
