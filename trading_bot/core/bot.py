@@ -22,6 +22,7 @@ import os
 import shutil
 import fcntl
 import threading
+import concurrent.futures
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Tuple
@@ -737,6 +738,25 @@ class TradingBot:
             filtered.append(symbol)
         return filtered
 
+    def _get_primary_profile_info(self) -> Tuple[list, dict, bool]:
+        """
+        Retorna (enabled_profiles, primary_profile, primary_is_dynamic).
+        primary_is_dynamic é True quando o perfil primário não tem pares fixos.
+        """
+        enabled_profiles = config.get_enabled_strategy_profiles() or []
+        primary_profile = enabled_profiles[0] if enabled_profiles else {}
+        primary_is_dynamic = not bool(primary_profile.get("pairs"))
+        return enabled_profiles, primary_profile, primary_is_dynamic
+
+    @staticmethod
+    def _get_reserved_pairs(enabled_profiles: list) -> set:
+        """Retorna o conjunto de pares fixos dos perfis secundários."""
+        reserved: set = set()
+        for p in enabled_profiles[1:]:
+            if p.get("pairs"):
+                reserved.update(p["pairs"])
+        return reserved
+
     @staticmethod
     def _normalize_strategy_entry_mode(entry_mode: str) -> str:
         """Normaliza modo de entrada por estratégia."""
@@ -1127,13 +1147,25 @@ class TradingBot:
         old_pairs = list(config.TRADING_PAIRS)
 
         if config.USE_BINANCE_STRATEGY:
-            # Mantém regra atual de escolha (score), apenas filtra pares desabilitados.
-            if hasattr(self, "binance_strategy") and self.binance_strategy:
-                num_coins = int(self.binance_strategy.get("num_coins", len(old_pairs) or 0))
-            else:
-                num_coins = len(old_pairs)
+            enabled_profiles, primary_profile, primary_is_dynamic = self._get_primary_profile_info()
 
-            new_pairs = self.sort_binance_coins_by_score(num_coins=max(0, num_coins))
+            if primary_is_dynamic:
+                # Usa max_pairs do perfil (igual ao update_binance_strategy_coins)
+                fallback_num = (
+                    self.binance_strategy.get("num_coins")
+                    if hasattr(self, "binance_strategy") and self.binance_strategy
+                    else None
+                ) or len(old_pairs) or 0
+                num_coins = int(primary_profile.get("max_pairs") or fallback_num)
+
+                new_pairs = self.sort_binance_coins_by_score(
+                    num_coins=max(0, num_coins),
+                    exclude=self._get_reserved_pairs(enabled_profiles),
+                )
+            else:
+                # Perfil com pares fixos — apenas filtra desabilitados
+                new_pairs = self._filter_disabled_pairs(list(primary_profile.get("pairs", [])))
+
             if hasattr(self, "binance_strategy") and self.binance_strategy is not None:
                 self.binance_strategy["coins"] = list(new_pairs)
         elif config.AUTO_SELECT_PAIRS and self.pair_selector is not None:
@@ -1254,9 +1286,7 @@ class TradingBot:
 
             # Determina quantos pares selecionar para o perfil primário dinâmico.
             # Usa "max_pairs" do perfil quando definido; caso contrário, usa o tier.
-            enabled_profiles = config.get_enabled_strategy_profiles() or []
-            primary_profile = enabled_profiles[0] if enabled_profiles else {}
-            primary_is_dynamic = not bool(primary_profile.get("pairs"))
+            enabled_profiles, primary_profile, primary_is_dynamic = self._get_primary_profile_info()
             num_primary_pairs = int(primary_profile.get("max_pairs") or strategy['num_coins'])
 
             if primary_is_dynamic:
@@ -1265,11 +1295,7 @@ class TradingBot:
                 logger.info(f"🔄 Selecionando top {num_primary_pairs} pares por score...")
                 if not hasattr(self, "pair_selector") or self.pair_selector is None:
                     self.pair_selector = PairSelector(self.exchange, config)
-                # Coleta pares fixos dos perfis secundários para excluir da seleção.
-                reserved = set()
-                for p in enabled_profiles[1:]:
-                    if p.get("pairs"):
-                        reserved.update(p["pairs"])
+                reserved = self._get_reserved_pairs(enabled_profiles)
                 sorted_coins = self.sort_binance_coins_by_score(num_primary_pairs, exclude=reserved)
                 strategy['coins'] = sorted_coins
                 config.TRADING_PAIRS = self._filter_disabled_pairs(sorted_coins)
@@ -1671,16 +1697,13 @@ class TradingBot:
                 logger.info(f"   Nova: {new_strategy['capital_range']} ({new_strategy['num_coins']} moedas)")
                 
                 # Reseleciona pares do perfil primário dinâmico ao mudar de faixa.
-                enabled_profiles = config.get_enabled_strategy_profiles() or []
-                primary_profile = enabled_profiles[0] if enabled_profiles else {}
-                primary_is_dynamic = not bool(primary_profile.get("pairs"))
+                enabled_profiles, primary_profile, primary_is_dynamic = self._get_primary_profile_info()
                 if primary_is_dynamic:
                     num_primary_pairs = int(primary_profile.get("max_pairs") or new_strategy['num_coins'])
-                    reserved = set()
-                    for p in enabled_profiles[1:]:
-                        if p.get("pairs"):
-                            reserved.update(p["pairs"])
-                    sorted_coins = self.sort_binance_coins_by_score(num_primary_pairs, exclude=reserved)
+                    sorted_coins = self.sort_binance_coins_by_score(
+                        num_primary_pairs,
+                        exclude=self._get_reserved_pairs(enabled_profiles),
+                    )
                     new_strategy['coins'] = sorted_coins
                     self.binance_strategy = new_strategy
                     config.TRADING_PAIRS = self._filter_disabled_pairs(sorted_coins)
@@ -1873,46 +1896,80 @@ class TradingBot:
         if exclude:
             candidate_coins = [c for c in candidate_coins if c not in exclude]
 
-        total_candidates = len(candidate_coins)
-        logger.info(f"📊 Calculando scores para {total_candidates} moedas...")
+        # ── 1. PRÉ-BUSCA BULK (paralelo) ─────────────────────────────────────
+        logger.info("📡 Buscando tickers e funding rates em bulk...")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as _bulk_executor:
+            _ticker_fut = _bulk_executor.submit(self.exchange.get_all_tickers_24h)
+            _funding_fut = _bulk_executor.submit(self.exchange.get_all_funding_rates)
+            all_tickers = _ticker_fut.result()
+            all_funding = _funding_fut.result()
 
-        # Calcula score de cada moeda da lista Binance
-        coins_with_scores = []
-        _progress_steps = {int(total_candidates * p / 100) for p in (25, 50, 75)}
-
-        for idx, symbol in enumerate(candidate_coins, 1):
+        # ── 2. PRÉ-FILTRO POR VOLUME (evita chamadas desnecessárias) ─────────
+        min_volume = getattr(config, "MIN_VOLUME_24H_USD", 0)
+        pre_filtered = []
+        for symbol in candidate_coins:
+            ticker = all_tickers.get(symbol)
+            if not ticker:
+                continue
             try:
-                # Busca métricas do par usando PairSelector
-                metrics = self.pair_selector.get_pair_metrics(symbol)
-
-                if metrics:
-                    # Calcula o score usando a função do PairSelector
-                    score = self.pair_selector.score_pair(metrics)
-
-                    if score > 0:
-                        coins_with_scores.append((symbol, score))
-                        logger.debug(f"   {symbol}: score {score:.2f}")
-
-            except Exception as e:
-                logger.warning(f"   ⚠️ Erro ao calcular score de {symbol}: {e}")
+                if float(ticker.get("quoteVolume", 0)) >= min_volume:
+                    pre_filtered.append(symbol)
+            except (TypeError, ValueError):
                 continue
 
-            if idx in _progress_steps:
-                pct = int(idx / total_candidates * 100)
-                remaining = total_candidates - idx
-                logger.info(f"   ⏳ Progresso: {idx}/{total_candidates} ({pct}%) — faltam {remaining} moedas")
-        
-        # Ordena pelo score (maior primeiro)
+        total_candidates = len(pre_filtered)
+        logger.info(
+            f"📊 Calculando scores para {total_candidates} moedas "
+            f"(de {len(candidate_coins)} candidatas após filtro de volume)..."
+        )
+
+        # ── 3. CALCULA MÉTRICAS EM PARALELO ──────────────────────────────────
+        def _score_symbol(symbol: str):
+            try:
+                ticker = all_tickers.get(symbol)
+                funding = all_funding.get(symbol)
+                metrics = self.pair_selector.get_pair_metrics(
+                    symbol,
+                    prefetched_ticker=ticker,
+                    prefetched_funding_rate=funding,
+                )
+                if metrics:
+                    score = self.pair_selector.score_pair(metrics)
+                    if score > 0:
+                        return (symbol, score)
+            except Exception as e:
+                logger.warning(f"   ⚠️ Erro ao calcular score de {symbol}: {e}")
+            return None
+
+        coins_with_scores = []
+        max_workers = min(16, total_candidates or 1)
+        completed = 0
+        _progress_steps = {max(1, int(total_candidates * p / 100)) for p in (25, 50, 75)}
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(_score_symbol, sym) for sym in pre_filtered}
+            for future in concurrent.futures.as_completed(futures):
+                completed += 1
+                result = future.result()
+                if result is not None:
+                    coins_with_scores.append(result)
+                    logger.debug(f"   {result[0]}: score {result[1]:.2f}")
+                if completed in _progress_steps:
+                    pct = int(completed / total_candidates * 100)
+                    remaining = total_candidates - completed
+                    logger.info(
+                        f"   ⏳ Progresso: {completed}/{total_candidates} ({pct}%) — faltam {remaining} moedas"
+                    )
+
+        # ── 4. ORDENA E RETORNA ───────────────────────────────────────────────
         coins_with_scores.sort(key=lambda x: x[1], reverse=True)
-        
-        # Log do ranking
+
         logger.info(f"🏆 Top {num_coins} moedas por score:")
         for i, (symbol, score) in enumerate(coins_with_scores[:num_coins], 1):
             logger.info(f"   {i}. {symbol.replace('USDT', '')}: {score:.2f}")
-        
-        # Retorna apenas os símbolos (sem os scores)
+
         best_coins = [coin for coin, score in coins_with_scores[:num_coins]]
-        
+
         # Se não conseguiu scores suficientes, completa com a ordem padrão
         if len(best_coins) < num_coins:
             logger.warning(f"⚠️ Só conseguiu {len(best_coins)} scores, completando com ordem padrão")
@@ -1921,7 +1978,7 @@ class TradingBot:
                     best_coins.append(coin)
                     if len(best_coins) >= num_coins:
                         break
-        
+
         return best_coins
     
     def update_binance_strategy_coins(self):
@@ -1936,24 +1993,21 @@ class TradingBot:
             return
 
         # Pula reordenação quando o perfil primário tem pares fixos.
-        enabled_profiles = config.get_enabled_strategy_profiles() or []
-        primary_profile = enabled_profiles[0] if enabled_profiles else {}
-        primary_is_dynamic = not bool(primary_profile.get("pairs"))
+        enabled_profiles, primary_profile, primary_is_dynamic = self._get_primary_profile_info()
         if not primary_is_dynamic:
             return
 
         logger.info("🔄 Atualizando seleção de pares do trend_strong por score...")
 
         num_primary_pairs = int(primary_profile.get("max_pairs") or self.binance_strategy['num_coins'])
-        reserved = set()
-        for p in enabled_profiles[1:]:
-            if p.get("pairs"):
-                reserved.update(p["pairs"])
 
         old_coins = list(config.TRADING_PAIRS)
 
         # Reseleciona os melhores pares excluindo os fixos do range_scalp_v1
-        new_coins = self.sort_binance_coins_by_score(num_primary_pairs, exclude=reserved)
+        new_coins = self.sort_binance_coins_by_score(
+            num_primary_pairs,
+            exclude=self._get_reserved_pairs(enabled_profiles),
+        )
 
         # Verifica se mudou
         if new_coins == old_coins:

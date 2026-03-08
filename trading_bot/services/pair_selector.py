@@ -94,76 +94,86 @@ class PairSelector:
             logger.error(f"Erro ao buscar pares de futuros: {e}")
             return []
     
-    def get_pair_metrics(self, symbol: str) -> Dict:
+    def get_pair_metrics(
+        self,
+        symbol: str,
+        prefetched_ticker: Dict = None,
+        prefetched_funding_rate: float = None,
+    ) -> Dict:
         """
         Calcula as métricas de um par específico.
-        
+
+        Args:
+            symbol: Par de trading
+            prefetched_ticker: Dados de ticker 24h já buscados em bulk (evita chamada extra)
+            prefetched_funding_rate: Funding rate já buscado em bulk (evita chamada extra)
+
         Returns:
             Dict com volatilidade, volume, tendência, funding, spread
         """
         try:
-            # Busca dados de 24h
-            ticker_24h = self.exchange.get_ticker_24h(symbol)
-            
-            # Busca orderbook para spread
+            # Ticker 24h — usa pré-buscado se disponível
+            if prefetched_ticker:
+                ticker_24h = prefetched_ticker
+            else:
+                ticker_24h = self.exchange.get_ticker_24h(symbol)
+
+            # Orderbook para spread — sempre por símbolo (não há bulk)
             orderbook = self.exchange.get_order_book(symbol, limit=5)
-            
-            # Busca klines para volatilidade e tendência
+
+            # Klines para volatilidade e tendência — sempre por símbolo
             klines = self.exchange.get_klines_raw(
                 symbol=symbol,
                 interval='1h',
-                limit=24  # Últimas 24 horas
+                limit=24
             )
-            
-            # Busca funding rate
-            funding_info = self.exchange.get_funding_rate(symbol)
-            
-            # Busca min notional
+
+            # Funding rate — usa pré-buscado se disponível
+            if prefetched_funding_rate is not None:
+                funding_rate = prefetched_funding_rate
+            else:
+                funding_info = self.exchange.get_funding_rate(symbol)
+                funding_rate = funding_info['rate_percent']
+
+            # Min notional (usa cache interno da exchange)
             symbol_info = self.exchange.get_symbol_info(symbol)
             min_notional = symbol_info.get('minNotional', 100)
-            
+
             # ============================================
             # CALCULA MÉTRICAS
             # ============================================
-            
+
             # 1. VOLUME 24H (em USD)
             volume_24h = float(ticker_24h['quoteVolume'])
-            
+
             # 2. VOLATILIDADE (desvio padrão dos retornos horários)
             closes = [float(k[4]) for k in klines]
             if len(closes) > 1:
-                returns = [(closes[i] - closes[i-1]) / closes[i-1] * 100 
-                          for i in range(1, len(closes))]
+                returns = [(closes[i] - closes[i-1]) / closes[i-1] * 100
+                           for i in range(1, len(closes))]
                 volatility = self._calculate_std(returns)
             else:
                 volatility = 0
-            
+
             # 3. TENDÊNCIA (força e direção)
             if len(closes) >= 2:
-                # Variação nas últimas 24h
                 price_change_24h = (closes[-1] - closes[0]) / closes[0] * 100
-                
-                # Força da tendência (valor absoluto)
                 trend_strength = abs(price_change_24h)
             else:
                 price_change_24h = 0
                 trend_strength = 0
-            
-            # 4. FUNDING RATE
-            funding_rate = funding_info['rate_percent']
-            
-            # 5. SPREAD
+
+            # 4. SPREAD
             best_bid = float(orderbook['bids'][0][0]) if orderbook['bids'] else 0
             best_ask = float(orderbook['asks'][0][0]) if orderbook['asks'] else 0
-            
             if best_bid > 0 and best_ask > 0:
                 spread_percent = ((best_ask - best_bid) / best_bid) * 100
             else:
-                spread_percent = 999  # Muito alto se não tiver dados
-            
-            # 6. PREÇO ATUAL
+                spread_percent = 999
+
+            # 5. PREÇO ATUAL
             current_price = float(ticker_24h['lastPrice'])
-            
+
             return {
                 'symbol': symbol,
                 'volume_24h': volume_24h,
@@ -175,7 +185,7 @@ class PairSelector:
                 'current_price': current_price,
                 'min_notional': min_notional
             }
-            
+
         except Exception as e:
             logger.error(f"Erro ao calcular métricas de {symbol}: {e}")
             return None
