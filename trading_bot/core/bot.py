@@ -3124,9 +3124,10 @@ class TradingBot:
                 # Atualiza trades por estratégia
                 pos_meta = self.known_positions.get(f"{symbol}_{side}", {})
                 strat_key = pos_meta.get('strategy_name')
-                if not strat_key:
+                if not strat_key and hasattr(self, '_get_strategy_profile_for_symbol'):
                     _sp = self._get_strategy_profile_for_symbol(symbol)
                     strat_key = _sp.get('name', 'primary')
+                strat_key = strat_key or 'primary'
                 if strat_key not in self.trades_by_strategy:
                     self.trades_by_strategy[strat_key] = {'wins': 0, 'losses': 0, 'win_value': 0.0, 'loss_value': 0.0, 'fees': 0.0}
                 if pnl_net > 0:
@@ -3236,9 +3237,10 @@ class TradingBot:
                 # Envia notificação
                 trailing_pos_meta = getattr(self, 'known_positions', {}).get(position_key, {})
                 trailing_strategy_name = trailing_pos_meta.get('strategy_name')
-                if not trailing_strategy_name:
+                if not trailing_strategy_name and hasattr(self, '_get_strategy_profile_for_symbol'):
                     _tp = self._get_strategy_profile_for_symbol(symbol)
                     trailing_strategy_name = _tp.get('name', 'primary')
+                trailing_strategy_name = trailing_strategy_name or 'primary'
                 self.telegram.send_trailing_stop_activated(
                     symbol=symbol,
                     side=side,
@@ -3323,9 +3325,10 @@ class TradingBot:
         position_key = f"{symbol}_{side}"
         pos_meta = getattr(self, 'known_positions', {}).get(position_key, {})
         strategy_name = pos_meta.get('strategy_name')
-        if not strategy_name:
+        if not strategy_name and hasattr(self, '_get_strategy_profile_for_symbol'):
             profile = self._get_strategy_profile_for_symbol(symbol)
             strategy_name = profile.get('name', 'primary')
+        strategy_name = strategy_name or 'primary'
         logger.info(f"🚨 Fechando posição: {reason}")
         
         # Pega o preço atual ANTES de fechar (será o preço de saída aproximado)
