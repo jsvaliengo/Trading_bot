@@ -596,7 +596,7 @@ class TradingConfig:
 
         # Pares desabilitados por padrão (podem ser reabilitados via Telegram)
         if self.DISABLED_PAIRS is None:
-            self.DISABLED_PAIRS = ["ADAUSDT", "SIGNUSDT"]
+            self.DISABLED_PAIRS = ["BTCUSDT", "RIVERUSDT", "SIGNUSDT"]
         self.DISABLED_PAIRS = self.normalize_pair_list(self.DISABLED_PAIRS)
         
         # ============================================
