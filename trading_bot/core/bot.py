@@ -3281,36 +3281,13 @@ class TradingBot:
             
             # Verifica se o preço atingiu o trailing stop
             if price_hit:
-                # Determina o lucro mínimo baseado no funding rate
-                min_profit = config.TRAILING_MIN_PROFIT_USD
-                
-                # Se CHECK_FUNDING_RATE está ativo, verifica se funding está contra a posição
-                if config.CHECK_FUNDING_RATE:
-                    funding_info = self.exchange.get_funding_rate(symbol)
-                    funding_rate = funding_info['rate_percent']
-                    
-                    # Funding POSITIVO = LONGs pagam
-                    # Funding NEGATIVO = SHORTs pagam
-                    funding_against = False
-                    
-                    if side == "LONG" and funding_rate > config.FUNDING_RATE_THRESHOLD:
-                        funding_against = True
-                        logger.info(f"   💸 Funding {funding_rate:+.4f}% está CONTRA LONG")
-                    elif side == "SHORT" and funding_rate < -config.FUNDING_RATE_THRESHOLD:
-                        funding_against = True
-                        logger.info(f"   💸 Funding {funding_rate:+.4f}% está CONTRA SHORT")
-                    
-                    # Se funding está contra, aumenta o mínimo
-                    if funding_against:
-                        min_profit = config.TRAILING_MIN_PROFIT_HIGH_FUNDING
-                        logger.info(f"   📈 Mínimo aumentado para ${min_profit:.2f} (funding alto)")
-                
-                if profit_usd >= min_profit:
-                    return (True, f"Trailing Stop ({config.TRAILING_DISTANCE_PERCENT}% do pico)")
-                else:
-                    # Lucro muito baixo, não fecha ainda
-                    logger.info(f"   ⚠️ Trailing atingido mas lucro ${profit_usd:.4f} < mínimo ${min_profit:.2f}")
-                    logger.info(f"   → Mantendo posição aberta até lucro >= ${min_profit:.2f}")
+                # Fecha sempre que o stop for atingido. A activation_threshold já garante
+                # que a posição estava lucrativa quando o trailing foi ativado.
+                # Verificar um mínimo em USD aqui bloqueava o fechamento em posições pequenas
+                # (ex: order=$3, leverage=10x → profit_usd < $0.20 na ativação) deixando a
+                # posição aberta enquanto o preço continuava caindo.
+                logger.info(f"   🎯 Trailing Stop atingido | lucro ${profit_usd:.4f} ({profit_pct:.3f}%)")
+                return (True, f"Trailing Stop ({config.TRAILING_DISTANCE_PERCENT}% do pico)")
             
             # Log do status do trailing
             logger.info(f"   🎯 Trailing ativo | Pico: ${peak_price:.4f} | Stop: ${trailing_stop_price:.4f} | Lucro: ${profit_usd:.4f}")

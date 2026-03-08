@@ -135,8 +135,6 @@ def test_trailing_stop_activates_and_closes_long_on_retrace(monkeypatch):
     monkeypatch.setattr(config, "CHECK_FUNDING_RATE", True)
     monkeypatch.setattr(config, "TRAILING_ACTIVATION_PERCENT", 0.20)
     monkeypatch.setattr(config, "TRAILING_DISTANCE_PERCENT", 0.12)
-    monkeypatch.setattr(config, "TRAILING_MIN_PROFIT_USD", 0.20)
-    monkeypatch.setattr(config, "TRAILING_MIN_PROFIT_HIGH_FUNDING", 0.35)
     monkeypatch.setattr(config, "FUNDING_RATE_THRESHOLD", 0.02)
 
     key = "ETHUSDT_LONG"
@@ -155,7 +153,7 @@ def test_trailing_stop_activates_and_closes_long_on_retrace(monkeypatch):
     assert should_close is False
     assert reason == ""
 
-    # Recuo que atinge trailing e mantém lucro mínimo
+    # Recuo que atinge trailing — fecha imediatamente (sem gate de lucro mínimo USD)
     should_close, reason = bot._check_trailing_stop(
         key, "LONG", 100.0, 100.27, "ETHUSDT", 1.0
     )
@@ -177,8 +175,6 @@ def test_trailing_stop_activates_and_closes_short_on_retrace(monkeypatch):
     monkeypatch.setattr(config, "CHECK_FUNDING_RATE", True)
     monkeypatch.setattr(config, "TRAILING_ACTIVATION_PERCENT", 0.20)
     monkeypatch.setattr(config, "TRAILING_DISTANCE_PERCENT", 0.12)
-    monkeypatch.setattr(config, "TRAILING_MIN_PROFIT_USD", 0.20)
-    monkeypatch.setattr(config, "TRAILING_MIN_PROFIT_HIGH_FUNDING", 0.35)
     monkeypatch.setattr(config, "FUNDING_RATE_THRESHOLD", 0.02)
 
     key = "ETHUSDT_SHORT"
@@ -205,7 +201,10 @@ def test_trailing_stop_activates_and_closes_short_on_retrace(monkeypatch):
     assert "Trailing Stop" in reason
 
 
-def test_trailing_stop_hit_does_not_close_when_profit_usd_below_minimum(monkeypatch):
+def test_trailing_stop_always_closes_when_hit_regardless_of_profit_usd(monkeypatch):
+    """Trailing stop deve fechar SEMPRE ao atingir o stop, sem gate de lucro mínimo USD.
+    Gate em USD bloqueava fechamento em posições pequenas (ex: $3 × 10x = $30 notional)
+    onde profit_usd nunca atingia o mínimo configurado."""
     bot = _make_light_bot()
     bot.peak_prices = {}
     bot.trailing_activated = {}
@@ -219,10 +218,9 @@ def test_trailing_stop_hit_does_not_close_when_profit_usd_below_minimum(monkeypa
     monkeypatch.setattr(config, "CHECK_FUNDING_RATE", False)
     monkeypatch.setattr(config, "TRAILING_ACTIVATION_PERCENT", 0.20)
     monkeypatch.setattr(config, "TRAILING_DISTANCE_PERCENT", 0.05)
-    monkeypatch.setattr(config, "TRAILING_MIN_PROFIT_USD", 0.50)
 
     key = "ETHUSDT_LONG"
-    position_amt = 0.01
+    position_amt = 0.01  # posição pequena: profit_usd seria centavos
 
     # Ativa trailing
     should_close, reason = bot._check_trailing_stop(
@@ -239,12 +237,12 @@ def test_trailing_stop_hit_does_not_close_when_profit_usd_below_minimum(monkeypa
     assert should_close is False
     assert reason == ""
 
-    # Atinge trailing, mas lucro em USD ainda abaixo do mínimo
+    # Atinge trailing — deve fechar mesmo com profit_usd baixo (ex: $0.024)
     should_close, reason = bot._check_trailing_stop(
         key, "LONG", 100.0, 100.24, "ETHUSDT", position_amt
     )
-    assert should_close is False
-    assert reason == ""
+    assert should_close is True
+    assert "Trailing Stop" in reason
 
 
 def test_analyze_and_trade_skips_reentry_when_long_is_already_open(monkeypatch):

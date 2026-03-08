@@ -409,9 +409,10 @@ class TradingConfig:
     # NOTA: Breakeven = 0.10% (taxa taker 0.05% × 2 ordens)
     
     USE_TRAILING_STOP: bool = True
-    TRAILING_ACTIVATION_PERCENT: float = 0.20   # Ativa quando lucro >= 0.20%
-    TRAILING_DISTANCE_PERCENT: float = 0.12     # Stop fica 0.12% abaixo do pico
-    TRAILING_MIN_PROFIT_USD: float = 0.20       # Lucro mínimo em USD para fechar ($0.20 = 20 centavos)
+    TRAILING_ACTIVATION_PERCENT: float = 0.50   # Ativa quando lucro >= 0.50%
+    TRAILING_DISTANCE_PERCENT: float = 0.25     # Stop fica 0.25% abaixo do pico
+    # TRAILING_MIN_PROFIT_USD removido — gate em USD bloqueava fechamento em posições pequenas
+    # (order=$3 × 10x = $30 notional → profit_usd < $0.20 na ativação)
     
     # ============================================
     # FUNDING RATE (Taxa de financiamento)
@@ -429,7 +430,6 @@ class TradingConfig:
     
     CHECK_FUNDING_RATE: bool = True
     FUNDING_RATE_THRESHOLD: float = 0.02        # Acima de 0.02% considera "alto"
-    TRAILING_MIN_PROFIT_HIGH_FUNDING: float = 0.35  # Mínimo quando funding está contra ($0.35)
     
     # Perda máxima diária permitida (em % do capital)
     # Se perder 10% do capital no dia, para de operar
