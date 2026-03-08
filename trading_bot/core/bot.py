@@ -889,6 +889,9 @@ class TradingBot:
             }
             if risk_profile:
                 runtime_profile["risk_profile"] = risk_profile
+            max_pairs_val = raw_profile.get("max_pairs")
+            if max_pairs_val:
+                runtime_profile["max_pairs"] = int(max_pairs_val)
             runtime_profiles.append(runtime_profile)
 
         if not runtime_profiles:
@@ -937,6 +940,8 @@ class TradingBot:
             }
             if profile.get("risk_profile"):
                 serialized["risk_profile"] = dict(profile["risk_profile"])
+            if profile.get("max_pairs"):
+                serialized["max_pairs"] = int(profile["max_pairs"])
             config_profiles.append(serialized)
         config.STRATEGY_PROFILES = config_profiles
 
@@ -1005,7 +1010,10 @@ class TradingBot:
         existing_primary_pairs = self._filter_disabled_pairs(
             normalized_profiles[primary_index].get("pairs", [])
         )
-        primary_has_fixed_pairs = bool(existing_primary_pairs)
+        # Perfil com max_pairs > 0 é dinâmico — pares foram atribuídos em runtime,
+        # não são fixos de config. Não deve bloquear nova seleção dinâmica.
+        profile_is_dynamic = bool(normalized_profiles[primary_index].get("max_pairs", 0))
+        primary_has_fixed_pairs = bool(existing_primary_pairs) and not profile_is_dynamic
 
         if primary_pairs is not None and not primary_has_fixed_pairs:
             # Perfil primário sem pares fixos — usa a seleção dinâmica externa.
@@ -1921,27 +1929,34 @@ class TradingBot:
         if exclude:
             candidate_coins = [c for c in candidate_coins if c not in exclude]
 
-        logger.info(f"📊 Calculando scores para {len(candidate_coins)} moedas...")
+        total_candidates = len(candidate_coins)
+        logger.info(f"📊 Calculando scores para {total_candidates} moedas...")
 
         # Calcula score de cada moeda da lista Binance
         coins_with_scores = []
+        _progress_steps = {int(total_candidates * p / 100) for p in (25, 50, 75)}
 
-        for symbol in candidate_coins:
+        for idx, symbol in enumerate(candidate_coins, 1):
             try:
                 # Busca métricas do par usando PairSelector
                 metrics = self.pair_selector.get_pair_metrics(symbol)
-                
+
                 if metrics:
                     # Calcula o score usando a função do PairSelector
                     score = self.pair_selector.score_pair(metrics)
-                    
+
                     if score > 0:
                         coins_with_scores.append((symbol, score))
                         logger.debug(f"   {symbol}: score {score:.2f}")
-                    
+
             except Exception as e:
                 logger.warning(f"   ⚠️ Erro ao calcular score de {symbol}: {e}")
                 continue
+
+            if idx in _progress_steps:
+                pct = int(idx / total_candidates * 100)
+                remaining = total_candidates - idx
+                logger.info(f"   ⏳ Progresso: {idx}/{total_candidates} ({pct}%) — faltam {remaining} moedas")
         
         # Ordena pelo score (maior primeiro)
         coins_with_scores.sort(key=lambda x: x[1], reverse=True)
