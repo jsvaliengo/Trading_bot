@@ -791,6 +791,32 @@ class RangeScalpingStrategy:
     def _clip(value: float, low: float, high: float) -> float:
         return max(low, min(high, value))
 
+    @staticmethod
+    def _is_range_still_valid(symbol: str, support: float, resistance: float, current_price: float) -> bool:
+        """
+        Retorna True se o preço está dentro do range e ele não foi rompido.
+        Improvement 9: Range entry confirmation — range break check.
+        """
+        range_size = resistance - support
+        if range_size <= 0:
+            return False
+
+        # Se o preço está fora do range por mais de 0.5%, é um breakout
+        if current_price > resistance * 1.005:
+            logger.debug(
+                "   %s: Preço $%.4f acima da resistência $%.4f — range quebrado",
+                symbol, current_price, resistance,
+            )
+            return False
+        if current_price < support * 0.995:
+            logger.debug(
+                "   %s: Preço $%.4f abaixo do suporte $%.4f — range quebrado",
+                symbol, current_price, support,
+            )
+            return False
+
+        return True
+
     def _analyze_range_context(self, klines: List[Dict]) -> Optional[Dict[str, float]]:
         if not klines:
             return None
@@ -927,6 +953,10 @@ class RangeScalpingStrategy:
         if not is_buy_zone and not is_sell_zone:
             return None
 
+        # Improvement 9: verifica se o range ainda é válido (não houve breakout)
+        if not self._is_range_still_valid(symbol, support, resistance, current_price):
+            return None
+
         min_mult = float(self.config.RANGE_SCALP_MIN_POSITION_MULTIPLIER)
         max_mult = float(self.config.RANGE_SCALP_MAX_POSITION_MULTIPLIER)
         zone_span = max(range_size * float(self.config.RANGE_SCALP_EDGE_ZONE_RATIO), 1e-9)
@@ -1024,32 +1054,45 @@ class RiskManager:
     proteger o capital de perdas excessivas.
     """
     
-    def __init__(self):
-        self.config = config
+    def __init__(self, cfg=None, initial_capital: float = None):
+        self.config = cfg if cfg is not None else config
         self.daily_pnl = 0.0
-        self.initial_capital = config.TOTAL_CAPITAL
+        self.initial_capital = initial_capital if initial_capital is not None else config.TOTAL_CAPITAL
+        self._real_daily_pnl_fn = None  # Optional callable: () -> float
     
     def update_pnl(self, pnl: float):
         """Atualiza o P&L diário."""
         self.daily_pnl += pnl
     
-    def can_open_position(self, current_positions: int) -> bool:
+    def can_open_position(self, current_positions: int = 0, open_positions: int = None) -> bool:
         """
         Verifica se pode abrir nova posição.
-        
+
         Checa:
         1. Número máximo de posições
         2. Perda diária máxima
         """
+        # Suporta tanto current_positions quanto open_positions como argumento
+        pos_count = open_positions if open_positions is not None else current_positions
+
         # Verifica número de posições
-        if current_positions >= self.config.MAX_OPEN_POSITIONS:
-            logger.warning(f"⚠️  Máximo de posições atingido ({current_positions})")
+        if pos_count >= self.config.MAX_OPEN_POSITIONS:
+            logger.warning(f"⚠️  Máximo de posições atingido ({pos_count})")
             return False
-        
-        # Verifica perda diária
+
+        # Usa P&L real da Binance se disponível, senão usa acumulador interno
+        if self._real_daily_pnl_fn is not None:
+            try:
+                real_pnl = self._real_daily_pnl_fn()
+                daily_pnl_to_check = real_pnl
+            except Exception:
+                daily_pnl_to_check = self.daily_pnl
+        else:
+            daily_pnl_to_check = self.daily_pnl
+
         max_loss = self.initial_capital * (self.config.MAX_DAILY_LOSS_PERCENT / 100)
-        if self.daily_pnl < -max_loss:
-            logger.warning(f"⚠️  Perda diária máxima atingida (${abs(self.daily_pnl):.2f})")
+        if daily_pnl_to_check < -max_loss:
+            logger.warning(f"⚠️ Perda diária máxima atingida: ${daily_pnl_to_check:.2f} (limite: -${max_loss:.2f})")
             return False
-        
+
         return True

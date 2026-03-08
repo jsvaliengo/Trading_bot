@@ -337,6 +337,10 @@ class TradingConfig:
     # Se o prejuízo total atingir esse % do capital inicial, fecha TUDO e para o bot
     # Exemplo: 90% com capital de $50 = para quando perder $45 (restar $5)
     GLOBAL_STOP_LOSS_PERCENT: float = 90.0
+
+    # Drawdown máximo a partir do pico de equity (Improvement 1)
+    # Se o saldo cair X% desde o pico histórico, bloqueia novas entradas
+    MAX_DRAWDOWN_FROM_PEAK_PERCENT: float = float(os.getenv("TRADING_BOT_MAX_DRAWDOWN_PERCENT", "30.0"))
     
     # ============================================
     # ESTRATÉGIA BINANCE PADRÃO (por faixa de capital)
@@ -435,6 +439,14 @@ class TradingConfig:
     # Com estratégia direcional, cada par pode ter LONG ou SHORT (ou ambos se sinal mudar)
     # 12 posições = permite até 12 trades direcionais ativos
     MAX_OPEN_POSITIONS: int = 12
+
+    # Exposição total máxima em % do saldo (Improvement 4)
+    # Ex: 80% = soma de todos os notionais abertos não pode exceder 80% do saldo
+    MAX_TOTAL_NOTIONAL_PERCENT: float = float(os.getenv("TRADING_BOT_MAX_TOTAL_NOTIONAL_PERCENT", "80.0"))
+
+    # Concentração máxima por posição individual em % do saldo (Improvement 10)
+    # Ex: 15% = uma única posição não pode representar mais de 15% do saldo
+    MAX_POSITION_CONCENTRATION_PERCENT: float = float(os.getenv("TRADING_BOT_MAX_CONCENTRATION_PERCENT", "15.0"))
     
     # ============================================
     # INTERVALOS E TIMING
@@ -450,6 +462,10 @@ class TradingConfig:
     # Pausa entre análise de um símbolo e outro no mesmo ciclo (em segundos)
     # Ajuda a reduzir burst de chamadas na API
     ANALYSIS_SYMBOL_DELAY: float = 1.0
+
+    # Idade máxima de um sinal antes de ser descartado (Improvement 7)
+    # Se o sinal foi gerado há mais de X segundos, pula a entrada
+    MAX_SIGNAL_AGE_SECONDS: float = float(os.getenv("TRADING_BOT_MAX_SIGNAL_AGE_SECONDS", "120.0"))
     
     # Timeframe para análise (1m, 5m, 15m, 1h, 4h)
     TIMEFRAME: str = "5m"
@@ -580,7 +596,7 @@ class TradingConfig:
 
         # Pares desabilitados por padrão (podem ser reabilitados via Telegram)
         if self.DISABLED_PAIRS is None:
-            self.DISABLED_PAIRS = ["ADAUSDT", "SIGNUSDT"]
+            self.DISABLED_PAIRS = ["BTCUSDT", "RIVERUSDT", "SIGNUSDT"]
         self.DISABLED_PAIRS = self.normalize_pair_list(self.DISABLED_PAIRS)
         
         # ============================================
