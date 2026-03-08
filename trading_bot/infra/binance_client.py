@@ -44,7 +44,14 @@ class BinanceConnection:
         self._reset_retry_stats(time.monotonic())
         self._order_stats_lock = threading.Lock()
         self._order_stats_since_report = self._new_order_stats()
-        
+
+        # Improvement 6: TTL cache para get_symbol_info e get_exchange_info
+        self._symbol_info_cache: Dict[str, Dict] = {}
+        self._symbol_info_cache_ts: Dict[str, float] = {}
+        self._symbol_info_cache_ttl: float = 21600.0  # 6 horas
+        self._exchange_info_cache: Optional[Dict] = None
+        self._exchange_info_cache_ts: float = 0.0
+
         # Inicializa o cliente
         if self.config.USE_TESTNET:
             # Testnet - para testes sem dinheiro real
@@ -859,32 +866,43 @@ class BinanceConnection:
         """
         Retorna informações sobre um par (precisão, min qty, etc).
         Importante para formatar corretamente as ordens.
+        Usa cache TTL de 6 horas para reduzir chamadas à API (Improvement 6).
         """
+        # Verifica cache antes de chamar a API
+        now = time.monotonic()
+        cached = self._symbol_info_cache.get(symbol)
+        if cached and (now - self._symbol_info_cache_ts.get(symbol, 0)) < self._symbol_info_cache_ttl:
+            return cached
+
         try:
             info = self._api_call("futures_exchange_info", self.client.futures_exchange_info)
-            
+
             for s in info.get('symbols', []):
                 if s['symbol'] == symbol:
                     # Encontra os filtros relevantes
                     min_qty = 0.001
                     min_notional = 5.0
-                    
+
                     for f in s.get('filters', []):
                         if f['filterType'] == 'LOT_SIZE':
                             min_qty = float(f['minQty'])
                         elif f['filterType'] == 'MIN_NOTIONAL':
                             min_notional = float(f.get('notional', 5))
-                    
-                    return {
+
+                    result = {
                         'symbol': symbol,
                         'pricePrecision': s['pricePrecision'],
                         'quantityPrecision': s['quantityPrecision'],
                         'minQty': min_qty,
                         'minNotional': min_notional,
                     }
-            
+                    # Armazena no cache
+                    self._symbol_info_cache[symbol] = result
+                    self._symbol_info_cache_ts[symbol] = time.monotonic()
+                    return result
+
             return {}
-            
+
         except Exception as e:
             logger.error(f"Erro ao obter info de {symbol}: {e}")
             return {}
@@ -892,9 +910,16 @@ class BinanceConnection:
     def get_exchange_info(self) -> Dict:
         """
         Retorna o exchangeInfo de futures.
+        Usa cache TTL de 6 horas para reduzir chamadas à API (Improvement 6).
         """
+        now = time.monotonic()
+        if self._exchange_info_cache and (now - self._exchange_info_cache_ts) < self._symbol_info_cache_ttl:
+            return self._exchange_info_cache
         try:
-            return self._api_call("futures_exchange_info", self.client.futures_exchange_info)
+            result = self._api_call("futures_exchange_info", self.client.futures_exchange_info)
+            self._exchange_info_cache = result
+            self._exchange_info_cache_ts = time.monotonic()
+            return result
         except Exception as e:
             logger.error(f"Erro ao obter exchange info: {e}")
             return {}

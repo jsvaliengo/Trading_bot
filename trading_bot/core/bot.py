@@ -104,7 +104,9 @@ class TradingBot:
         
         logger.info("🛡️  Inicializando gerenciador de risco...")
         self.risk_manager = RiskManager()
-        
+        # Improvement 2: wire real P&L from Binance into RiskManager
+        self.risk_manager._real_daily_pnl_fn = lambda: self.exchange.get_daily_pnl_from_binance().get('total', 0.0)
+
         logger.info("📱 Inicializando notificações Telegram...")
         self.telegram = TelegramNotifier(
             token=config.TELEGRAM_TOKEN,
@@ -179,6 +181,8 @@ class TradingBot:
         self.processed_transfer_ids = []
         self.peak_prices = {}
         self.trailing_activated = {}
+        self.peak_equity: float = 0.0
+        self.peak_equity_ts = None
         self.known_positions = {}
         self.double_first_used = {}
         self.commission_rates = None
@@ -2279,6 +2283,15 @@ class TradingBot:
             logger.info("⏸️  Meta diária atingida - não abrindo novas posições")
             return False
 
+        # Improvement 1: verifica drawdown desde o pico de equity
+        try:
+            _bal_for_dd = self.exchange.get_account_balance()
+            if _bal_for_dd > 0 and self._check_drawdown_from_peak(_bal_for_dd):
+                logger.info("⏸️  Drawdown máximo atingido - não abrindo novas posições")
+                return False
+        except Exception:
+            pass
+
         strategy_context = self._resolve_strategy_context(symbol=symbol, strategy_name=strategy_name)
         strategy_engine = strategy_context.get("strategy", getattr(self, "strategy", None) or HedgeStrategy())
         strategy_label = str(strategy_context.get("name", "primary"))
@@ -2302,26 +2315,30 @@ class TradingBot:
 
         logger.info(f"🔍 [{strategy_label}] Analisando {symbol}...")
         
-        # Obtém candles
-        klines = self.exchange.get_klines(
-            symbol=symbol,
-            interval=execution_timeframe,
-            limit=analysis_lookback
-        )
-        
+        # Improvement 5: busca klines em paralelo quando há timeframe de confirmação
+        if is_trend_strong and confirmation_timeframe:
+            def _fetch_klines(interval, limit):
+                return self.exchange.get_klines(symbol=symbol, interval=interval, limit=limit)
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as _kl_executor:
+                _exec_future = _kl_executor.submit(_fetch_klines, execution_timeframe, analysis_lookback)
+                _conf_future = _kl_executor.submit(_fetch_klines, confirmation_timeframe, analysis_lookback)
+                klines = _exec_future.result()
+                confirmation_klines = _conf_future.result()
+        else:
+            klines = self.exchange.get_klines(
+                symbol=symbol,
+                interval=execution_timeframe,
+                limit=analysis_lookback
+            )
+
         if not klines:
             logger.warning(f"⚠️  Sem dados para {symbol}")
             return False
 
-        if is_trend_strong and confirmation_timeframe:
-            confirmation_klines = self.exchange.get_klines(
-                symbol=symbol,
-                interval=confirmation_timeframe,
-                limit=analysis_lookback,
-            )
-            if not confirmation_klines:
-                logger.warning(f"⚠️  Sem dados de confirmação ({confirmation_timeframe}) para {symbol}")
-                return False
+        if is_trend_strong and confirmation_timeframe and not confirmation_klines:
+            logger.warning(f"⚠️  Sem dados de confirmação ({confirmation_timeframe}) para {symbol}")
+            return False
         
         # Verifica saldo DISPONÍVEL para novos trades
         available_balance = self.exchange.get_available_balance()
@@ -2535,7 +2552,46 @@ class TradingBot:
                 side=trade_side,
                 order_size=order_size,
             )
-            
+
+            # Improvement 7: verifica idade do sinal antes de executar
+            _signal_ts = setup_metadata.get("signal_timestamp")
+            if _signal_ts is not None:
+                try:
+                    _signal_age = (datetime.now() - _signal_ts).total_seconds()
+                    _max_age = float(getattr(config, "MAX_SIGNAL_AGE_SECONDS", 120.0))
+                    if _signal_age > _max_age:
+                        logger.info(
+                            f"⏱️ Sinal expirado para {symbol}: {_signal_age:.0f}s > {_max_age:.0f}s — pulando"
+                        )
+                        return False
+                except Exception:
+                    pass
+
+            # Improvement 4: verifica exposição total
+            _notional_pct = self._get_total_open_notional_percent()
+            _max_notional = float(getattr(config, "MAX_TOTAL_NOTIONAL_PERCENT", 80.0))
+            if _notional_pct >= _max_notional:
+                logger.warning(
+                    f"⚠️ Exposição total {_notional_pct:.1f}% excede limite {_max_notional:.0f}%"
+                )
+                return False
+
+            # Improvement 10: verifica concentração individual da posição
+            try:
+                _balance_for_conc = self.exchange.get_account_balance()
+                if _balance_for_conc > 0:
+                    _position_notional = order_size * leverage
+                    _conc_pct = (_position_notional / _balance_for_conc) * 100
+                    _max_conc = float(getattr(config, "MAX_POSITION_CONCENTRATION_PERCENT", 15.0))
+                    if _conc_pct > _max_conc:
+                        logger.warning(
+                            f"⚠️ {symbol}: Concentração da posição {_conc_pct:.1f}% "
+                            f"excede limite {_max_conc:.0f}%"
+                        )
+                        return False
+            except Exception:
+                pass
+
             # ============================================
             # ABRE LONG (quando sinal de entrada direciona para compra)
             # ============================================
@@ -2573,11 +2629,18 @@ class TradingBot:
                         applied_order_size=order_size,
                     )
 
-                # Define apenas TP para o LONG (SL é gerenciado pelo Trailing Stop do bot)
+                # Improvement 3: coloca SL real na Binance para o LONG
+                # custom_stop_loss vem do setup (já é preço absoluto para range scalping)
+                # Para trend, calcula com base em STOP_LOSS_PERCENT
+                if custom_stop_loss and custom_stop_loss > 0:
+                    sl_price_long = custom_stop_loss
+                else:
+                    _sl_pct = float(getattr(config, "STOP_LOSS_PERCENT", 3.0))
+                    sl_price_long = round(price * (1 - _sl_pct / 100), info.get('pricePrecision', 4))
                 self.exchange.set_stop_loss_take_profit(
                     symbol=symbol,
                     position_side='LONG',
-                    stop_loss_price=None,  # Sem SL na Binance
+                    stop_loss_price=sl_price_long,
                     take_profit_price=custom_take_profit if custom_take_profit else setup.take_profit
                 )
 
@@ -2675,14 +2738,20 @@ class TradingBot:
                         applied_order_size=order_size,
                     )
 
-                # Define apenas TP para o SHORT (SL é gerenciado pelo bot no monitoramento).
+                # Define TP e SL real para o SHORT (Improvement 3)
                 short_tp = custom_take_profit if custom_take_profit else setup.take_profit
                 if short_tp is None or short_tp <= 0:
                     short_tp = price * (1 - config.TAKE_PROFIT_PERCENT / 100)
+                # SL para SHORT: preço de entrada + % de stop loss
+                if custom_stop_loss and custom_stop_loss > 0:
+                    sl_price_short = custom_stop_loss
+                else:
+                    _sl_pct = float(getattr(config, "STOP_LOSS_PERCENT", 3.0))
+                    sl_price_short = round(price * (1 + _sl_pct / 100), info.get('pricePrecision', 4))
                 self.exchange.set_stop_loss_take_profit(
                     symbol=symbol,
                     position_side='SHORT',
-                    stop_loss_price=None,  # Sem SL na Binance
+                    stop_loss_price=sl_price_short,
                     take_profit_price=short_tp
                 )
 
@@ -3481,9 +3550,56 @@ class TradingBot:
         if loss_percent >= config.GLOBAL_STOP_LOSS_PERCENT:
             logger.warning(f"🚨 STOP LOSS GLOBAL ATINGIDO! Perda: {loss_percent:.1f}%")
             return True
-        
+
         return False
-    
+
+    # ------------------------------------------------------------------
+    # Improvement 1: Drawdown protection from peak equity
+    # ------------------------------------------------------------------
+
+    def _update_peak_equity(self, current_balance: float) -> None:
+        """Atualiza o pico histórico de equity."""
+        if current_balance > self.peak_equity:
+            self.peak_equity = current_balance
+            self.peak_equity_ts = datetime.now(timezone.utc)
+
+    def _check_drawdown_from_peak(self, current_balance: float) -> bool:
+        """
+        Retorna True se o drawdown desde o pico exceder o limite configurado.
+        Quando True, novas entradas devem ser bloqueadas.
+        """
+        if self.peak_equity <= 0 or not getattr(config, "MAX_DRAWDOWN_FROM_PEAK_PERCENT", 0):
+            return False
+        drawdown_pct = (self.peak_equity - current_balance) / self.peak_equity * 100
+        if drawdown_pct >= config.MAX_DRAWDOWN_FROM_PEAK_PERCENT:
+            logger.warning(
+                f"⛔ DRAWDOWN MÁXIMO ATINGIDO: {drawdown_pct:.1f}% desde pico "
+                f"${self.peak_equity:.2f} → atual ${current_balance:.2f}"
+            )
+            return True
+        return False
+
+    # ------------------------------------------------------------------
+    # Improvement 4: Max total notional exposure
+    # ------------------------------------------------------------------
+
+    def _get_total_open_notional_percent(self) -> float:
+        """Retorna o notional total aberto como % do saldo da carteira."""
+        try:
+            balance = self.exchange.get_account_balance()
+            if balance <= 0:
+                return 0.0
+            positions = self.exchange.get_open_positions()
+            total_notional = sum(
+                pos['quantity'] * pos.get('mark_price', pos.get('entry_price', 0))
+                for pos in positions
+                if pos.get('mark_price', pos.get('entry_price', 0)) > 0
+            )
+            return (total_notional / balance) * 100
+        except Exception as e:
+            logger.warning(f"⚠️ Falha ao calcular notional total: {e}")
+            return 0.0
+
     def execute_global_stop_loss(self):
         """
         Executa o Stop Loss Global: fecha todas as posições e para o bot.
@@ -4403,6 +4519,14 @@ class TradingBot:
                     # Monitora posições e risco
                     self.monitor_positions()
                     self.check_daily_targets()
+
+                    # Improvement 1: atualiza peak equity e verifica drawdown
+                    try:
+                        _current_bal = self.exchange.get_account_balance()
+                        if _current_bal > 0:
+                            self._update_peak_equity(_current_bal)
+                    except Exception:
+                        pass
 
                     if self.check_global_stop_loss():
                         self.execute_global_stop_loss()
