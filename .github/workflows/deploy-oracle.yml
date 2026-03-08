@@ -160,7 +160,7 @@ jobs:
           RUNTIME_DIR="$REMOTE_PATH/runtime"
           TIMESTAMP=$(date +%Y%m%d-%H%M%S)
           for STATE_FILE in "$RUNTIME_DIR"/bot_state.*.json "$RUNTIME_DIR/bot_state.json"; do
-            if [[ -f "$STATE_FILE" ]]; then
+            if [[ -f "$STATE_FILE" ]] && [[ "$STATE_FILE" != *backup* ]]; then
               mv "$STATE_FILE" "${STATE_FILE%.json}.backup-${TIMESTAMP}.json"
               echo "✅ Estado renomeado para backup: $(basename ${STATE_FILE%.json}.backup-${TIMESTAMP}.json)"
             fi
