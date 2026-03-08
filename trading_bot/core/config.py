@@ -607,20 +607,21 @@ class TradingConfig:
         if self.BINANCE_STRATEGY_TIERS is None:
             self.BINANCE_STRATEGY_TIERS = [
                 # (capital_min, capital_max, order_size, stop_loss_value, num_coins)
-                (90, 150, 3, 180, 3),     # Alterado: 1 → 3 moedas
-                (150, 300, 3, 180, 3),    # Mantido: 3 moedas (era 2)
-                (300, 500, 3, 180, 3),
-                (500, 1000, 3, 180, 6),
-                (1000, 2000, 3, 180, 9),
-                (2000, 3000, 3, 180, 9),    # 2000: order 3, SL 180, 9 moedas
-                (3000, 4000, 10, 600, 9),   # 3000: order 10, SL 600, 9 moedas
-                (4000, 5000, 12, 720, 10),  # 4000: order 12, SL 720, 10 moedas
-                (5000, 6000, 15, 900, 11),  # 5000: order 15, SL 900, 11 moedas
-                (6000, 7000, 17, 1020, 11), # 6000: order 17, SL 1020, 11 moedas
-                (7000, 8000, 20, 1200, 11), # 7000: order 20, SL 1200, 11 moedas
-                (8000, 9000, 21, 1260, 12), # 8000: order 21, SL 1260, 12 moedas
-                (9000, 10000, 24, 1440, 12),# 9000: order 24, SL 1440, 12 moedas
-                (10000, 999999, 28, 1680, 12), # 10000+: order 28, SL 1680, 12 moedas
+                # order_size escala com capital para que ganhos cresçam proporcionalmente.
+                # notional = order_size × leverage(20). stop_loss = order_size × 60.
+                # margem total ≈ 15–21% do capital (conservador).
+                (90,    200,    3,    180,   3),   # notional $60   → ganho ~$0.20
+                (200,   350,    6,    360,   3),   # notional $120  → ganho ~$0.40
+                (350,   500,    9,    540,   3),   # notional $180  → ganho ~$0.60
+                (500,   750,    15,   900,   3),   # notional $300  → ganho ~$1.00
+                (750,   1000,   20,   1200,  3),   # notional $400  → ganho ~$1.33
+                (1000,  1500,   30,   1800,  6),   # notional $600  → ganho ~$2.00
+                (1500,  2500,   45,   2700,  6),   # notional $900  → ganho ~$3.00
+                (2500,  4000,   60,   3600,  9),   # notional $1200 → ganho ~$4.00
+                (4000,  6000,   80,   4800,  9),   # notional $1600 → ganho ~$5.33
+                (6000,  9000,   100,  6000,  9),   # notional $2000 → ganho ~$6.67
+                (9000,  15000,  120,  7200,  12),  # notional $2400 → ganho ~$8.00
+                (15000, 999999, 150,  9000,  12),  # notional $3000 → ganho ~$10.00
             ]
         
         # Universo de moedas PERMITIDAS pela estratégia Binance.
