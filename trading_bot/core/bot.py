@@ -745,11 +745,16 @@ class TradingBot:
     def _get_primary_profile_info(self) -> Tuple[list, dict, bool]:
         """
         Retorna (enabled_profiles, primary_profile, primary_is_dynamic).
-        primary_is_dynamic é True quando o perfil primário não tem pares fixos.
+        primary_is_dynamic é True quando o perfil usa auto-seleção (max_pairs > 0)
+        ou quando ainda não tem pares atribuídos. Perfis com max_pairs configurado
+        são sempre dinâmicos, mesmo depois que os pares foram preenchidos em runtime.
         """
         enabled_profiles = config.get_enabled_strategy_profiles() or []
         primary_profile = enabled_profiles[0] if enabled_profiles else {}
-        primary_is_dynamic = not bool(primary_profile.get("pairs"))
+        # Considera dinâmico se max_pairs > 0 (auto-seleção Binance) OU se não há
+        # pares fixos configurados. Isso garante que desabilitar pares acione
+        # nova seleção em vez de apenas filtrar a lista existente.
+        primary_is_dynamic = bool(primary_profile.get("max_pairs", 0)) or not bool(primary_profile.get("pairs"))
         return enabled_profiles, primary_profile, primary_is_dynamic
 
     @staticmethod
@@ -1153,21 +1158,25 @@ class TradingBot:
         if config.USE_BINANCE_STRATEGY:
             enabled_profiles, primary_profile, primary_is_dynamic = self._get_primary_profile_info()
 
-            if primary_is_dynamic:
-                # Usa max_pairs do perfil (igual ao update_binance_strategy_coins)
-                fallback_num = (
-                    self.binance_strategy.get("num_coins")
-                    if hasattr(self, "binance_strategy") and self.binance_strategy
-                    else None
-                ) or len(old_pairs) or 0
-                num_coins = int(primary_profile.get("max_pairs") or fallback_num)
+            fallback_num = (
+                self.binance_strategy.get("num_coins")
+                if hasattr(self, "binance_strategy") and self.binance_strategy
+                else None
+            ) or len(old_pairs) or 0
+            num_coins = int(primary_profile.get("max_pairs") or fallback_num)
 
+            # Re-seleciona se: (a) perfil é dinâmico, ou (b) pares ativos ficaram
+            # abaixo do alvo após desabilitar — garante mínimo de pares sempre preenchido.
+            current_active = len(self._filter_disabled_pairs(list(primary_profile.get("pairs", []))))
+            should_refill = primary_is_dynamic or (num_coins > 0 and current_active < num_coins)
+
+            if should_refill:
                 new_pairs = self.sort_binance_coins_by_score(
                     num_coins=max(0, num_coins),
                     exclude=self._get_reserved_pairs(enabled_profiles),
                 )
             else:
-                # Perfil com pares fixos — apenas filtra desabilitados
+                # Perfil com pares fixos e sem déficit — apenas filtra desabilitados
                 new_pairs = self._filter_disabled_pairs(list(primary_profile.get("pairs", [])))
 
             if hasattr(self, "binance_strategy") and self.binance_strategy is not None:
