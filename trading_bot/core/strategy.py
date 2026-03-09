@@ -6,6 +6,7 @@ Implementa Hedge, DCA e análise técnica simples.
 """
 
 import logging
+import math
 from typing import Any, Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
 from enum import Enum
@@ -14,6 +15,20 @@ import numpy as np
 from .config import config
 
 logger = logging.getLogger(__name__)
+
+
+def _round_price(price: float) -> float:
+    """Arredonda preço com precisão adequada ao nível de preço.
+
+    Evita perda de precisão em moedas de baixo valor (ex: DOGE $0.09, SHIB $0.00001)
+    onde round(x, 2) tornaria SL e TP idênticos ou invertidos.
+    """
+    if price <= 0:
+        return price
+    magnitude = math.floor(math.log10(abs(price)))
+    # Mantém pelo menos 3 casas significativas após a vírgula
+    decimals = max(2, 2 - magnitude)
+    return round(price, decimals)
 
 
 class Signal(Enum):
@@ -657,7 +672,7 @@ class HedgeStrategy:
             else:
                 stop_loss = entry_price * (1 + stop_loss_pct / 100.0)
                 take_profit = entry_price * (1 - take_profit_pct / 100.0)
-            return (round(stop_loss, 2), round(take_profit, 2))
+            return (_round_price(stop_loss), _round_price(take_profit))
 
         if signal in [Signal.STRONG_BUY, Signal.BUY, Signal.NEUTRAL]:
             # Posição principal é LONG
@@ -678,8 +693,8 @@ class HedgeStrategy:
                 stop_loss = entry_price * (1 + self.config.STOP_LOSS_PERCENT / 100)
                 take_profit = entry_price * (1 - self.config.TAKE_PROFIT_PERCENT / 100)
         
-        return (round(stop_loss, 2), round(take_profit, 2))
-    
+        return (_round_price(stop_loss), _round_price(take_profit))
+
     def generate_trade_setup(
         self, 
         symbol: str, 
