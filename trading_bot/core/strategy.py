@@ -639,7 +639,7 @@ class HedgeStrategy:
             risk_reward_target = max(1.0, float(profile.get("risk_reward_target", 2.0)))
 
             if atr and atr > 0 and entry_price > 0:
-                base_stop_loss_pct = (float(atr) * 2.0 / float(entry_price)) * 100.0
+                base_stop_loss_pct = (float(atr) * 3.0 / float(entry_price)) * 100.0
             else:
                 base_stop_loss_pct = (stop_loss_min + stop_loss_max) / 2.0
 

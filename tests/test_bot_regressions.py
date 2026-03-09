@@ -523,12 +523,12 @@ def test_hedge_strategy_uses_balanced_risk_profile_with_rr_target():
     stop_loss, take_profit = strategy.calculate_stop_loss_take_profit(
         entry_price=100.0,
         signal=Signal.STRONG_BUY,
-        atr=0.2,  # 2*ATR = 0.4% de risco (dentro da faixa)
+        atr=0.2,  # 3*ATR = 0.6% de risco (dentro da faixa)
         risk_profile=risk_profile,
     )
 
-    assert stop_loss == 99.60
-    assert take_profit == 100.80
+    assert stop_loss == 99.40
+    assert take_profit == 101.20
 
 
 def test_range_scalping_strategy_generates_setup_in_buy_zone(monkeypatch):

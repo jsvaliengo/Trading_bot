@@ -276,10 +276,10 @@ class TradingConfig:
     TREND_STRONG_CONFIRM_TIMEFRAME: str = "5m"
     TREND_STRONG_CANDLES_LOOKBACK: int = 260
     TREND_STRONG_PULLBACK_TOLERANCE_PERCENT: float = 0.25
-    TREND_STRONG_LONG_RSI_MIN: float = 38.0
-    TREND_STRONG_LONG_RSI_MAX: float = 62.0
-    TREND_STRONG_SHORT_RSI_MIN: float = 38.0
-    TREND_STRONG_SHORT_RSI_MAX: float = 62.0
+    TREND_STRONG_LONG_RSI_MIN: float = 25.0   # Pullback LONG: permite oversold (melhor entrada)
+    TREND_STRONG_LONG_RSI_MAX: float = 60.0   # Evita entrar já overbought
+    TREND_STRONG_SHORT_RSI_MIN: float = 40.0  # Pullback SHORT: permite bounce (melhor entrada)
+    TREND_STRONG_SHORT_RSI_MAX: float = 75.0  # Evita entrar já oversold
     TREND_STRONG_MIN_VOLUME_RATIO: float = 0.80
 
     # ============================================
@@ -409,8 +409,8 @@ class TradingConfig:
     # NOTA: Breakeven = 0.10% (taxa taker 0.05% × 2 ordens)
     
     USE_TRAILING_STOP: bool = True
-    TRAILING_ACTIVATION_PERCENT: float = 0.80   # Ativa quando lucro >= 0.80%
-    TRAILING_DISTANCE_PERCENT: float = 0.40     # Stop fica 0.40% abaixo do pico
+    TRAILING_ACTIVATION_PERCENT: float = 1.20   # Ativa quando lucro >= 1.20%
+    TRAILING_DISTANCE_PERCENT: float = 0.50     # Stop fica 0.50% abaixo do pico
     # TRAILING_MIN_PROFIT_USD removido — gate em USD bloqueava fechamento em posições pequenas
     # (order=$3 × 10x = $30 notional → profit_usd < $0.20 na ativação)
     
@@ -659,13 +659,13 @@ class TradingConfig:
                     "entry_mode": "strong_only",
                     # pairs vazio = seleção automática pela Binance (top N por score)
                     "pairs": [],
-                    "max_pairs": 5,
-                    # Perfil equilibrado: SL 0.4%-0.6%, TP 0.8%-1.2%, RR alvo ~1:2
+                    "max_pairs": 10,
+                    # RSI assimétrico: LONG permite oversold (25-60), SHORT permite overbought (40-75)
                     "risk_profile": {
-                        "stop_loss_min_percent": 0.4,
-                        "stop_loss_max_percent": 0.8,
-                        "take_profit_min_percent": 1.2,
-                        "take_profit_max_percent": 3.0,
+                        "stop_loss_min_percent": 0.5,
+                        "stop_loss_max_percent": 1.5,
+                        "take_profit_min_percent": 1.5,
+                        "take_profit_max_percent": 4.5,
                         "risk_reward_target": 3.0,
                     },
                 },
