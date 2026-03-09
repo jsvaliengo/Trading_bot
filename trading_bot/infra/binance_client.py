@@ -1102,7 +1102,10 @@ class BinanceConnection:
             
             # Formata a quantidade
             formatted_qty = round(quantity, qty_precision)
-            
+            if formatted_qty <= 0:
+                logger.error(f"❌ Quantidade arredondada para zero em {symbol}: qty={quantity}, precision={qty_precision}")
+                return None
+
             # Envia a ordem
             order = self._api_call(
                 "futures_create_order_market",

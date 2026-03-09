@@ -97,6 +97,8 @@ class TechnicalAnalysis:
         avg_loss = np.mean(losses)
         
         # Evita divisão por zero
+        if avg_gain == 0 and avg_loss == 0:
+            return 50  # mercado lateral sem variação
         if avg_loss == 0:
             return 100
         

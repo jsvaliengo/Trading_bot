@@ -132,6 +132,7 @@ class TradingBot:
         # Observabilidade de runtime (loops/erros — depende de threading)
         self._runtime_stats_lock = threading.Lock()
         self._runtime_stats_since_report = self._new_runtime_stats()
+        self._positions_lock = threading.Lock()
         self._next_critical_health_alert_time = 0.0
         
         # Configura handler para CTRL+C
@@ -170,7 +171,7 @@ class TradingBot:
         self.trades_by_strategy = {}
         self.daily_target_reached = False
         self.daily_target_type = None
-        self.last_daily_reset = datetime.now().date()
+        self.last_daily_reset = datetime.now(timezone.utc).date()
         self.last_daily_performance_report_date = ""
         self.portfolio_history = []
         self.last_snapshot_time = None
@@ -460,7 +461,7 @@ class TradingBot:
                 'trades_loss_total': self.trades_loss_total,
                 'total_fees_paid': self.total_fees_paid,  # Total de taxas pagas
                 'portfolio_history': portfolio_history_serializable,
-                'trade_history': self.trade_history,
+                'trade_history': self.trade_history[-500:],
                 'peak_prices': self.peak_prices,
                 'trailing_activated': self.trailing_activated,
                 'double_first_used': self.double_first_used,
@@ -524,7 +525,7 @@ class TradingBot:
             self.closed_trades_count = state.get('closed_trades_count', 0)
             self.total_pnl = state.get('total_pnl', 0.0)
             self.pnl_by_symbol = state.get('pnl_by_symbol', {})
-            self.trade_history = state.get('trade_history', [])
+            self.trade_history = state.get('trade_history', [])[-500:]  # Mantém apenas os últimos 500
             self.peak_prices = state.get('peak_prices', {})
             self.trailing_activated = state.get('trailing_activated', {})
             self.double_first_used = self._normalize_double_first_state(
@@ -1275,9 +1276,6 @@ class TradingBot:
         # Inicializa rastreamento de transferências (se não houver estado anterior)
         if self.last_transfer_check_ts_ms <= 0:
             self.last_transfer_check_ts_ms = int(time.time() * 1000)
-        tracked_limit = max(100, int(config.CAPITAL_TRANSFER_TRACKED_IDS_LIMIT))
-        if len(self.processed_transfer_ids) > tracked_limit:
-            self.processed_transfer_ids = self.processed_transfer_ids[-tracked_limit:]
         
         # Mostra configuração de capital por trade (baseado no saldo ATUAL)
         trade_value = current_balance * config.MAX_POSITION_PERCENT
@@ -1432,8 +1430,8 @@ class TradingBot:
         if not config.USE_DAILY_TARGETS:
             return False  # Metas diárias desativadas
         
-        # Verifica se precisa resetar (novo dia)
-        today = datetime.now().date()
+        # Verifica se precisa resetar (novo dia) — usa UTC como a Binance
+        today = datetime.now(timezone.utc).date()
         if today > self.last_daily_reset:
             logger.info("🌅 Novo dia detectado! Resetando metas diárias...")
             self.daily_target_reached = False
@@ -1515,8 +1513,8 @@ class TradingBot:
                 # Limpa dados de trailing
                 position_key = f"{symbol}_{side}"
                 self._clear_trailing_data(position_key)
-                if position_key in self.known_positions:
-                    del self.known_positions[position_key]
+                with self._positions_lock:
+                    self.known_positions.pop(position_key, None)
                     
             except Exception as e:
                 logger.error(f"   ❌ Erro ao fechar {side} {symbol}: {e}")
@@ -2198,6 +2196,11 @@ class TradingBot:
             logger.warning(f"⚠️ Falha ao calcular sentimento de {normalized_symbol}: {e}")
 
         self.sentiment_cache[normalized_symbol] = dict(payload)
+        # Limita o tamanho do cache para evitar crescimento ilimitado
+        if len(self.sentiment_cache) > 200:
+            oldest_keys = list(self.sentiment_cache.keys())[:len(self.sentiment_cache) - 200]
+            for k in oldest_keys:
+                self.sentiment_cache.pop(k, None)
         return dict(payload)
 
     def _apply_sentiment_direction_filter(
@@ -2474,6 +2477,9 @@ class TradingBot:
         try:
             # Calcula quantidades
             price = self.exchange.get_symbol_price(symbol)
+            if price <= 0:
+                logger.error(f"❌ Preço inválido para {symbol}: {price} — abortando abertura")
+                return False
             info = self.exchange.get_symbol_info(symbol)
 
             # Tamanho mínimo (minNotional) vindo da Binance
@@ -2639,20 +2645,21 @@ class TradingBot:
                 # Adiciona ao rastreamento de posições conhecidas
                 position_key = f"{symbol}_LONG"
                 _now = datetime.now()
-                self.known_positions[position_key] = {
-                    'symbol': symbol,
-                    'side': 'LONG',
-                    'entry_price': price,
-                    'quantity': long_qty,
-                    'entry_time': _now,
-                    'last_seen': _now,
-                    'strategy_name': str(strategy_name or "primary"),
-                    'strategy_type': strategy_type,
-                    'custom_stop_loss': custom_stop_loss,
-                    'custom_take_profit': custom_take_profit,
-                    'range_mid_price': range_mid_price,
-                    'range_entry_side': "LONG",
-                }
+                with self._positions_lock:
+                    self.known_positions[position_key] = {
+                        'symbol': symbol,
+                        'side': 'LONG',
+                        'entry_price': price,
+                        'quantity': long_qty,
+                        'entry_time': _now,
+                        'last_seen': _now,
+                        'strategy_name': str(strategy_name or "primary"),
+                        'strategy_type': strategy_type,
+                        'custom_stop_loss': custom_stop_loss,
+                        'custom_take_profit': custom_take_profit,
+                        'range_mid_price': range_mid_price,
+                        'range_entry_side': "LONG",
+                    }
                 
                 logger.info("✅ LONG aberto com sucesso!")
                 logger.info(f"   {long_qty:.4f} {symbol} @ ${price:.4f}")
@@ -2752,20 +2759,21 @@ class TradingBot:
                 # Adiciona ao rastreamento de posições conhecidas
                 position_key = f"{symbol}_SHORT"
                 _now = datetime.now()
-                self.known_positions[position_key] = {
-                    'symbol': symbol,
-                    'side': 'SHORT',
-                    'entry_price': price,
-                    'quantity': short_qty,
-                    'entry_time': _now,
-                    'last_seen': _now,
-                    'strategy_name': str(strategy_name or "primary"),
-                    'strategy_type': strategy_type,
-                    'custom_stop_loss': custom_stop_loss,
-                    'custom_take_profit': short_tp,
-                    'range_mid_price': range_mid_price,
-                    'range_entry_side': "SHORT",
-                }
+                with self._positions_lock:
+                    self.known_positions[position_key] = {
+                        'symbol': symbol,
+                        'side': 'SHORT',
+                        'entry_price': price,
+                        'quantity': short_qty,
+                        'entry_time': _now,
+                        'last_seen': _now,
+                        'strategy_name': str(strategy_name or "primary"),
+                        'strategy_type': strategy_type,
+                        'custom_stop_loss': custom_stop_loss,
+                        'custom_take_profit': short_tp,
+                        'range_mid_price': range_mid_price,
+                        'range_entry_side': "SHORT",
+                    }
                 
                 logger.info("✅ SHORT aberto com sucesso!")
                 logger.info(f"   {short_qty:.4f} {symbol} @ ${price:.4f}")
@@ -2834,45 +2842,46 @@ class TradingBot:
         # ============================================
         # DETECTA POSIÇÕES FECHADAS PELA BINANCE
         # ============================================
-        # Cria set de posições atuais
+        # Cria set de posições atuais e atualiza known_positions sob lock
         current_position_keys = set()
-        for pos in positions:
-            position_key = f"{pos['symbol']}_{pos['side']}"
-            current_position_keys.add(position_key)
-            previous = self.known_positions.get(position_key, {})
-            
-            # Atualiza known_positions com info atual
-            self.known_positions[position_key] = {
-                'symbol': pos['symbol'],
-                'side': pos['side'],
-                'entry_price': pos['entry_price'],
-                'quantity': pos['quantity'],
-                'last_seen': datetime.now(),
-                'strategy_name': previous.get('strategy_name', 'primary'),
-                'strategy_type': previous.get('strategy_type', 'trend_signal'),
-                'custom_stop_loss': previous.get('custom_stop_loss'),
-                'custom_take_profit': previous.get('custom_take_profit'),
-                'range_mid_price': previous.get('range_mid_price'),
-                'range_entry_side': previous.get('range_entry_side'),
-            }
-        
-        # Verifica se alguma posição conhecida sumiu
-        closed_by_binance = []
-        for position_key in list(self.known_positions.keys()):
-            if position_key not in current_position_keys:
-                # Posição sumiu! Foi fechada pela Binance
-                closed_by_binance.append(position_key)
-        
-        # Processa posições fechadas pela Binance
-        for position_key in closed_by_binance:
-            pos_info = self.known_positions[position_key]
+        with self._positions_lock:
+            for pos in positions:
+                position_key = f"{pos['symbol']}_{pos['side']}"
+                current_position_keys.add(position_key)
+                previous = self.known_positions.get(position_key, {})
+
+                # Atualiza known_positions com info atual
+                self.known_positions[position_key] = {
+                    'symbol': pos['symbol'],
+                    'side': pos['side'],
+                    'entry_price': pos['entry_price'],
+                    'quantity': pos['quantity'],
+                    'last_seen': datetime.now(),
+                    'strategy_name': previous.get('strategy_name', 'primary'),
+                    'strategy_type': previous.get('strategy_type', 'trend_signal'),
+                    'custom_stop_loss': previous.get('custom_stop_loss'),
+                    'custom_take_profit': previous.get('custom_take_profit'),
+                    'range_mid_price': previous.get('range_mid_price'),
+                    'range_entry_side': previous.get('range_entry_side'),
+                }
+
+            # Verifica se alguma posição conhecida sumiu (snapshot sob lock)
+            closed_by_binance = [
+                (pk, dict(self.known_positions[pk]))
+                for pk in list(self.known_positions.keys())
+                if pk not in current_position_keys
+            ]
+
+        # Processa posições fechadas pela Binance (fora do lock — pode fazer chamadas de API)
+        for position_key, pos_info in closed_by_binance:
             logger.warning(f"⚠️ Posição {position_key} foi FECHADA pela Binance (SL/TP)")
-            
+
             # Busca o P&L real da Binance
             self._process_binance_closed_position(pos_info)
-            
+
             # Remove do tracking
-            del self.known_positions[position_key]
+            with self._positions_lock:
+                self.known_positions.pop(position_key, None)
             self._clear_trailing_data(position_key)
         
         if not positions:
@@ -2947,8 +2956,8 @@ class TradingBot:
                 )
                 if closed:
                     self._clear_trailing_data(position_key)
-                    if position_key in self.known_positions:
-                        del self.known_positions[position_key]
+                    with self._positions_lock:
+                        self.known_positions.pop(position_key, None)
                 else:
                     logger.warning(
                         f"⚠️ Fechamento não confirmado para {position_key} em TP custom. "
@@ -2970,8 +2979,8 @@ class TradingBot:
                 )
                 if closed:
                     self._clear_trailing_data(position_key)
-                    if position_key in self.known_positions:
-                        del self.known_positions[position_key]
+                    with self._positions_lock:
+                        self.known_positions.pop(position_key, None)
                 else:
                     logger.warning(
                         f"⚠️ Fechamento não confirmado para {position_key} em SL custom. "
@@ -2991,8 +3000,8 @@ class TradingBot:
                 )
                 if closed:
                     self._clear_trailing_data(position_key)
-                    if position_key in self.known_positions:
-                        del self.known_positions[position_key]
+                    with self._positions_lock:
+                        self.known_positions.pop(position_key, None)
                 else:
                     logger.warning(
                         f"⚠️ Fechamento não confirmado para {position_key} em saída antecipada de range."
@@ -3011,9 +3020,8 @@ class TradingBot:
                 )
                 if closed:
                     self._clear_trailing_data(position_key)
-                    # Remove do known_positions
-                    if position_key in self.known_positions:
-                        del self.known_positions[position_key]
+                    with self._positions_lock:
+                        self.known_positions.pop(position_key, None)
                 else:
                     logger.warning(
                         f"⚠️ Fechamento não confirmado para {position_key} em Take Profit. "
@@ -3039,9 +3047,8 @@ class TradingBot:
                     closed = self._close_position_with_notification(pos, reason)
                     if closed:
                         self._clear_trailing_data(position_key)
-                        # Remove do known_positions
-                        if position_key in self.known_positions:
-                            del self.known_positions[position_key]
+                        with self._positions_lock:
+                            self.known_positions.pop(position_key, None)
                     else:
                         logger.warning(
                             f"⚠️ Fechamento não confirmado para {position_key} via trailing. "
@@ -3062,9 +3069,8 @@ class TradingBot:
                     )
                     if closed:
                         self._clear_trailing_data(position_key)
-                        # Remove do known_positions
-                        if position_key in self.known_positions:
-                            del self.known_positions[position_key]
+                        with self._positions_lock:
+                            self.known_positions.pop(position_key, None)
                     else:
                         logger.warning(
                             f"⚠️ Fechamento não confirmado para {position_key} via stop loss. "
@@ -3132,61 +3138,62 @@ class TradingBot:
                 logger.info(f"   P&L Líquido: ${pnl_net:.4f}")
 
                 # ============================================
-                # ATUALIZA CONTADORES
+                # ATUALIZA CONTADORES (protegido por lock — múltiplas threads)
                 # ============================================
-                self.closed_trades_count += 1
-                self.daily_realized_pnl += pnl_net
-                self.total_pnl += pnl_net
-                self.risk_manager.update_pnl(pnl_net)
+                with self._runtime_stats_lock:
+                    self.closed_trades_count += 1
+                    self.daily_realized_pnl += pnl_net
+                    self.total_pnl += pnl_net
+                    self.risk_manager.update_pnl(pnl_net)
 
-                # Atualiza estatísticas de trades
-                if pnl_net > 0:
-                    self.trades_win_count += 1
-                    self.trades_win_total += pnl_net
-                    result = "LUCRO 🟢"
-                else:
-                    self.trades_loss_count += 1
-                    self.trades_loss_total += pnl_net
-                    result = "PREJUÍZO 🔴"
+                    # Atualiza estatísticas de trades
+                    if pnl_net > 0:
+                        self.trades_win_count += 1
+                        self.trades_win_total += pnl_net
+                        result = "LUCRO 🟢"
+                    else:
+                        self.trades_loss_count += 1
+                        self.trades_loss_total += pnl_net
+                        result = "PREJUÍZO 🔴"
 
-                # Atualiza total de taxas pagas
-                self.total_fees_paid += total_fees
+                    # Atualiza total de taxas pagas
+                    self.total_fees_paid += total_fees
 
-                # Atualiza trades por símbolo (para relatório detalhado)
-                if symbol not in self.trades_by_symbol:
-                    self.trades_by_symbol[symbol] = {'wins': 0, 'losses': 0, 'win_value': 0.0, 'loss_value': 0.0, 'fees': 0.0}
+                    # Atualiza trades por símbolo (para relatório detalhado)
+                    if symbol not in self.trades_by_symbol:
+                        self.trades_by_symbol[symbol] = {'wins': 0, 'losses': 0, 'win_value': 0.0, 'loss_value': 0.0, 'fees': 0.0}
 
-                if pnl_net > 0:
-                    self.trades_by_symbol[symbol]['wins'] += 1
-                    self.trades_by_symbol[symbol]['win_value'] += pnl_net
-                else:
-                    self.trades_by_symbol[symbol]['losses'] += 1
-                    self.trades_by_symbol[symbol]['loss_value'] += pnl_net
+                    if pnl_net > 0:
+                        self.trades_by_symbol[symbol]['wins'] += 1
+                        self.trades_by_symbol[symbol]['win_value'] += pnl_net
+                    else:
+                        self.trades_by_symbol[symbol]['losses'] += 1
+                        self.trades_by_symbol[symbol]['loss_value'] += pnl_net
 
-                # Atualiza taxas por símbolo
-                self.trades_by_symbol[symbol]['fees'] = self.trades_by_symbol[symbol].get('fees', 0.0) + total_fees
+                    # Atualiza taxas por símbolo
+                    self.trades_by_symbol[symbol]['fees'] = self.trades_by_symbol[symbol].get('fees', 0.0) + total_fees
 
-                # Atualiza trades por estratégia
-                pos_meta = self.known_positions.get(f"{symbol}_{side}", {})
-                strat_key = pos_meta.get('strategy_name')
-                if not strat_key:
-                    _sp = self._resolve_strategy_context(symbol)
-                    strat_key = _sp.get('name', 'primary')
-                if strat_key not in self.trades_by_strategy:
-                    self.trades_by_strategy[strat_key] = {'wins': 0, 'losses': 0, 'win_value': 0.0, 'loss_value': 0.0, 'fees': 0.0}
-                if pnl_net > 0:
-                    self.trades_by_strategy[strat_key]['wins'] += 1
-                    self.trades_by_strategy[strat_key]['win_value'] += pnl_net
-                else:
-                    self.trades_by_strategy[strat_key]['losses'] += 1
-                    self.trades_by_strategy[strat_key]['loss_value'] += pnl_net
-                self.trades_by_strategy[strat_key]['fees'] = self.trades_by_strategy[strat_key].get('fees', 0.0) + total_fees
-                
-                # Atualiza P&L por símbolo
-                if symbol in self.pnl_by_symbol:
-                    self.pnl_by_symbol[symbol] += pnl_net
-                else:
-                    self.pnl_by_symbol[symbol] = pnl_net
+                    # Atualiza trades por estratégia
+                    pos_meta = self.known_positions.get(f"{symbol}_{side}", {})
+                    strat_key = pos_meta.get('strategy_name')
+                    if not strat_key:
+                        _sp = self._resolve_strategy_context(symbol)
+                        strat_key = _sp.get('name', 'primary')
+                    if strat_key not in self.trades_by_strategy:
+                        self.trades_by_strategy[strat_key] = {'wins': 0, 'losses': 0, 'win_value': 0.0, 'loss_value': 0.0, 'fees': 0.0}
+                    if pnl_net > 0:
+                        self.trades_by_strategy[strat_key]['wins'] += 1
+                        self.trades_by_strategy[strat_key]['win_value'] += pnl_net
+                    else:
+                        self.trades_by_strategy[strat_key]['losses'] += 1
+                        self.trades_by_strategy[strat_key]['loss_value'] += pnl_net
+                    self.trades_by_strategy[strat_key]['fees'] = self.trades_by_strategy[strat_key].get('fees', 0.0) + total_fees
+
+                    # Atualiza P&L por símbolo
+                    if symbol in self.pnl_by_symbol:
+                        self.pnl_by_symbol[symbol] += pnl_net
+                    else:
+                        self.pnl_by_symbol[symbol] = pnl_net
                 
                 # Determina o motivo (só temos TP na Binance agora)
                 if pnl_gross > 0:
