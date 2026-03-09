@@ -78,6 +78,7 @@ class TelegramCommandHandler:
             '/closeall': self.cmd_close_all,
             '/help': self.cmd_help,
             '/strategy': self.cmd_strategy,
+            '/rescore': self.cmd_rescore,
         }
         
         logger.info("📱 Telegram Command Handler inicializado")
@@ -1407,6 +1408,30 @@ class TelegramCommandHandler:
         except Exception as e:
             self.send_message(f"❌ Erro ao alterar estratégia: {e}")
 
+    def cmd_rescore(self, args: list):
+        """Executa o rescore de pares imediatamente e reprograma o próximo para 6h."""
+        if self.bot is None:
+            self.send_message("❌ Bot não disponível.")
+            return
+
+        self.send_message("🔄 <b>Iniciando rescore de pares...</b>\n<i>Calculando scores de volatilidade, volume, tendência e funding...</i>")
+
+        try:
+            result = self.bot.trigger_pair_rescore()
+            pairs = result.get("pairs", [])
+            next_in = result.get("next_rescore_in", "6h")
+            coins_display = "\n".join(
+                f"  {i+1}. {p.replace('USDT', '')}" for i, p in enumerate(pairs)
+            )
+            self.send_message(
+                f"✅ <b>RESCORE CONCLUÍDO</b>\n\n"
+                f"🪙 <b>Top {len(pairs)} pares selecionados:</b>\n{coins_display}\n\n"
+                f"⏰ Próximo rescore automático em <b>{next_in}</b>"
+            )
+        except Exception as e:
+            logger.error("Erro no cmd_rescore: %s", e)
+            self.send_message(f"❌ Erro ao executar rescore: {e}")
+
     def cmd_help(self, args: list):
         """Mostra lista de comandos."""
         message = """
@@ -1448,6 +1473,7 @@ class TelegramCommandHandler:
 <b>⚡ AÇÕES:</b>
 /closeall - Fechar todas posições
 /closeall confirm - Confirmar
+/rescore - Forçar rescore de pares agora
 
 ━━━━━━━━━━━━━━━━━━━━━
 <i>Exemplos:</i>

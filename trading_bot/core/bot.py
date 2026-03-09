@@ -2012,6 +2012,27 @@ class TradingBot:
         
         logger.info("✅ Moedas reordenadas!")
     
+    def trigger_pair_rescore(self) -> dict:
+        """
+        Executa o rescore de pares imediatamente (via comando Telegram /rescore)
+        e reprograma o próximo rescore automático para daqui a 6 horas.
+        """
+        if config.USE_BINANCE_STRATEGY:
+            self.update_binance_strategy_coins()
+        else:
+            self.update_trading_pairs()
+
+        interval = getattr(self, "_pair_update_interval", 2160)
+        self.next_pair_update_time = time.monotonic() + interval
+
+        import math
+        hours = interval / 3600
+        next_in = f"{hours:.0f}h" if hours >= 1 else f"{interval / 60:.0f}min"
+        return {
+            "pairs": list(config.TRADING_PAIRS),
+            "next_rescore_in": next_in,
+        }
+
     def update_commission_rates(self):
         """
         Atualiza as taxas de comissão buscando da API da Binance.
@@ -4398,7 +4419,7 @@ class TradingBot:
         terminal_status_interval = base_interval * 3
         state_save_interval = base_interval * 30
         commission_update_interval = base_interval * 360
-        pair_update_interval = base_interval * 2160
+        self._pair_update_interval = base_interval * 2160
         deposit_check_interval = base_interval * 60
         strategy_check_interval = base_interval * 60
 
@@ -4410,7 +4431,7 @@ class TradingBot:
         next_terminal_status_time = now + terminal_status_interval
         next_state_save_time = now + state_save_interval
         next_commission_update_time = now + commission_update_interval
-        next_pair_update_time = now + pair_update_interval
+        self.next_pair_update_time = now + self._pair_update_interval
         next_deposit_check_time = now + deposit_check_interval
         next_strategy_check_time = now + strategy_check_interval
 
@@ -4519,12 +4540,12 @@ class TradingBot:
                         self.update_commission_rates()
                         next_commission_update_time = now + commission_update_interval
 
-                    if now >= next_pair_update_time:
+                    if now >= self.next_pair_update_time:
                         if config.USE_BINANCE_STRATEGY:
                             self.update_binance_strategy_coins()
                         else:
                             self.update_trading_pairs()
-                        next_pair_update_time = now + pair_update_interval
+                        self.next_pair_update_time = now + self._pair_update_interval
 
                     if now >= next_deposit_check_time:
                         self.check_for_deposit()
