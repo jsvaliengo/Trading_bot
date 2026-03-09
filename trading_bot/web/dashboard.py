@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import time
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from http import HTTPStatus
@@ -153,6 +154,10 @@ class DashboardDataCollector:
         self._daily_pnl_cache_payload: Dict[str, Any] | None = None
         self._daily_pnl_cache_at: datetime | None = None
         self._daily_pnl_cache_date: date | None = None
+        # Cache rápido para /api/dashboard (sem analytics) — evita sobrecarga na Binance
+        self._quick_cache_payload: Dict[str, Any] | None = None
+        self._quick_cache_at: float = 0.0
+        self._quick_cache_ttl: float = 2.0  # segundos
 
     def _get_exchange(self):
         if self._exchange is not None:
@@ -562,6 +567,11 @@ class DashboardDataCollector:
         end_date_str: str = "",
         include_analytics: bool = True,
     ) -> Dict[str, Any]:
+        # Serve do cache rápido para requisições sem analytics (ex: /api/dashboard a cada 1s)
+        if not include_analytics and self._quick_cache_payload is not None:
+            if time.monotonic() - self._quick_cache_at < self._quick_cache_ttl:
+                return self._quick_cache_payload
+
         now = datetime.now(timezone.utc)
         errors: List[str] = []
         now_brt = datetime.now(BRT).date()
@@ -696,7 +706,7 @@ class DashboardDataCollector:
 
         fx_rate = _to_float(self._fx_rate_provider(), 5.0)
 
-        return {
+        result = {
             "generated_at": now.isoformat(),
             "environment": {
                 "app_env": config.APP_ENV,
@@ -747,6 +757,11 @@ class DashboardDataCollector:
             "analytics": analytics,
             "errors": errors,
         }
+
+        if not include_analytics:
+            self._quick_cache_payload = result
+            self._quick_cache_at = time.monotonic()
+        return result
 
 
 _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
@@ -2866,7 +2881,7 @@ def main():
     parser = _build_parser()
     args = parser.parse_args()
 
-    refresh_seconds = max(2, min(int(args.refresh_seconds), 300))
+    refresh_seconds = max(1, min(int(args.refresh_seconds), 300))
     port = max(1, min(int(args.port), 65535))
 
     logging.basicConfig(

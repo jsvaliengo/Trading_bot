@@ -527,7 +527,7 @@ class TradingConfig:
     # Dashboard web de monitoramento (somente leitura)
     DASHBOARD_HOST: str = os.getenv("TRADING_BOT_DASHBOARD_HOST", "127.0.0.1").strip() or "127.0.0.1"
     DASHBOARD_PORT: int = _env_int("TRADING_BOT_DASHBOARD_PORT", 8080)
-    DASHBOARD_REFRESH_SECONDS: int = _env_int("TRADING_BOT_DASHBOARD_REFRESH_SECONDS", 5)
+    DASHBOARD_REFRESH_SECONDS: int = _env_int("TRADING_BOT_DASHBOARD_REFRESH_SECONDS", 1)
     DASHBOARD_AUTH_TOKEN: str = os.getenv("TRADING_BOT_DASHBOARD_AUTH_TOKEN", "").strip()
 
     # ============================================
@@ -1083,8 +1083,8 @@ class TradingConfig:
         if self.DASHBOARD_PORT < 1 or self.DASHBOARD_PORT > 65535:
             errors.append("⚠️  ALERTA: DASHBOARD_PORT deve estar entre 1 e 65535!")
 
-        if self.DASHBOARD_REFRESH_SECONDS < 2 or self.DASHBOARD_REFRESH_SECONDS > 300:
-            errors.append("⚠️  ALERTA: DASHBOARD_REFRESH_SECONDS deve estar entre 2 e 300!")
+        if self.DASHBOARD_REFRESH_SECONDS < 1 or self.DASHBOARD_REFRESH_SECONDS > 300:
+            errors.append("⚠️  ALERTA: DASHBOARD_REFRESH_SECONDS deve estar entre 1 e 300!")
 
         if self.CAPITAL_TRANSFER_MIN_ABS_USDT < 0:
             errors.append("⚠️  ALERTA: CAPITAL_TRANSFER_MIN_ABS_USDT deve ser >= 0!")
