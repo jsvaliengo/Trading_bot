@@ -659,7 +659,7 @@ class TradingConfig:
                     "entry_mode": "strong_only",
                     # pairs vazio = seleção automática pela Binance (top N por score)
                     "pairs": [],
-                    "max_pairs": 15,
+                    "max_pairs": 10,
                     # RSI assimétrico: LONG permite oversold (25-60), SHORT permite overbought (40-75)
                     "risk_profile": {
                         "stop_loss_min_percent": 0.5,
