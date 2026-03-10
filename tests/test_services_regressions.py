@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import requests
+
 from trading_bot.services.pair_selector import PairSelector
 from trading_bot.services.telegram_commands import TelegramCommandHandler
 
@@ -201,6 +203,15 @@ def _with_bot_mention(command_line: str) -> str:
     return " ".join([f"{parts[0]}@MeuBot", *parts[1:]])
 
 
+class _ResponseStub:
+    def __init__(self, status_code: int, payload: dict | None = None):
+        self.status_code = status_code
+        self._payload = payload or {}
+
+    def json(self):
+        return self._payload
+
+
 def test_dispatches_all_registered_commands_with_bot_mention():
     handler = TelegramCommandHandler(token="token", chat_id="123")
     called = []
@@ -227,6 +238,44 @@ def test_process_update_notifies_telegram_when_command_raises():
     handler._process_update(_mk_update("/status", update_id=77))
 
     assert any("Erro ao executar comando" in text for text in messages)
+
+
+def test_send_message_retries_after_transient_failure(monkeypatch):
+    handler = TelegramCommandHandler(token="token", chat_id="123")
+    attempts = {"count": 0}
+
+    def _fake_request(method, url, timeout=None, **kwargs):
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise requests.exceptions.RequestException("timeout")
+        return _ResponseStub(200, {"ok": True})
+
+    monkeypatch.setattr("trading_bot.services.telegram_commands.time.sleep", lambda _secs: None)
+    monkeypatch.setattr(handler._http_session, "request", _fake_request)
+
+    assert handler.send_message("hello") is True
+    assert attempts["count"] == 2
+
+
+def test_get_updates_uses_configured_poll_timeouts(monkeypatch):
+    handler = TelegramCommandHandler(token="token", chat_id="123")
+    captured = {}
+
+    def _fake_request(method, url, timeout=None, **kwargs):
+        captured["method"] = method
+        captured["url"] = url
+        captured["timeout"] = timeout
+        captured["params"] = kwargs.get("params", {})
+        return _ResponseStub(200, {"ok": True, "result": [{"update_id": 11}]})
+
+    monkeypatch.setattr(handler._http_session, "request", _fake_request)
+
+    updates = handler._get_updates()
+
+    assert len(updates) == 1
+    assert captured["method"] == "GET"
+    assert captured["timeout"] == handler._poll_request_timeout_seconds
+    assert captured["params"]["timeout"] == handler._poll_timeout_seconds
 
 
 def test_all_registered_commands_have_smoke_path():

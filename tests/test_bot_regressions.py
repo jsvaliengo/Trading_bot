@@ -1,3 +1,4 @@
+import json
 from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -119,6 +120,45 @@ def test_stop_keeps_open_positions_and_does_not_close_them(monkeypatch):
     assert telegram.shutdown_calls[0]["total_trades"] == 4
     # total_pnl enviado inclui não realizado
     assert telegram.shutdown_calls[0]["total_pnl"] == 12.5
+
+
+def test_save_state_writes_atomic_file_and_backup(tmp_path):
+    bot = _make_light_bot()
+    state_file = tmp_path / "bot_state.json"
+    state_file.write_text('{"closed_trades_count": 1}', encoding="utf-8")
+    bot._state_file_path = str(state_file)
+
+    assert bot.save_state() is True
+
+    backup_path = tmp_path / "bot_state.json.bak"
+    assert backup_path.exists()
+    persisted = json.loads(state_file.read_text(encoding="utf-8"))
+    assert "version" in persisted
+    assert (tmp_path / "bot_state.json.tmp").exists() is False
+
+
+def test_load_state_uses_backup_when_primary_is_corrupted(tmp_path):
+    bot = _make_light_bot()
+    state_file = tmp_path / "bot_state.json"
+    backup_file = tmp_path / "bot_state.json.bak"
+    bot._state_file_path = str(state_file)
+
+    state_file.write_text("{invalid-json", encoding="utf-8")
+    backup_file.write_text(
+        json.dumps(
+            {
+                "daily_date": datetime.utcnow().strftime("%Y-%m-%d"),
+                "closed_trades_count": 9,
+                "total_pnl": 12.34,
+                "strategy_profiles": list(getattr(config, "STRATEGY_PROFILES", []) or []),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert bot.load_state() is True
+    assert bot.closed_trades_count == 9
+    assert bot.total_pnl == 12.34
 
 
 def test_trailing_stop_activates_and_closes_long_on_retrace(monkeypatch):
@@ -529,6 +569,36 @@ def test_hedge_strategy_uses_balanced_risk_profile_with_rr_target():
 
     assert stop_loss == 99.40
     assert take_profit == 101.20
+
+
+def test_calculate_position_sizes_uses_single_leg_capital_in_directional_mode(monkeypatch):
+    strategy = HedgeStrategy()
+    monkeypatch.setattr(config, "USE_SIGNAL_STRATEGY", True)
+    monkeypatch.setattr(config, "USE_MIN_NOTIONAL_ONLY", True)
+
+    long_size, short_size = strategy.calculate_position_sizes(
+        signal=Signal.STRONG_BUY,
+        available_capital=7.0,  # cobre LONG mínimo + fees, mas não hedge completo
+        min_notional=5.0,
+    )
+
+    assert long_size > 0
+    assert short_size > 0
+
+
+def test_calculate_position_sizes_requires_full_capital_in_hedge_mode(monkeypatch):
+    strategy = HedgeStrategy()
+    monkeypatch.setattr(config, "USE_SIGNAL_STRATEGY", False)
+    monkeypatch.setattr(config, "USE_MIN_NOTIONAL_ONLY", True)
+
+    long_size, short_size = strategy.calculate_position_sizes(
+        signal=Signal.STRONG_BUY,
+        available_capital=7.0,  # insuficiente para LONG+SHORT + fees
+        min_notional=5.0,
+    )
+
+    assert long_size == 0.0
+    assert short_size == 0.0
 
 
 def test_range_scalping_strategy_generates_setup_in_buy_zone(monkeypatch):

@@ -14,8 +14,9 @@ import logging
 import threading
 import time
 from datetime import datetime, timezone
-from typing import Callable, Dict, List
+from typing import Any, Callable, Dict, List
 import requests
+from requests.exceptions import RequestException
 
 logger = logging.getLogger(__name__)
 
@@ -39,19 +40,22 @@ class TelegramCommandHandler:
         self.chat_id = str(chat_id)
         self.base_url = f"https://api.telegram.org/bot{token}"
         self.usd_brl_rate = 5.0
-        self.last_rate_update = None
+        self.last_rate_update: datetime | None = None
         
         # Controle do polling
         self.running = False
         self.poll_thread = None
         self.last_update_id = 0
-        
+        self._poll_timeout_seconds = 8
+        self._poll_request_timeout_seconds = 10
+
         # Callbacks para ações
         self.callbacks: Dict[str, Callable] = {}
-        
+
         # Referência ao bot principal (será setada depois)
         self.bot = None
         self.config = None
+        self._http_session = requests.Session()
         
         # Comandos disponíveis
         self.commands = {
@@ -103,11 +107,47 @@ class TelegramCommandHandler:
                 "text": text,
                 "parse_mode": "HTML"
             }
-            response = requests.post(url, data=data, timeout=10)
+            response = self._request_with_retry(
+                method="POST",
+                url=url,
+                max_attempts=3,
+                base_backoff_seconds=0.4,
+                timeout=10,
+                data=data,
+            )
             return response.status_code == 200
         except Exception as e:
             logger.error(f"Erro ao enviar mensagem: {e}")
             return False
+
+    def _request_with_retry(
+        self,
+        method: str,
+        url: str,
+        *,
+        max_attempts: int,
+        base_backoff_seconds: float,
+        timeout: float,
+        **kwargs: Any,
+    ):
+        """
+        Executa request HTTP com retry exponencial para falhas transitórias.
+        """
+        last_error: Exception | None = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                response = self._http_session.request(method=method, url=url, timeout=timeout, **kwargs)
+                if response.status_code in {408, 425, 429} or response.status_code >= 500:
+                    raise RuntimeError(f"HTTP {response.status_code}")
+                return response
+            except (RequestException, RuntimeError) as exc:
+                last_error = exc
+                if attempt >= max_attempts:
+                    break
+                sleep_seconds = min(3.0, base_backoff_seconds * (2 ** (attempt - 1)))
+                time.sleep(sleep_seconds)
+
+        raise RuntimeError(f"Falha em request HTTP após {max_attempts} tentativa(s): {last_error}")
 
     def _get_usd_brl_rate(self) -> float:
         """
@@ -122,9 +162,12 @@ class TelegramCommandHandler:
                 return self.usd_brl_rate
 
         try:
-            response = requests.get(
-                "https://economia.awesomeapi.com.br/json/last/USD-BRL",
-                timeout=5
+            response = self._request_with_retry(
+                method="GET",
+                url="https://economia.awesomeapi.com.br/json/last/USD-BRL",
+                max_attempts=2,
+                base_backoff_seconds=0.3,
+                timeout=5,
             )
             if response.status_code == 200:
                 data = response.json()
@@ -231,7 +274,7 @@ class TelegramCommandHandler:
         """Para o polling de comandos."""
         self.running = False
         if self.poll_thread:
-            self.poll_thread.join(timeout=5)
+            self.poll_thread.join(timeout=max(5, self._poll_request_timeout_seconds + 2))
         logger.info("📱 Polling de comandos parado")
     
     def _poll_loop(self):
@@ -243,11 +286,11 @@ class TelegramCommandHandler:
                 for update in updates:
                     self._process_update(update)
                 
-                time.sleep(1)  # Polling a cada 1 segundo
+                time.sleep(0.2)
                 
             except Exception as e:
                 logger.error(f"Erro no polling: {e}")
-                time.sleep(5)
+                time.sleep(1)
     
     def _get_updates(self) -> list:
         """Busca atualizações do Telegram."""
@@ -255,10 +298,17 @@ class TelegramCommandHandler:
             url = f"{self.base_url}/getUpdates"
             params = {
                 "offset": self.last_update_id + 1,
-                "timeout": 30,
+                "timeout": self._poll_timeout_seconds,
                 "allowed_updates": ["message"]
             }
-            response = requests.get(url, params=params, timeout=35)
+            response = self._request_with_retry(
+                method="GET",
+                url=url,
+                max_attempts=2,
+                base_backoff_seconds=0.4,
+                timeout=self._poll_request_timeout_seconds,
+                params=params,
+            )
             
             if response.status_code == 200:
                 data = response.json()

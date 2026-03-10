@@ -563,20 +563,41 @@ class HedgeStrategy:
             long_size = max(long_size, min_per_position)
             short_size = max(short_size, min_per_position)
         
-        # Calcula o valor total necessário
-        total_needed = long_size + short_size
-        
-        # Verifica se tem capital suficiente (com 10% extra para fees)
-        min_required = total_needed * 1.1
-        
-        if available_capital < min_required:
-            logger.warning("⚠️ Capital insuficiente para hedge completo")
-            logger.warning(f"   Disponível: ${available_capital:.2f} | Necessário: ${min_required:.2f}")
-            logger.warning(f"   (LONG ${long_size:.2f} + SHORT ${short_size:.2f} + 10% fees)")
-            return (0.0, 0.0)  # Retorna zero para pular este trade
+        use_directional_mode = bool(getattr(self.config, "USE_SIGNAL_STRATEGY", True))
+        if use_directional_mode:
+            if signal in {Signal.STRONG_BUY, Signal.BUY}:
+                required_leg_label = "LONG"
+                required_capital = long_size
+            elif signal in {Signal.STRONG_SELL, Signal.SELL}:
+                required_leg_label = "SHORT"
+                required_capital = short_size
+            else:
+                # Em modo direcional não abre posição com sinal neutro.
+                return (0.0, 0.0)
+
+            min_required = required_capital * 1.1
+            if available_capital < min_required:
+                logger.warning("⚠️ Capital insuficiente para entrada direcional")
+                logger.warning(
+                    f"   Disponível: ${available_capital:.2f} | Necessário: ${min_required:.2f} "
+                    f"({required_leg_label} ${required_capital:.2f} + 10% fees)"
+                )
+                return (0.0, 0.0)
+        else:
+            # Modo hedge completo: precisa de capital para os dois lados.
+            total_needed = long_size + short_size
+            min_required = total_needed * 1.1
+            if available_capital < min_required:
+                logger.warning("⚠️ Capital insuficiente para hedge completo")
+                logger.warning(f"   Disponível: ${available_capital:.2f} | Necessário: ${min_required:.2f}")
+                logger.warning(f"   (LONG ${long_size:.2f} + SHORT ${short_size:.2f} + 10% fees)")
+                return (0.0, 0.0)  # Retorna zero para pular este trade
         
         # Log da decisão
-        logger.info(f"📊 Tamanho das posições: LONG ${long_size:.2f} + SHORT ${short_size:.2f} = ${total_needed:.2f}")
+        logger.info(
+            f"📊 Tamanho das posições: LONG ${long_size:.2f} + SHORT ${short_size:.2f} "
+            f"(modo={'direcional' if use_directional_mode else 'hedge'})"
+        )
         
         return (long_size, short_size)
     
