@@ -409,7 +409,7 @@ class TradingConfig:
     # NOTA: Breakeven = 0.10% (taxa taker 0.05% × 2 ordens)
     
     USE_TRAILING_STOP: bool = True
-    TRAILING_ACTIVATION_PERCENT: float = 1.20   # Ativa quando lucro >= 1.20%
+    TRAILING_ACTIVATION_PERCENT: float = 0.10   # Ativa quando lucro >= 0.10%
     TRAILING_DISTANCE_PERCENT: float = 0.50     # Stop fica 0.50% abaixo do pico
     # TRAILING_MIN_PROFIT_USD removido — gate em USD bloqueava fechamento em posições pequenas
     # (order=$3 × 10x = $30 notional → profit_usd < $0.20 na ativação)
