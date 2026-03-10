@@ -835,7 +835,50 @@ class TradingBot:
         # pares fixos configurados. Isso garante que desabilitar pares acione
         # nova seleção em vez de apenas filtrar a lista existente.
         primary_is_dynamic = bool(primary_profile.get("max_pairs", 0)) or not bool(primary_profile.get("pairs"))
+        if (
+            config.USE_BINANCE_STRATEGY
+            and self._normalize_strategy_type(primary_profile.get("strategy_type", "trend_signal")) == "trend_signal"
+        ):
+            # Migração de runtime: estados antigos podem persistir o perfil primário
+            # com pares preenchidos e sem max_pairs, o que o tornava "fixo" por engano.
+            # Em modo Binance, o primário trend_signal deve seguir seleção dinâmica.
+            primary_is_dynamic = True
         return enabled_profiles, primary_profile, primary_is_dynamic
+
+    @staticmethod
+    def _resolve_primary_pair_target(
+        primary_profile: Dict[str, Any],
+        strategy_num_coins: Any,
+        fallback_num_coins: Any = 0,
+    ) -> int:
+        """
+        Resolve quantos pares o perfil primário deve usar.
+
+        Regra:
+        - tier da Binance (strategy_num_coins) é a base;
+        - max_pairs (quando definido) atua como teto, não como override.
+        """
+        try:
+            tier_target = int(strategy_num_coins or 0)
+        except (TypeError, ValueError):
+            tier_target = 0
+
+        if tier_target <= 0:
+            try:
+                tier_target = int(fallback_num_coins or 0)
+            except (TypeError, ValueError):
+                tier_target = 0
+
+        try:
+            max_pairs = int((primary_profile or {}).get("max_pairs") or 0)
+        except (TypeError, ValueError):
+            max_pairs = 0
+
+        if max_pairs > 0 and tier_target > 0:
+            return min(max_pairs, tier_target)
+        if max_pairs > 0:
+            return max_pairs
+        return max(0, tier_target)
 
     @staticmethod
     def _get_reserved_pairs(enabled_profiles: list) -> set:
@@ -1238,12 +1281,17 @@ class TradingBot:
         if config.USE_BINANCE_STRATEGY:
             enabled_profiles, primary_profile, primary_is_dynamic = self._get_primary_profile_info()
 
-            fallback_num = (
+            strategy_num = (
                 self.binance_strategy.get("num_coins")
                 if hasattr(self, "binance_strategy") and self.binance_strategy
-                else None
-            ) or len(old_pairs) or 0
-            num_coins = int(primary_profile.get("max_pairs") or fallback_num)
+                else 0
+            )
+            fallback_num = len(old_pairs) or 0
+            num_coins = self._resolve_primary_pair_target(
+                primary_profile=primary_profile,
+                strategy_num_coins=strategy_num,
+                fallback_num_coins=fallback_num,
+            )
 
             # Re-seleciona se: (a) perfil é dinâmico, ou (b) pares ativos ficaram
             # abaixo do alvo após desabilitar — garante mínimo de pares sempre preenchido.
@@ -1376,7 +1424,11 @@ class TradingBot:
             # Determina quantos pares selecionar para o perfil primário dinâmico.
             # Usa "max_pairs" do perfil quando definido; caso contrário, usa o tier.
             enabled_profiles, primary_profile, primary_is_dynamic = self._get_primary_profile_info()
-            num_primary_pairs = int(primary_profile.get("max_pairs") or strategy['num_coins'])
+            num_primary_pairs = self._resolve_primary_pair_target(
+                primary_profile=primary_profile,
+                strategy_num_coins=strategy['num_coins'],
+                fallback_num_coins=len(config.TRADING_PAIRS),
+            )
 
             if primary_is_dynamic:
                 # Perfil primário em modo automático: seleciona top N por score,
@@ -1783,7 +1835,11 @@ class TradingBot:
                 # Reseleciona pares do perfil primário dinâmico ao mudar de faixa.
                 enabled_profiles, primary_profile, primary_is_dynamic = self._get_primary_profile_info()
                 if primary_is_dynamic:
-                    num_primary_pairs = int(primary_profile.get("max_pairs") or new_strategy['num_coins'])
+                    num_primary_pairs = self._resolve_primary_pair_target(
+                        primary_profile=primary_profile,
+                        strategy_num_coins=new_strategy['num_coins'],
+                        fallback_num_coins=len(config.TRADING_PAIRS),
+                    )
                     sorted_coins = self.sort_binance_coins_by_score(
                         num_primary_pairs,
                         exclude=self._get_reserved_pairs(enabled_profiles),
@@ -2047,7 +2103,11 @@ class TradingBot:
 
         logger.info("🔄 Atualizando seleção de pares do trend_strong por score...")
 
-        num_primary_pairs = int(primary_profile.get("max_pairs") or self.binance_strategy['num_coins'])
+        num_primary_pairs = self._resolve_primary_pair_target(
+            primary_profile=primary_profile,
+            strategy_num_coins=self.binance_strategy.get('num_coins'),
+            fallback_num_coins=len(config.TRADING_PAIRS),
+        )
 
         old_coins = list(config.TRADING_PAIRS)
 
