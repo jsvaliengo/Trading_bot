@@ -601,6 +601,22 @@ def test_calculate_position_sizes_requires_full_capital_in_hedge_mode(monkeypatc
     assert short_size == 0.0
 
 
+def test_calculate_position_sizes_marks_neutral_reason_in_directional_mode(monkeypatch):
+    strategy = HedgeStrategy()
+    monkeypatch.setattr(config, "USE_SIGNAL_STRATEGY", True)
+    monkeypatch.setattr(config, "USE_MIN_NOTIONAL_ONLY", True)
+
+    long_size, short_size = strategy.calculate_position_sizes(
+        signal=Signal.NEUTRAL,
+        available_capital=100.0,
+        min_notional=5.0,
+    )
+
+    assert long_size == 0.0
+    assert short_size == 0.0
+    assert strategy._last_sizing_decision == "neutral_signal_directional"
+
+
 def test_range_scalping_strategy_generates_setup_in_buy_zone(monkeypatch):
     strategy = RangeScalpingStrategy()
 
