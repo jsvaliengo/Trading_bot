@@ -241,6 +241,7 @@ class HedgeStrategy:
     def __init__(self):
         self.config = config
         self.ta = TechnicalAnalysis()
+        self._last_sizing_decision = "init"
     
     def analyze_market(self, klines: List[Dict]) -> Signal:
         """
@@ -526,6 +527,8 @@ class HedgeStrategy:
         A Binance exige um valor MÍNIMO POR POSIÇÃO (não pelo total).
         Então para hedge completo: 2 × mínimo da moeda (LONG + SHORT)
         """
+        self._last_sizing_decision = "pending"
+
         # Margem de segurança de 25% acima do mínimo da Binance
         SAFETY_MARGIN = 1.25
         min_per_position = min_notional * SAFETY_MARGIN
@@ -573,10 +576,12 @@ class HedgeStrategy:
                 required_capital = short_size
             else:
                 # Em modo direcional não abre posição com sinal neutro.
+                self._last_sizing_decision = "neutral_signal_directional"
                 return (0.0, 0.0)
 
             min_required = required_capital * 1.1
             if available_capital < min_required:
+                self._last_sizing_decision = "insufficient_capital_directional"
                 logger.warning("⚠️ Capital insuficiente para entrada direcional")
                 logger.warning(
                     f"   Disponível: ${available_capital:.2f} | Necessário: ${min_required:.2f} "
@@ -588,11 +593,14 @@ class HedgeStrategy:
             total_needed = long_size + short_size
             min_required = total_needed * 1.1
             if available_capital < min_required:
+                self._last_sizing_decision = "insufficient_capital_hedge"
                 logger.warning("⚠️ Capital insuficiente para hedge completo")
                 logger.warning(f"   Disponível: ${available_capital:.2f} | Necessário: ${min_required:.2f}")
                 logger.warning(f"   (LONG ${long_size:.2f} + SHORT ${short_size:.2f} + 10% fees)")
                 return (0.0, 0.0)  # Retorna zero para pular este trade
         
+        self._last_sizing_decision = "ok"
+
         # Log da decisão
         logger.info(
             f"📊 Tamanho das posições: LONG ${long_size:.2f} + SHORT ${short_size:.2f} "
@@ -758,9 +766,15 @@ class HedgeStrategy:
             min_notional=min_notional
         )
         
-        # Se retornou zero, significa que não tem capital suficiente
+        # Se retornou zero, pode ser falta de capital OU sinal neutro (modo direcional).
         if long_size == 0 and short_size == 0:
-            logger.warning(f"⏸️ Pulando {symbol} - capital insuficiente para mínimo")
+            sizing_reason = str(getattr(self, "_last_sizing_decision", "unknown"))
+            if sizing_reason == "neutral_signal_directional":
+                logger.info(f"⏸️ Pulando {symbol} - sinal NEUTRAL no modo direcional")
+            elif sizing_reason.startswith("insufficient_capital"):
+                logger.warning(f"⏸️ Pulando {symbol} - capital insuficiente para mínimo")
+            else:
+                logger.info(f"⏸️ Pulando {symbol} - sem sizing válido ({sizing_reason})")
             return None
         
         # Calcula ATR para SL/TP dinâmico
