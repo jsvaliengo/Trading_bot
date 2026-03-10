@@ -739,6 +739,7 @@ def test_sync_strategy_profiles_preserves_fixed_pairs_ignores_trading_pairs(monk
     bot._strategy_engines = {}
     bot.strategy_profiles = []
 
+    monkeypatch.setattr(config, "USE_BINANCE_STRATEGY", False)
     monkeypatch.setattr(config, "DISABLED_PAIRS", [])
     monkeypatch.setattr(
         config,
@@ -790,6 +791,40 @@ def test_sync_strategy_profiles_adds_legacy_pairs_when_primary_empty(monkeypatch
 
     assert config.STRATEGY_PROFILES[0]["pairs"] == ["BTCUSDT", "XRPUSDT"]
     assert config.TRADING_PAIRS == ["BTCUSDT", "XRPUSDT"]
+
+
+def test_sync_strategy_profiles_treats_primary_as_dynamic_on_binance_mode(monkeypatch):
+    bot = _make_light_bot()
+    bot.strategy = SimpleNamespace(generate_trade_setup=lambda **_kwargs: None)
+    bot._strategy_engines = {}
+    bot.strategy_profiles = []
+
+    monkeypatch.setattr(config, "USE_BINANCE_STRATEGY", True)
+    monkeypatch.setattr(config, "DISABLED_PAIRS", [])
+    monkeypatch.setattr(
+        config,
+        "STRATEGY_PROFILES",
+        [
+            {
+                "name": "trend_strong",
+                "enabled": True,
+                "strategy_type": "trend_signal",
+                "entry_mode": "strong_only",
+                # Estado legado sem max_pairs.
+                "pairs": ["HYPEUSDT", "ETHUSDT", "ZECUSDT"],
+            }
+        ],
+    )
+    monkeypatch.setattr(config, "TRADING_PAIRS", ["HYPEUSDT", "ETHUSDT", "ZECUSDT"])
+
+    desired_pairs = ["DOGEUSDT", "ZECUSDT", "1000PEPEUSDT", "XRPUSDT", "HYPEUSDT", "ETHUSDT"]
+    bot._sync_strategy_profiles_with_trading_pairs(
+        reason="test-sync-binance-dynamic",
+        primary_pairs=desired_pairs,
+    )
+
+    assert config.STRATEGY_PROFILES[0]["pairs"] == desired_pairs
+    assert config.TRADING_PAIRS == desired_pairs
 
 
 def test_reload_strategy_profiles_instantiates_range_engine(monkeypatch):
