@@ -410,7 +410,7 @@ class TradingConfig:
     
     USE_TRAILING_STOP: bool = True
     TRAILING_ACTIVATION_PERCENT: float = 0.10   # Ativa quando lucro >= 0.10%
-    TRAILING_DISTANCE_PERCENT: float = 0.50     # Stop fica 0.50% abaixo do pico
+    TRAILING_DISTANCE_PERCENT: float = 0.15     # Stop fica 0.15% abaixo do pico
     # TRAILING_MIN_PROFIT_USD removido — gate em USD bloqueava fechamento em posições pequenas
     # (order=$3 × 10x = $30 notional → profit_usd < $0.20 na ativação)
     
@@ -610,11 +610,11 @@ class TradingConfig:
                 # order_size escala com capital para que ganhos cresçam proporcionalmente.
                 # notional = order_size × leverage(20). stop_loss = order_size × 60.
                 # margem total ≈ 15–21% do capital (conservador).
-                (90,    200,    3,    180,   3),   # notional $60   → ganho ~$0.20
-                (200,   350,    6,    360,   3),   # notional $120  → ganho ~$0.40
-                (350,   500,    9,    540,   3),   # notional $180  → ganho ~$0.60
-                (500,   750,    15,   900,   3),   # notional $300  → ganho ~$1.00
-                (750,   1000,   20,   1200,  3),   # notional $400  → ganho ~$1.33
+                (90,    200,    3,    180,   5),   # notional $60   → ganho ~$0.20
+                (200,   350,    6,    360,   5),   # notional $120  → ganho ~$0.40
+                (350,   500,    9,    540,   5),   # notional $180  → ganho ~$0.60
+                (500,   750,    15,   900,   5),   # notional $300  → ganho ~$1.00
+                (750,   1000,   20,   1200,  5),   # notional $400  → ganho ~$1.33
                 (1000,  1500,   30,   1800,  6),   # notional $600  → ganho ~$2.00
                 (1500,  2500,   45,   2700,  6),   # notional $900  → ganho ~$3.00
                 (2500,  4000,   60,   3600,  9),   # notional $1200 → ganho ~$4.00
@@ -660,13 +660,13 @@ class TradingConfig:
                     # pairs vazio = seleção automática pela Binance (top N por score)
                     "pairs": [],
                     "max_pairs": 10,
-                    # RSI assimétrico: LONG permite oversold (25-60), SHORT permite overbought (40-75)
+                    # Perfil equilibrado: mais frequência com risco controlado (RR ~ 1:2).
                     "risk_profile": {
-                        "stop_loss_min_percent": 0.5,
-                        "stop_loss_max_percent": 1.5,
-                        "take_profit_min_percent": 1.5,
-                        "take_profit_max_percent": 4.5,
-                        "risk_reward_target": 3.0,
+                        "stop_loss_min_percent": 0.4,
+                        "stop_loss_max_percent": 0.8,
+                        "take_profit_min_percent": 0.8,
+                        "take_profit_max_percent": 1.8,
+                        "risk_reward_target": 2.0,
                     },
                 },
                 {
