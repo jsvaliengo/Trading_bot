@@ -1109,6 +1109,16 @@ class TradingBot:
         # Perfil com max_pairs > 0 é dinâmico — pares foram atribuídos em runtime,
         # não são fixos de config. Não deve bloquear nova seleção dinâmica.
         profile_is_dynamic = bool(normalized_profiles[primary_index].get("max_pairs", 0))
+        if (
+            not profile_is_dynamic
+            and config.USE_BINANCE_STRATEGY
+            and self._normalize_strategy_type(
+                normalized_profiles[primary_index].get("strategy_type", "trend_signal")
+            ) == "trend_signal"
+        ):
+            # Compatibilidade com estado legado: perfil primário salvo com pares
+            # preenchidos e sem max_pairs deve continuar dinâmico em modo Binance.
+            profile_is_dynamic = True
         primary_has_fixed_pairs = bool(existing_primary_pairs) and not profile_is_dynamic
 
         if primary_pairs is not None and not primary_has_fixed_pairs:
