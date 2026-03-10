@@ -930,8 +930,11 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
       white-space: nowrap;
     }
     th:nth-child(9), td:nth-child(9) {
-      width: 10%;
+      width: 11%;
       white-space: nowrap;
+      text-align: center;
+      padding-left: 8px;
+      padding-right: 8px;
     }
     th {
       color: rgba(172, 188, 202, 0.92);
@@ -991,10 +994,12 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
     .tag.long { color: #66d8a0; background: rgba(66, 179, 123, 0.10); }
     .tag.short { color: #f0a195; background: rgba(179, 83, 66, 0.12); }
     .status-wrap {
-      display: inline-flex;
+      display: flex;
       flex-direction: column;
-      gap: 6px;
-      align-items: flex-start;
+      gap: 5px;
+      align-items: center;
+      justify-content: center;
+      width: 100%;
     }
     .status-badge, .stop-badge {
       border-radius: 8px;
@@ -1005,6 +1010,11 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
       text-transform: uppercase;
       white-space: nowrap;
       background: rgba(8, 22, 35, 0.42);
+      min-width: 104px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      box-sizing: border-box;
     }
     .status-critical { color: #ffadb5; background: rgba(143, 63, 79, 0.26); }
     .status-danger { color: #ffc19b; background: rgba(145, 91, 52, 0.23); }
