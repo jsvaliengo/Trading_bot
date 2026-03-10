@@ -195,6 +195,10 @@ class TradingBot:
         self._instance_lock_handle = None
         self._strategy_engines: Dict[str, Any] = {}
         self.strategy_profiles: List[Dict[str, Any]] = []
+        self._runtime_stats_lock = threading.Lock()
+        self._runtime_stats_since_report = self._new_runtime_stats()
+        self._positions_lock = threading.Lock()
+        self._state_io_lock = threading.Lock()
 
     def _migrate_legacy_runtime_files(self):
         """
@@ -426,58 +430,112 @@ class TradingBot:
             'symbols': []
         }
 
+    def _state_backup_file_path(self) -> str:
+        return f"{self._state_file_path}.bak"
+
+    def _build_state_payload(self) -> Dict[str, Any]:
+        """Monta payload serializável para persistência de estado."""
+        portfolio_history_serializable = []
+        for snap in self.portfolio_history:
+            portfolio_history_serializable.append({
+                'timestamp': snap['timestamp'].isoformat() if isinstance(snap['timestamp'], datetime) else snap['timestamp'],
+                'balance': snap['balance'],
+                'pnl_realized': snap['pnl_realized'],
+                'pnl_unrealized': snap['pnl_unrealized'],
+                'pnl_total': snap['pnl_total'],
+                'closed_trades': snap['closed_trades']
+            })
+
+        return {
+            'version': '1.7',  # Persistência atômica com fallback de backup
+            'saved_at': datetime.now().isoformat(),
+            'start_time': self.start_time.isoformat() if isinstance(self.start_time, datetime) else self.start_time,
+            'initial_capital': self.initial_capital,
+            'closed_trades_count': self.closed_trades_count,
+            'total_pnl': self.total_pnl,
+            'daily_realized_pnl': self.daily_realized_pnl,
+            'daily_date': datetime.utcnow().strftime('%Y-%m-%d'),
+            'pnl_by_symbol': self.pnl_by_symbol,
+            'trades_win_count': self.trades_win_count,
+            'trades_loss_count': self.trades_loss_count,
+            'trades_win_total': self.trades_win_total,
+            'trades_loss_total': self.trades_loss_total,
+            'total_fees_paid': self.total_fees_paid,
+            'portfolio_history': portfolio_history_serializable,
+            'trade_history': self.trade_history[-500:],
+            'peak_prices': self.peak_prices,
+            'trailing_activated': self.trailing_activated,
+            'double_first_used': self.double_first_used,
+            'sentiment_mode_enabled': bool(self.sentiment_mode_enabled),
+            'last_daily_performance_report_date': self.last_daily_performance_report_date,
+            'last_transfer_check_ts_ms': int(self.last_transfer_check_ts_ms or 0),
+            'processed_transfer_ids': self.processed_transfer_ids[
+                -max(100, int(config.CAPITAL_TRANSFER_TRACKED_IDS_LIMIT)):
+            ],
+            'disabled_pairs': list(getattr(config, 'DISABLED_PAIRS', []) or []),
+            'binance_coin_list': list(getattr(config, 'BINANCE_COIN_LIST', []) or []),
+            'strategy_profiles': list(getattr(config, 'STRATEGY_PROFILES', []) or []),
+        }
+
+    def _write_state_payload_atomic(self, state: Dict[str, Any]):
+        """Escreve estado de forma atômica e preserva backup do arquivo anterior."""
+        state_dir = os.path.dirname(self._state_file_path) or "."
+        os.makedirs(state_dir, exist_ok=True)
+        tmp_path = f"{self._state_file_path}.tmp"
+        backup_path = self._state_backup_file_path()
+
+        try:
+            with open(tmp_path, 'w') as f:
+                json.dump(state, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+
+            if os.path.exists(self._state_file_path):
+                try:
+                    shutil.copy2(self._state_file_path, backup_path)
+                except Exception as exc:
+                    logger.warning(f"⚠️ Não foi possível atualizar backup de estado: {exc}")
+
+            os.replace(tmp_path, self._state_file_path)
+        finally:
+            if os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except Exception:
+                    pass
+
+    def _read_state_with_fallback(self) -> Tuple[Any, str]:
+        """
+        Lê estado do arquivo principal.
+        Se estiver ausente/corrompido, tenta fallback no backup.
+        """
+        primary_path = self._state_file_path
+        backup_path = self._state_backup_file_path()
+        candidates = [primary_path, backup_path]
+
+        for index, path in enumerate(candidates):
+            if not os.path.exists(path):
+                continue
+            try:
+                with open(path, 'r') as f:
+                    return json.load(f), path
+            except Exception as exc:
+                if index == 0:
+                    logger.warning(f"⚠️ Estado principal inválido ({path}): {exc}")
+                else:
+                    logger.warning(f"⚠️ Backup de estado inválido ({path}): {exc}")
+
+        return None, ""
+
     def save_state(self):
         """
         Salva o estado atual do bot em um arquivo JSON.
         Isso permite continuar de onde parou após reiniciar.
         """
         try:
-            # Converte portfolio_history para formato serializável
-            portfolio_history_serializable = []
-            for snap in self.portfolio_history:
-                portfolio_history_serializable.append({
-                    'timestamp': snap['timestamp'].isoformat() if isinstance(snap['timestamp'], datetime) else snap['timestamp'],
-                    'balance': snap['balance'],
-                    'pnl_realized': snap['pnl_realized'],
-                    'pnl_unrealized': snap['pnl_unrealized'],
-                    'pnl_total': snap['pnl_total'],
-                    'closed_trades': snap['closed_trades']
-                })
-            
-            state = {
-                'version': '1.6',  # Inclui perfis de estratégia + overrides de pares + transferências de capital
-                'saved_at': datetime.now().isoformat(),
-                'start_time': self.start_time.isoformat() if isinstance(self.start_time, datetime) else self.start_time,
-                'initial_capital': self.initial_capital,  # Capital inicial (atualiza com depósitos)
-                'closed_trades_count': self.closed_trades_count,
-                'total_pnl': self.total_pnl,
-                'daily_realized_pnl': self.daily_realized_pnl,
-                'daily_date': datetime.utcnow().strftime('%Y-%m-%d'),  # UTC como a Binance (reseta 00:00 UTC)
-                'pnl_by_symbol': self.pnl_by_symbol,
-                # Estatísticas de trades (lucro vs prejuízo)
-                'trades_win_count': self.trades_win_count,
-                'trades_loss_count': self.trades_loss_count,
-                'trades_win_total': self.trades_win_total,
-                'trades_loss_total': self.trades_loss_total,
-                'total_fees_paid': self.total_fees_paid,  # Total de taxas pagas
-                'portfolio_history': portfolio_history_serializable,
-                'trade_history': self.trade_history[-500:],
-                'peak_prices': self.peak_prices,
-                'trailing_activated': self.trailing_activated,
-                'double_first_used': self.double_first_used,
-                'sentiment_mode_enabled': bool(self.sentiment_mode_enabled),
-                'last_daily_performance_report_date': self.last_daily_performance_report_date,
-                'last_transfer_check_ts_ms': int(self.last_transfer_check_ts_ms or 0),
-                'processed_transfer_ids': self.processed_transfer_ids[
-                    -max(100, int(config.CAPITAL_TRANSFER_TRACKED_IDS_LIMIT)):
-                ],
-                'disabled_pairs': list(getattr(config, 'DISABLED_PAIRS', []) or []),
-                'binance_coin_list': list(getattr(config, 'BINANCE_COIN_LIST', []) or []),
-                'strategy_profiles': list(getattr(config, 'STRATEGY_PROFILES', []) or []),
-            }
-            
-            with open(self._state_file_path, 'w') as f:
-                json.dump(state, f, indent=2)
+            with self._state_io_lock:
+                state = self._build_state_payload()
+                self._write_state_payload_atomic(state)
             
             logger.info(f"💾 Estado salvo em {self._state_file_path}")
             return True
@@ -491,13 +549,19 @@ class TradingBot:
         Carrega o estado salvo anteriormente do arquivo JSON.
         Se não existir arquivo, mantém os valores padrão.
         """
-        if not os.path.exists(self._state_file_path):
+        backup_path = self._state_backup_file_path()
+        if not os.path.exists(self._state_file_path) and not os.path.exists(backup_path):
             logger.info("📂 Nenhum estado anterior encontrado. Iniciando do zero.")
             return False
         
         try:
-            with open(self._state_file_path, 'r') as f:
-                state = json.load(f)
+            with self._state_io_lock:
+                state, source_path = self._read_state_with_fallback()
+            if state is None:
+                logger.info("🔄 Nenhum estado válido encontrado (principal/backup). Iniciando do zero.")
+                return False
+            if source_path == backup_path:
+                logger.warning(f"⚠️ Estado carregado do backup: {source_path}")
 
             # Carrega overrides de pares antes da inicialização da estratégia.
             saved_disabled_pairs = state.get('disabled_pairs')
@@ -593,7 +657,7 @@ class TradingBot:
                 if symbol not in self.pnl_by_symbol:
                     self.pnl_by_symbol[symbol] = 0.0
             
-            logger.info(f"✅ Estado carregado de {self._state_file_path}")
+            logger.info(f"✅ Estado carregado de {source_path}")
             logger.info(f"   • Trades fechados: {self.closed_trades_count}")
             logger.info(f"   • P&L Total: ${self.total_pnl:.2f}")
             logger.info(f"   • Snapshots no histórico: {len(self.portfolio_history)}")
@@ -635,6 +699,21 @@ class TradingBot:
                 normalized[normalized_key] = True
 
         return normalized
+
+    def _set_known_position(self, position_key: str, payload: Dict[str, Any]):
+        """Atualiza o registro de uma posição rastreada com proteção de lock."""
+        with self._positions_lock:
+            self.known_positions[position_key] = dict(payload)
+
+    def _remove_known_position(self, position_key: str):
+        """Remove posição rastreada com proteção de lock."""
+        with self._positions_lock:
+            self.known_positions.pop(position_key, None)
+
+    def _get_known_position(self, position_key: str) -> Dict[str, Any]:
+        """Retorna cópia defensiva dos metadados de posição."""
+        with self._positions_lock:
+            return dict(self.known_positions.get(position_key, {}) or {})
 
     def _double_first_scope(self) -> str:
         scope = str(getattr(config, "DOUBLE_FIRST_SCOPE", "global") or "global").strip().lower()
@@ -1513,8 +1592,7 @@ class TradingBot:
                 # Limpa dados de trailing
                 position_key = f"{symbol}_{side}"
                 self._clear_trailing_data(position_key)
-                with self._positions_lock:
-                    self.known_positions.pop(position_key, None)
+                self._remove_known_position(position_key)
                     
             except Exception as e:
                 logger.error(f"   ❌ Erro ao fechar {side} {symbol}: {e}")
@@ -2025,7 +2103,6 @@ class TradingBot:
         interval = getattr(self, "_pair_update_interval", 2160)
         self.next_pair_update_time = time.monotonic() + interval
 
-        import math
         hours = interval / 3600
         next_in = f"{hours:.0f}h" if hours >= 1 else f"{interval / 60:.0f}min"
         return {
@@ -2666,8 +2743,9 @@ class TradingBot:
                 # Adiciona ao rastreamento de posições conhecidas
                 position_key = f"{symbol}_LONG"
                 _now = datetime.now()
-                with self._positions_lock:
-                    self.known_positions[position_key] = {
+                self._set_known_position(
+                    position_key,
+                    {
                         'symbol': symbol,
                         'side': 'LONG',
                         'entry_price': price,
@@ -2680,7 +2758,8 @@ class TradingBot:
                         'custom_take_profit': custom_take_profit,
                         'range_mid_price': range_mid_price,
                         'range_entry_side': "LONG",
-                    }
+                    },
+                )
                 
                 logger.info("✅ LONG aberto com sucesso!")
                 logger.info(f"   {long_qty:.4f} {symbol} @ ${price:.4f}")
@@ -2780,8 +2859,9 @@ class TradingBot:
                 # Adiciona ao rastreamento de posições conhecidas
                 position_key = f"{symbol}_SHORT"
                 _now = datetime.now()
-                with self._positions_lock:
-                    self.known_positions[position_key] = {
+                self._set_known_position(
+                    position_key,
+                    {
                         'symbol': symbol,
                         'side': 'SHORT',
                         'entry_price': price,
@@ -2794,7 +2874,8 @@ class TradingBot:
                         'custom_take_profit': short_tp,
                         'range_mid_price': range_mid_price,
                         'range_entry_side': "SHORT",
-                    }
+                    },
+                )
                 
                 logger.info("✅ SHORT aberto com sucesso!")
                 logger.info(f"   {short_qty:.4f} {symbol} @ ${price:.4f}")
@@ -2901,8 +2982,7 @@ class TradingBot:
             self._process_binance_closed_position(pos_info)
 
             # Remove do tracking
-            with self._positions_lock:
-                self.known_positions.pop(position_key, None)
+            self._remove_known_position(position_key)
             self._clear_trailing_data(position_key)
         
         if not positions:
@@ -2954,7 +3034,7 @@ class TradingBot:
             
             logger.info(f"   {side} {symbol}: P&L ${pnl:.2f} ({profit_pct:+.2f}%) | Preço: ${current_price:.4f}")
 
-            known_meta = self.known_positions.get(position_key, {})
+            known_meta = self._get_known_position(position_key)
             custom_take_profit = known_meta.get('custom_take_profit')
             custom_stop_loss = known_meta.get('custom_stop_loss')
             strategy_type = self._normalize_strategy_type(known_meta.get('strategy_type', 'trend_signal'))
@@ -2977,8 +3057,7 @@ class TradingBot:
                 )
                 if closed:
                     self._clear_trailing_data(position_key)
-                    with self._positions_lock:
-                        self.known_positions.pop(position_key, None)
+                    self._remove_known_position(position_key)
                 else:
                     logger.warning(
                         f"⚠️ Fechamento não confirmado para {position_key} em TP custom. "
@@ -3000,8 +3079,7 @@ class TradingBot:
                 )
                 if closed:
                     self._clear_trailing_data(position_key)
-                    with self._positions_lock:
-                        self.known_positions.pop(position_key, None)
+                    self._remove_known_position(position_key)
                 else:
                     logger.warning(
                         f"⚠️ Fechamento não confirmado para {position_key} em SL custom. "
@@ -3021,8 +3099,7 @@ class TradingBot:
                 )
                 if closed:
                     self._clear_trailing_data(position_key)
-                    with self._positions_lock:
-                        self.known_positions.pop(position_key, None)
+                    self._remove_known_position(position_key)
                 else:
                     logger.warning(
                         f"⚠️ Fechamento não confirmado para {position_key} em saída antecipada de range."
@@ -3041,8 +3118,7 @@ class TradingBot:
                 )
                 if closed:
                     self._clear_trailing_data(position_key)
-                    with self._positions_lock:
-                        self.known_positions.pop(position_key, None)
+                    self._remove_known_position(position_key)
                 else:
                     logger.warning(
                         f"⚠️ Fechamento não confirmado para {position_key} em Take Profit. "
@@ -3068,8 +3144,7 @@ class TradingBot:
                     closed = self._close_position_with_notification(pos, reason)
                     if closed:
                         self._clear_trailing_data(position_key)
-                        with self._positions_lock:
-                            self.known_positions.pop(position_key, None)
+                        self._remove_known_position(position_key)
                     else:
                         logger.warning(
                             f"⚠️ Fechamento não confirmado para {position_key} via trailing. "
@@ -3090,8 +3165,7 @@ class TradingBot:
                     )
                     if closed:
                         self._clear_trailing_data(position_key)
-                        with self._positions_lock:
-                            self.known_positions.pop(position_key, None)
+                        self._remove_known_position(position_key)
                     else:
                         logger.warning(
                             f"⚠️ Fechamento não confirmado para {position_key} via stop loss. "
@@ -3195,7 +3269,7 @@ class TradingBot:
                     self.trades_by_symbol[symbol]['fees'] = self.trades_by_symbol[symbol].get('fees', 0.0) + total_fees
 
                     # Atualiza trades por estratégia
-                    pos_meta = self.known_positions.get(f"{symbol}_{side}", {})
+                    pos_meta = self._get_known_position(f"{symbol}_{side}")
                     strat_key = pos_meta.get('strategy_name')
                     if not strat_key:
                         _sp = self._resolve_strategy_context(symbol)
@@ -3301,7 +3375,7 @@ class TradingBot:
                 logger.info(f"   Pico: ${peak_price:.4f} | Stop em: ${trailing_stop_price:.4f}")
                 
                 # Envia notificação
-                trailing_pos_meta = self.known_positions.get(position_key, {})
+                trailing_pos_meta = self._get_known_position(position_key)
                 trailing_strategy_name = trailing_pos_meta.get('strategy_name')
                 if not trailing_strategy_name:
                     _tp = self._resolve_strategy_context(symbol)
@@ -3365,7 +3439,7 @@ class TradingBot:
         entry_price = pos['entry_price']
         quantity = pos['quantity']
         position_key = f"{symbol}_{side}"
-        pos_meta = self.known_positions.get(position_key, {})
+        pos_meta = self._get_known_position(position_key)
         strategy_name = pos_meta.get('strategy_name')
         if not strategy_name:
             profile = self._resolve_strategy_context(symbol)

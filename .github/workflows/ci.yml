@@ -22,6 +22,13 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Run ruff
+        run: ruff check trading_bot tests
+
+      - name: Run mypy (typed scope)
+        run: mypy trading_bot/services/telegram_commands.py
 
       - name: Run pytest
         run: pytest -q
