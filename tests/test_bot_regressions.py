@@ -697,6 +697,40 @@ def test_build_analysis_tasks_keeps_strategy_context(monkeypatch):
     ]
 
 
+def test_get_primary_profile_info_forces_dynamic_primary_on_binance_mode(monkeypatch):
+    bot = _make_light_bot()
+
+    monkeypatch.setattr(config, "USE_BINANCE_STRATEGY", True)
+    monkeypatch.setattr(
+        config,
+        "STRATEGY_PROFILES",
+        [
+            {
+                "name": "trend_strong",
+                "enabled": True,
+                "strategy_type": "trend_signal",
+                "entry_mode": "strong_only",
+                # Estado antigo: pares preenchidos e sem max_pairs.
+                "pairs": ["HYPEUSDT", "ETHUSDT", "ZECUSDT"],
+            }
+        ],
+    )
+
+    _profiles, _primary, primary_is_dynamic = bot._get_primary_profile_info()
+
+    assert primary_is_dynamic is True
+
+
+def test_resolve_primary_pair_target_uses_tier_as_base():
+    target = TradingBot._resolve_primary_pair_target(
+        primary_profile={"max_pairs": 10},
+        strategy_num_coins=6,
+        fallback_num_coins=3,
+    )
+
+    assert target == 6
+
+
 def test_sync_strategy_profiles_preserves_fixed_pairs_ignores_trading_pairs(monkeypatch):
     """Quando o perfil primário já tem pares fixos, TRADING_PAIRS externo não deve
     injetar novos pares no perfil — o perfil é a fonte de verdade."""
@@ -872,6 +906,50 @@ def test_sync_strategy_profiles_excludes_reserved_pairs_from_dynamic_primary(mon
     assert primary["pairs"] == ["BTCUSDT", "ETHUSDT"]
     assert secondary["pairs"] == ["DOGEUSDT", "XRPUSDT"]
     assert config.TRADING_PAIRS == ["BTCUSDT", "ETHUSDT", "DOGEUSDT", "XRPUSDT"]
+
+
+def test_refresh_trading_pairs_uses_tier_count_when_max_pairs_is_higher(monkeypatch):
+    bot = _make_light_bot()
+    bot.strategy = SimpleNamespace(generate_trade_setup=lambda **_kwargs: None)
+    bot._strategy_engines = {}
+    bot.strategy_profiles = []
+    bot.exchange = SimpleNamespace(set_leverage=lambda *_args, **_kwargs: True)
+
+    monkeypatch.setattr(config, "USE_BINANCE_STRATEGY", True)
+    monkeypatch.setattr(config, "AUTO_SELECT_PAIRS", False)
+    monkeypatch.setattr(config, "DISABLED_PAIRS", [])
+    monkeypatch.setattr(config, "TRADING_PAIRS", ["HYPEUSDT", "ETHUSDT", "ZECUSDT"])
+    monkeypatch.setattr(
+        config,
+        "STRATEGY_PROFILES",
+        [
+            {
+                "name": "trend_strong",
+                "enabled": True,
+                "strategy_type": "trend_signal",
+                "entry_mode": "strong_only",
+                "pairs": ["HYPEUSDT", "ETHUSDT", "ZECUSDT"],
+                "max_pairs": 10,
+            }
+        ],
+    )
+
+    bot._reload_strategy_profiles(reason="test-refresh-tier")
+    bot.binance_strategy = {"num_coins": 6}
+
+    called = {}
+
+    def _fake_sort(num_coins, exclude=None):
+        called["num_coins"] = num_coins
+        return [f"COIN{i}USDT" for i in range(1, num_coins + 1)]
+
+    bot.sort_binance_coins_by_score = _fake_sort
+
+    result = bot.refresh_trading_pairs(trigger_reason="test-tier")
+
+    assert called["num_coins"] == 6
+    assert len(result["new_pairs"]) == 6
+    assert len(config.TRADING_PAIRS) == 6
 
 
 def test_setup_exchange_restores_open_positions_for_reentry_tracking(monkeypatch):
