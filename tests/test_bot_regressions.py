@@ -184,6 +184,58 @@ def test_load_state_ignores_backup_when_primary_is_empty(tmp_path):
     assert bot.total_pnl == 0.0
 
 
+def test_execute_signal_trade_skips_fixed_sl_on_exchange_when_individual_sl_disabled(monkeypatch):
+    bot = _make_light_bot()
+    sltp_calls = []
+
+    bot.exchange = SimpleNamespace(
+        get_symbol_price=lambda _symbol: 100.0,
+        get_symbol_info=lambda _symbol: {"minNotional": 5.0, "pricePrecision": 2},
+        place_market_order=lambda **_kwargs: {"orderId": 1},
+        set_stop_loss_take_profit=lambda **kwargs: sltp_calls.append(kwargs) or True,
+        get_account_balance=lambda: 1000.0,
+    )
+    bot.telegram = SimpleNamespace(send_trade_alert=lambda **_kwargs: True)
+    bot._get_total_open_notional_percent = lambda: 0.0
+
+    monkeypatch.setattr(config, "CHECK_FUNDING_RATE", False)
+    monkeypatch.setattr(config, "USE_BINANCE_STRATEGY", False)
+    monkeypatch.setattr(config, "USE_INDIVIDUAL_STOP_LOSS", False)
+    monkeypatch.setattr(config, "LEVERAGE", 20)
+    monkeypatch.setattr(config, "MAX_TOTAL_NOTIONAL_PERCENT", 999.0)
+    monkeypatch.setattr(config, "MAX_POSITION_CONCENTRATION_PERCENT", 100.0)
+
+    long_setup = TradeSetup(
+        symbol="ETHUSDT",
+        signal=Signal.STRONG_BUY,
+        long_size=3.0,
+        short_size=3.0,
+        entry_price=100.0,
+        stop_loss=99.0,
+        take_profit=102.0,
+        dca_levels=[],
+    )
+    assert bot.execute_signal_trade(long_setup, open_long=True, strategy_name="trend_strong") is True
+    assert sltp_calls[-1]["position_side"] == "LONG"
+    assert sltp_calls[-1]["stop_loss_price"] is None
+    assert sltp_calls[-1]["take_profit_price"] == 102.0
+
+    short_setup = TradeSetup(
+        symbol="SOLUSDT",
+        signal=Signal.STRONG_SELL,
+        long_size=3.0,
+        short_size=3.0,
+        entry_price=100.0,
+        stop_loss=101.0,
+        take_profit=98.0,
+        dca_levels=[],
+    )
+    assert bot.execute_signal_trade(short_setup, open_short=True, strategy_name="trend_strong") is True
+    assert sltp_calls[-1]["position_side"] == "SHORT"
+    assert sltp_calls[-1]["stop_loss_price"] is None
+    assert sltp_calls[-1]["take_profit_price"] == 98.0
+
+
 def test_trailing_stop_activates_and_closes_long_on_retrace(monkeypatch):
     bot = _make_light_bot()
     bot.peak_prices = {}
