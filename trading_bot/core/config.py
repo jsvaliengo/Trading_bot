@@ -233,8 +233,8 @@ class TradingConfig:
     PAIR_SELECTION_WEIGHTS: dict = None  # Será definido no __post_init__
     
     # Filtros mínimos para um par ser considerado
-    MIN_VOLUME_24H_USD: float = 50_000_000    # Volume mínimo $50M
-    MAX_SPREAD_PERCENT: float = 0.10          # Spread máximo 0.10%
+    MIN_VOLUME_24H_USD: float = 150_000_000   # Volume mínimo $150M
+    MAX_SPREAD_PERCENT: float = 0.07          # Spread máximo 0.07%
     MIN_VOLATILITY_PERCENT: float = 1.5       # Volatilidade mínima 1.5%
     MAX_MIN_NOTIONAL: float = 10.0            # Mínimo notional máximo $10 (exclui BTC $100, ETH $20)
     
@@ -409,8 +409,8 @@ class TradingConfig:
     # NOTA: Breakeven = 0.10% (taxa taker 0.05% × 2 ordens)
     
     USE_TRAILING_STOP: bool = True
-    TRAILING_ACTIVATION_PERCENT: float = 0.30   # Ativa quando lucro >= 0.30%
-    TRAILING_DISTANCE_PERCENT: float = 0.12     # Stop fica 0.12% abaixo do pico
+    TRAILING_ACTIVATION_PERCENT: float = 0.60   # Ativa quando lucro >= 0.60%
+    TRAILING_DISTANCE_PERCENT: float = 0.25     # Stop fica 0.25% abaixo do pico
     # TRAILING_MIN_PROFIT_USD removido — gate em USD bloqueava fechamento em posições pequenas
     # (order=$3 × 10x = $30 notional → profit_usd < $0.20 na ativação)
     
@@ -662,11 +662,11 @@ class TradingConfig:
                     "max_pairs": 10,
                     # Perfil equilibrado: mais frequência com risco controlado (RR ~ 1:2).
                     "risk_profile": {
-                        "stop_loss_min_percent": 0.35,
-                        "stop_loss_max_percent": 0.65,
-                        "take_profit_min_percent": 1.2,
-                        "take_profit_max_percent": 2.4,
-                        "risk_reward_target": 2.5,
+                        "stop_loss_min_percent": 0.30,
+                        "stop_loss_max_percent": 0.50,
+                        "take_profit_min_percent": 1.4,
+                        "take_profit_max_percent": 3.0,
+                        "risk_reward_target": 2.8,
                     },
                 },
                 {
@@ -689,8 +689,8 @@ class TradingConfig:
             self.PAIR_SELECTION_WEIGHTS = {
                 'spread': 35,        # 35% - Spread baixo (custo de execução)
                 'volume': 30,        # 30% - Volume 24h (liquidez)
-                'volatility': 20,    # 20% - Volatilidade (movimento suficiente)
-                'trend': 10,         # 10% - Força da tendência (filtro)
+                'volatility': 10,    # 10% - Volatilidade (evita excesso de ruído)
+                'trend': 20,         # 20% - Força da tendência (prioriza continuidade)
                 'funding': 5,        # 5%  - Funding (quase irrelevante no scalp)
             }
     
