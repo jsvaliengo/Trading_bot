@@ -2633,6 +2633,7 @@ class TradingBot:
         custom_stop_loss = _safe_float(setup_metadata.get("custom_stop_loss", setup.stop_loss))
         custom_take_profit = _safe_float(setup_metadata.get("custom_take_profit", setup.take_profit))
         range_mid_price = _safe_float(setup_metadata.get("range_mid_price"))
+        exchange_stop_loss_enabled = bool(getattr(config, "USE_INDIVIDUAL_STOP_LOSS", False))
         
         # Log do funding rate (apenas informativo)
         if config.CHECK_FUNDING_RATE:
@@ -2781,14 +2782,14 @@ class TradingBot:
                         applied_order_size=order_size,
                     )
 
-                # Improvement 3: coloca SL real na Binance para o LONG
-                # custom_stop_loss vem do setup (já é preço absoluto para range scalping)
-                # Para trend, calcula com base em STOP_LOSS_PERCENT
-                if custom_stop_loss and custom_stop_loss > 0:
-                    sl_price_long = custom_stop_loss
-                else:
-                    _sl_pct = float(getattr(config, "STOP_LOSS_PERCENT", 3.0))
-                    sl_price_long = round(price * (1 - _sl_pct / 100), info.get('pricePrecision', 4))
+                # Define SL fixo na Binance somente quando o SL individual está ativo.
+                sl_price_long = None
+                if exchange_stop_loss_enabled:
+                    if custom_stop_loss and custom_stop_loss > 0:
+                        sl_price_long = custom_stop_loss
+                    else:
+                        _sl_pct = float(getattr(config, "STOP_LOSS_PERCENT", 3.0))
+                        sl_price_long = round(price * (1 - _sl_pct / 100), info.get('pricePrecision', 4))
                 self.exchange.set_stop_loss_take_profit(
                     symbol=symbol,
                     position_side='LONG',
@@ -2895,16 +2896,17 @@ class TradingBot:
                         applied_order_size=order_size,
                     )
 
-                # Define TP e SL real para o SHORT (Improvement 3)
+                # Define TP para o SHORT e SL fixo apenas quando habilitado.
                 short_tp = custom_take_profit if custom_take_profit else setup.take_profit
                 if short_tp is None or short_tp <= 0:
                     short_tp = price * (1 - config.TAKE_PROFIT_PERCENT / 100)
-                # SL para SHORT: preço de entrada + % de stop loss
-                if custom_stop_loss and custom_stop_loss > 0:
-                    sl_price_short = custom_stop_loss
-                else:
-                    _sl_pct = float(getattr(config, "STOP_LOSS_PERCENT", 3.0))
-                    sl_price_short = round(price * (1 + _sl_pct / 100), info.get('pricePrecision', 4))
+                sl_price_short = None
+                if exchange_stop_loss_enabled:
+                    if custom_stop_loss and custom_stop_loss > 0:
+                        sl_price_short = custom_stop_loss
+                    else:
+                        _sl_pct = float(getattr(config, "STOP_LOSS_PERCENT", 3.0))
+                        sl_price_short = round(price * (1 + _sl_pct / 100), info.get('pricePrecision', 4))
                 self.exchange.set_stop_loss_take_profit(
                     symbol=symbol,
                     position_side='SHORT',
