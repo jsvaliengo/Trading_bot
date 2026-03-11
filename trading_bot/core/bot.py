@@ -511,19 +511,31 @@ class TradingBot:
         """
         primary_path = self._state_file_path
         backup_path = self._state_backup_file_path()
-        candidates = [primary_path, backup_path]
-
-        for index, path in enumerate(candidates):
-            if not os.path.exists(path):
-                continue
+        if os.path.exists(primary_path):
             try:
-                with open(path, 'r') as f:
-                    return json.load(f), path
+                with open(primary_path, 'r', encoding='utf-8') as f:
+                    primary_raw = f.read()
+                primary_stripped = primary_raw.strip()
+
+                # Reset manual comum: arquivo vazio/{} em runtime.
+                # Nesses casos, não devemos restaurar o .bak.
+                if primary_stripped in {"", "{}", "null"}:
+                    logger.info(
+                        f"🧹 Estado principal resetado manualmente ({primary_path}). "
+                        "Ignorando backup e iniciando do zero."
+                    )
+                    return {}, primary_path
+
+                return json.loads(primary_raw), primary_path
             except Exception as exc:
-                if index == 0:
-                    logger.warning(f"⚠️ Estado principal inválido ({path}): {exc}")
-                else:
-                    logger.warning(f"⚠️ Backup de estado inválido ({path}): {exc}")
+                logger.warning(f"⚠️ Estado principal inválido ({primary_path}): {exc}")
+
+        if os.path.exists(backup_path):
+            try:
+                with open(backup_path, 'r', encoding='utf-8') as f:
+                    return json.load(f), backup_path
+            except Exception as exc:
+                logger.warning(f"⚠️ Backup de estado inválido ({backup_path}): {exc}")
 
         return None, ""
 
