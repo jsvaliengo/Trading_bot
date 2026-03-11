@@ -161,6 +161,29 @@ def test_load_state_uses_backup_when_primary_is_corrupted(tmp_path):
     assert bot.total_pnl == 12.34
 
 
+def test_load_state_ignores_backup_when_primary_is_empty(tmp_path):
+    bot = _make_light_bot()
+    state_file = tmp_path / "bot_state.json"
+    backup_file = tmp_path / "bot_state.json.bak"
+    bot._state_file_path = str(state_file)
+
+    state_file.write_text("", encoding="utf-8")
+    backup_file.write_text(
+        json.dumps(
+            {
+                "daily_date": datetime.utcnow().strftime("%Y-%m-%d"),
+                "closed_trades_count": 9,
+                "total_pnl": 12.34,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert bot.load_state() is True
+    assert bot.closed_trades_count == 0
+    assert bot.total_pnl == 0.0
+
+
 def test_trailing_stop_activates_and_closes_long_on_retrace(monkeypatch):
     bot = _make_light_bot()
     bot.peak_prices = {}
