@@ -2634,6 +2634,8 @@ class TradingBot:
         custom_take_profit = _safe_float(setup_metadata.get("custom_take_profit", setup.take_profit))
         range_mid_price = _safe_float(setup_metadata.get("range_mid_price"))
         exchange_stop_loss_enabled = bool(getattr(config, "USE_INDIVIDUAL_STOP_LOSS", False))
+        if not exchange_stop_loss_enabled:
+            custom_stop_loss = None
         
         # Log do funding rate (apenas informativo)
         if config.CHECK_FUNDING_RATE:
@@ -3150,7 +3152,7 @@ class TradingBot:
                 continue
 
             custom_sl_hit = bool(
-                custom_stop_loss is not None and (
+                config.USE_INDIVIDUAL_STOP_LOSS and custom_stop_loss is not None and (
                     (side == "LONG" and current_price <= float(custom_stop_loss)) or
                     (side == "SHORT" and current_price >= float(custom_stop_loss))
                 )
