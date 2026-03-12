@@ -57,10 +57,19 @@ def _parse_iso_datetime(raw: Any) -> datetime | None:
 def _parse_date_yyyy_mm_dd(raw: Any) -> date | None:
     if not isinstance(raw, str) or not raw.strip():
         return None
-    try:
-        return datetime.strptime(raw.strip(), "%Y-%m-%d").date()
-    except ValueError:
-        return None
+    text = raw.strip()
+    accepted_formats = (
+        "%Y-%m-%d",  # 2026-03-12
+        "%d/%m/%Y",  # 12/03/2026
+        "%d-%m-%Y",  # 12-03-2026
+        "%Y/%m/%d",  # 2026/03/12
+    )
+    for fmt in accepted_formats:
+        try:
+            return datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+    return None
 
 
 def _read_json_file(file_path: Path) -> tuple[Dict[str, Any], str]:
@@ -1402,7 +1411,7 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
         <button id="apply-range" type="button" class="tag">Aplicar</button>
         <button id="refresh-analytics" type="button" class="tag">Atualizar análise</button>
       </div>
-      <div id="range-label" class="muted">Período: -- | clique em "Atualizar análise" para recalcular</div>
+      <div id="range-label" class="muted">Período: --</div>
     </section>
 
     <section class="grid">
@@ -1636,6 +1645,25 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
       return `${y}-${m}-${day}`;
     }
 
+    function normalizeDateInput(raw) {
+      const value = String(raw || "").trim();
+      if (!value) return "";
+      if (/^\\d{4}-\\d{2}-\\d{2}$/.test(value)) return value;
+
+      let m = value.match(/^(\\d{2})\\/(\\d{2})\\/(\\d{4})$/);
+      if (m) return `${m[3]}-${m[2]}-${m[1]}`;
+
+      m = value.match(/^(\\d{2})-(\\d{2})-(\\d{4})$/);
+      if (m) return `${m[3]}-${m[2]}-${m[1]}`;
+
+      m = value.match(/^(\\d{4})\\/(\\d{2})\\/(\\d{2})$/);
+      if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+
+      const parsed = new Date(value);
+      if (!Number.isNaN(parsed.getTime())) return toYmd(parsed);
+      return "";
+    }
+
     function shiftDays(base, delta) {
       const d = new Date(base.getTime());
       d.setDate(d.getDate() + delta);
@@ -1643,14 +1671,18 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
     }
 
     function setRange(start, end) {
-      rangeState.start = start;
-      rangeState.end = end;
+      const normalizedStart = normalizeDateInput(start);
+      const normalizedEnd = normalizeDateInput(end);
+      if (!normalizedStart || !normalizedEnd) return false;
+      rangeState.start = normalizedStart;
+      rangeState.end = normalizedEnd;
       const startInput = document.getElementById("start-date");
       const endInput = document.getElementById("end-date");
-      if (startInput) startInput.value = start;
-      if (endInput) endInput.value = end;
+      if (startInput) startInput.value = normalizedStart;
+      if (endInput) endInput.value = normalizedEnd;
       const label = document.getElementById("range-label");
-      if (label) label.textContent = `Período: ${start} → ${end} | clique em "Atualizar análise" para recalcular`;
+      if (label) label.textContent = `Período: ${normalizedStart} → ${normalizedEnd}`;
+      return true;
     }
 
     function setupRangeControls() {
@@ -1676,15 +1708,24 @@ _DASHBOARD_HTML_TEMPLATE = """<!doctype html>
       document.getElementById("preset-3m").addEventListener("click", () => mapPreset(90));
       document.getElementById("preset-1y").addEventListener("click", () => mapPreset(365));
 
-      document.getElementById("apply-range").addEventListener("click", () => {
-        const start = document.getElementById("start-date").value;
-        const endDate = document.getElementById("end-date").value;
-        if (!start || !endDate) return;
+      document.getElementById("apply-range").addEventListener("click", async () => {
+        const startRaw = document.getElementById("start-date").value;
+        const endRaw = document.getElementById("end-date").value;
+        const start = normalizeDateInput(startRaw);
+        const endDate = normalizeDateInput(endRaw);
+        if (!start || !endDate) {
+          const label = document.getElementById("range-label");
+          if (label) {
+            label.textContent = "Período inválido. Use YYYY-MM-DD ou DD/MM/AAAA.";
+          }
+          return;
+        }
         if (start <= endDate) {
           setRange(start, endDate);
         } else {
           setRange(endDate, start);
         }
+        await refreshAnalytics();
       });
 
       document.getElementById("refresh-analytics").addEventListener("click", () => {
