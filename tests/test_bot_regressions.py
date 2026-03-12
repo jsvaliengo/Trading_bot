@@ -236,6 +236,48 @@ def test_execute_signal_trade_skips_fixed_sl_on_exchange_when_individual_sl_disa
     assert sltp_calls[-1]["take_profit_price"] == 98.0
 
 
+def test_monitor_positions_ignores_custom_stop_loss_when_individual_sl_disabled(monkeypatch):
+    bot = _make_light_bot()
+
+    position = {
+        "symbol": "XRPUSDT",
+        "side": "SHORT",
+        "entry_price": 1.3720,
+        "quantity": 43.7,
+        "unrealized_pnl": -0.4,
+        "mark_price": 1.3806,  # Acima do custom SL (1.3800)
+    }
+
+    bot.exchange = SimpleNamespace(
+        get_open_positions=lambda: [dict(position)],
+    )
+    bot._close_position_with_notification = MagicMock(return_value=True)
+    bot._process_binance_closed_position = MagicMock()
+
+    bot.known_positions = {
+        "XRPUSDT_SHORT": {
+            "symbol": "XRPUSDT",
+            "side": "SHORT",
+            "entry_price": 1.3720,
+            "quantity": 43.7,
+            "strategy_name": "trend_strong",
+            "strategy_type": "trend_signal",
+            "custom_stop_loss": 1.3800,
+            "custom_take_profit": None,
+            "range_mid_price": None,
+            "range_entry_side": "SHORT",
+        }
+    }
+
+    monkeypatch.setattr(config, "USE_INDIVIDUAL_STOP_LOSS", False)
+    monkeypatch.setattr(config, "USE_TRAILING_STOP", False)
+    monkeypatch.setattr(config, "TAKE_PROFIT_PERCENT", 8.0)
+
+    bot.monitor_positions()
+
+    bot._close_position_with_notification.assert_not_called()
+
+
 def test_trailing_stop_activates_and_closes_long_on_retrace(monkeypatch):
     bot = _make_light_bot()
     bot.peak_prices = {}
