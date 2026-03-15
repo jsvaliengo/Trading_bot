@@ -160,6 +160,41 @@ def test_dashboard_collector_respects_custom_date_range(tmp_path):
     assert len(data["analytics"]["daily_series"]) == 10
 
 
+def test_dashboard_collector_accepts_br_date_format(tmp_path):
+    state_file = tmp_path / "bot_state.test.json"
+    state_file.write_text(json.dumps({"saved_at": "2026-02-28T12:00:00+00:00"}), encoding="utf-8")
+
+    class ExchangeStub:
+        def get_account_info(self):
+            return {}
+
+        def get_daily_pnl_from_binance(self):
+            return {}
+
+        def get_open_positions(self):
+            return []
+
+        def get_retry_stats_report(self, reset=False):
+            return {}
+
+        def get_order_stats_report(self, reset=False):
+            return {}
+
+        def get_income_history(self, limit=1000, start_time=None):
+            return []
+
+    collector = DashboardDataCollector(
+        state_file_path=str(state_file),
+        exchange=ExchangeStub(),
+        fx_rate_provider=lambda: 5.0,
+    )
+    data = collector.collect(start_date_str="01/03/2026", end_date_str="12/03/2026")
+
+    assert data["analytics"]["start_date"] == "2026-03-01"
+    assert data["analytics"]["end_date"] == "2026-03-12"
+    assert len(data["analytics"]["daily_series"]) == 12
+
+
 def test_dashboard_collector_caches_daily_pnl_on_fast_collect(tmp_path):
     state_file = tmp_path / "bot_state.test.json"
     state_file.write_text(json.dumps({"saved_at": "2026-02-28T12:00:00+00:00"}), encoding="utf-8")
