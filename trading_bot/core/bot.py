@@ -28,6 +28,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Tuple
 
 from .config import config
+from ..ai.consultive_engine import ConsultiveEngine
 from ..infra.binance_client import BinanceConnection
 from .strategy import HedgeStrategy, RangeScalpingStrategy, RiskManager
 from ..services.notifications import TelegramNotifier
@@ -125,6 +126,9 @@ class TradingBot:
         # Inicializa atributos de estado (sem side effects externos)
         self._init_runtime_state()
 
+        logger.info("🤖 Inicializando IA consultiva...")
+        self.ai_consultive_engine = ConsultiveEngine(config_obj=config)
+
         # Preenche pnl_by_symbol com os pares configurados
         for symbol in config.TRADING_PAIRS:
             self.pnl_by_symbol[symbol] = 0.0
@@ -192,6 +196,7 @@ class TradingBot:
         self.last_pair_update = None
         self.sentiment_mode_enabled = bool(getattr(config, "USE_MARKET_SENTIMENT_FILTER", False))
         self.sentiment_cache: Dict[str, Dict[str, Any]] = {}
+        self.ai_consultive_engine = None
         self._instance_lock_handle = None
         self._strategy_engines: Dict[str, Any] = {}
         self.strategy_profiles: List[Dict[str, Any]] = []
@@ -2416,6 +2421,84 @@ class TradingBot:
 
         return (filtered_long, filtered_short)
 
+    def _maybe_run_ai_consultive_review(
+        self,
+        *,
+        symbol: str,
+        strategy_name: str,
+        strategy_type: str,
+        entry_mode: str,
+        signal_name: str,
+        setup: Any,
+        klines: List[Dict[str, Any]],
+        confirmation_klines: List[Dict[str, Any]] | None,
+        execution_timeframe: str,
+        confirmation_timeframe: str | None,
+        available_balance: float,
+        open_positions: List[Dict[str, Any]],
+        should_open_long: bool,
+        should_open_short: bool,
+        min_notional: float,
+    ):
+        """Executa revisão consultiva via IA sem alterar a lógica de execução."""
+        engine = getattr(self, "ai_consultive_engine", None)
+        if engine is None or not hasattr(engine, "is_enabled") or not engine.is_enabled():
+            return None
+
+        try:
+            sentiment_snapshot = None
+            if getattr(self, "sentiment_mode_enabled", False):
+                try:
+                    sentiment_snapshot = self._get_symbol_sentiment(symbol)
+                except Exception as exc:
+                    logger.warning(f"⚠️ Falha ao obter snapshot de sentimento para IA ({symbol}): {exc}")
+
+            snapshot = engine.build_market_snapshot(
+                symbol=symbol,
+                strategy_name=strategy_name,
+                strategy_type=strategy_type,
+                entry_mode=entry_mode,
+                signal_name=signal_name,
+                setup=setup,
+                klines=klines,
+                confirmation_klines=confirmation_klines,
+                execution_timeframe=execution_timeframe,
+                confirmation_timeframe=confirmation_timeframe,
+                available_balance=available_balance,
+                open_positions=open_positions,
+                should_open_long=should_open_long,
+                should_open_short=should_open_short,
+                min_notional=min_notional,
+                sentiment_snapshot=sentiment_snapshot,
+            )
+            review = engine.evaluate_setup(snapshot)
+
+            if not getattr(setup, "metadata", None):
+                setup.metadata = {}
+            setup.metadata["ai_consultive"] = review.compact_for_trade()
+
+            if review.status == "ok":
+                logger.info(
+                    "🤖 IA consultiva [%s] %s => %s conf=%s cached=%s",
+                    strategy_name,
+                    symbol,
+                    review.decision,
+                    review.confidence,
+                    review.from_cache,
+                )
+            elif review.status == "error":
+                logger.warning(f"⚠️ IA consultiva indisponível em {symbol}: {review.error}")
+
+            if review.should_notify and self.telegram:
+                message = engine.build_telegram_message(review)
+                self.telegram.send_message(message)
+
+            return review
+
+        except Exception as exc:
+            logger.warning(f"⚠️ Erro na IA consultiva para {symbol}: {exc}")
+            return None
+
     def analyze_and_trade(self, symbol: str, strategy_name: str | None = None) -> bool:
         """
         Analisa um par e executa trades se houver oportunidade.
@@ -2589,6 +2672,24 @@ class TradingBot:
         if not self.risk_manager.can_open_position(total_positions):
             logger.info("⏸️  Limite de risco atingido")
             return False
+
+        self._maybe_run_ai_consultive_review(
+            symbol=symbol,
+            strategy_name=strategy_label,
+            strategy_type=strategy_type,
+            entry_mode=entry_mode,
+            signal_name=signal_name,
+            setup=setup,
+            klines=klines,
+            confirmation_klines=confirmation_klines,
+            execution_timeframe=execution_timeframe,
+            confirmation_timeframe=confirmation_timeframe,
+            available_balance=available_balance,
+            open_positions=open_positions,
+            should_open_long=should_open_long,
+            should_open_short=should_open_short,
+            min_notional=min_notional,
+        )
         
         # Executa o trade baseado no sinal
         return self.execute_signal_trade(
@@ -2822,6 +2923,7 @@ class TradingBot:
                     'strategy_name': str(strategy_name or "primary"),
                     'strategy_type': strategy_type,
                     'double_first': bool(double_first_applied),
+                    'ai_consultive': dict(setup_metadata.get('ai_consultive', {}) or {}),
                 }
                 self.trade_history.append(trade_record)
                 
@@ -2939,6 +3041,7 @@ class TradingBot:
                     'strategy_name': str(strategy_name or "primary"),
                     'strategy_type': strategy_type,
                     'double_first': bool(double_first_applied),
+                    'ai_consultive': dict(setup_metadata.get('ai_consultive', {}) or {}),
                 }
                 self.trade_history.append(trade_record)
                 
