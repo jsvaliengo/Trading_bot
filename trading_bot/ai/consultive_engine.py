@@ -73,6 +73,9 @@ Todos os campos textuais devem estar em português do Brasil.
 Seja claro, objetivo e curto.
 Use frases simples.
 Em reasons e invalidators, use linguagem humana. Não use snake_case, siglas soltas nem inglês desnecessário.
+Respeite as regras operacionais do payload.
+Se hedge_mode_enabled=true e opposite_side_entry_allowed=true, a existência de posição no lado oposto no mesmo símbolo NÃO é motivo suficiente para rejeitar a entrada.
+Só trate posição aberta no mesmo símbolo como impeditiva quando same_side_entry_blocked=true e same_side_position_open=true.
 Retorne somente um JSON válido com:
 decision, confidence, timing_score, risk_grade, entry_window_min, entry_window_max, wait_seconds, reasons, invalidators, telegram_summary.
 Sem markdown. Sem texto fora do JSON.
@@ -443,6 +446,7 @@ class ConsultiveEngine:
             for pos in open_positions
             if str(pos.get("symbol", "")).upper() == str(symbol or "").upper()
         ]
+        opposite_side = "SHORT" if side == "LONG" else "LONG"
 
         metadata = dict(getattr(setup, "metadata", {}) or {})
         snapshot: Dict[str, Any] = {
@@ -472,6 +476,11 @@ class ConsultiveEngine:
             "same_symbol_position_count": len(same_symbol_sides),
             "same_symbol_has_long": "LONG" in same_symbol_sides,
             "same_symbol_has_short": "SHORT" in same_symbol_sides,
+            "hedge_mode_enabled": True,
+            "opposite_side_entry_allowed": True,
+            "same_side_entry_blocked": True,
+            "same_side_position_open": side in same_symbol_sides,
+            "opposite_side_position_open": opposite_side in same_symbol_sides,
         }
 
         if available_balance:

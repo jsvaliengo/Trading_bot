@@ -168,6 +168,8 @@ def test_consultive_engine_requests_openai_with_strict_json_schema():
     assert request_payload["text"]["format"]["name"] == "consultive_review"
     assert request_payload["text"]["format"]["strict"] is True
     assert request_payload["text"]["format"]["schema"] == OPENAI_CONSULTIVE_SCHEMA
+    system_text = request_payload["input"][0]["content"][0]["text"]
+    assert "opposite_side_entry_allowed=true" in system_text
 
 
 def test_consultive_engine_returns_provider_error_when_structured_response_is_invalid(caplog):
@@ -289,3 +291,48 @@ def test_build_telegram_message_is_clear_and_translated():
     assert "Momentum fraco" in message
     assert "Aguardar: Tendência altista mas volume fraco e correção é preferível antes de entrar." in message
     assert "Providers:" not in message
+
+
+def test_build_market_snapshot_marks_opposite_side_entry_as_allowed_in_hedge_mode():
+    engine = ConsultiveEngine(config_obj=_make_config())
+    setup = SimpleNamespace(
+        entry_price=100.0,
+        stop_loss=99.0,
+        take_profit=102.0,
+        metadata={},
+    )
+    klines = [
+        {"close": "100", "high": "101", "low": "99", "volume": "10"},
+        {"close": "101", "high": "102", "low": "100", "volume": "12"},
+        {"close": "102", "high": "103", "low": "101", "volume": "14"},
+    ] * 80
+    open_positions = [
+        {"symbol": "SOLUSDT", "side": "SHORT", "quantity": 1, "entry_price": 100},
+        {"symbol": "ETHUSDT", "side": "LONG", "quantity": 1, "entry_price": 2000},
+    ]
+
+    snapshot = engine.build_market_snapshot(
+        symbol="SOLUSDT",
+        strategy_name="trend_strong",
+        strategy_type="trend_signal",
+        entry_mode="strong_only",
+        signal_name="STRONG_BUY",
+        setup=setup,
+        klines=klines,
+        confirmation_klines=klines,
+        execution_timeframe="3m",
+        confirmation_timeframe="5m",
+        available_balance=100.0,
+        open_positions=open_positions,
+        should_open_long=True,
+        should_open_short=False,
+        min_notional=5.0,
+        sentiment_snapshot=None,
+    )
+
+    assert snapshot["hedge_mode_enabled"] is True
+    assert snapshot["opposite_side_entry_allowed"] is True
+    assert snapshot["same_side_entry_blocked"] is True
+    assert snapshot["same_side_position_open"] is False
+    assert snapshot["opposite_side_position_open"] is True
+    assert snapshot["same_symbol_has_short"] is True
