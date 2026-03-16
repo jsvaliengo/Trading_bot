@@ -3,7 +3,7 @@ IA consultiva para revisão de setups de entrada.
 
 V1:
 - avalia setups já aprovados pelas regras fixas do bot
-- produz parecer estruturado via GPT/Claude
+- produz parecer estruturado via GPT
 - não decide execução automática
 """
 
@@ -217,7 +217,7 @@ class ConsultiveReview:
 
 
 class ConsultiveEngine:
-    """Motor de IA consultiva com GPT e Claude."""
+    """Motor de IA consultiva com OpenAI."""
 
     def __init__(
         self,
@@ -397,20 +397,9 @@ class ConsultiveEngine:
                 cached_copy.should_notify = False
                 return cached_copy
 
-        primary_provider = self._normalize_provider_name(getattr(self.config, "AI_CONSULTIVE_PRIMARY_PROVIDER", "openai"))
-        secondary_provider = self._normalize_provider_name(getattr(self.config, "AI_CONSULTIVE_SECONDARY_PROVIDER", "anthropic"))
-
-        provider_reviews: List[ProviderReview] = []
-        primary_review = self._call_provider(primary_provider, snapshot)
-        provider_reviews.append(primary_review)
-
-        secondary_review: Optional[ProviderReview] = None
-        if self._should_request_second_opinion(primary_review, secondary_provider):
-            secondary_review = self._call_provider(secondary_provider, snapshot)
-            provider_reviews.append(secondary_review)
-        elif primary_review.status != "ok" and secondary_provider != "none":
-            secondary_review = self._call_provider(secondary_provider, snapshot)
-            provider_reviews.append(secondary_review)
+        provider_reviews: List[ProviderReview] = [
+            self._call_provider(snapshot)
+        ]
 
         final_review = self._merge_provider_reviews(
             provider_reviews=provider_reviews,
@@ -526,62 +515,16 @@ class ConsultiveEngine:
         digest = hashlib.sha1(payload.encode("utf-8")).hexdigest()[:16]
         return f"{symbol}:{strategy_name}:{digest}"
 
-    @staticmethod
-    def _normalize_provider_name(name: Any) -> str:
-        token = str(name or "none").strip().lower()
-        if token in {"openai", "anthropic"}:
-            return token
-        return "none"
+    def _provider_api_key(self) -> str:
+        return str(getattr(self.config, "OPENAI_API_KEY", "") or "").strip()
 
-    def _provider_api_key(self, provider: str) -> str:
-        if provider == "openai":
-            return str(getattr(self.config, "OPENAI_API_KEY", "") or "").strip()
-        if provider == "anthropic":
-            return str(getattr(self.config, "ANTHROPIC_API_KEY", "") or "").strip()
-        return ""
+    def _provider_model(self) -> str:
+        return str(getattr(self.config, "AI_CONSULTIVE_MODEL", "gpt-5-mini") or "gpt-5-mini").strip()
 
-    def _provider_model(self, provider: str) -> str:
-        if provider == "openai":
-            return str(getattr(self.config, "AI_CONSULTIVE_PRIMARY_MODEL", "gpt-5-mini") or "gpt-5-mini").strip()
-        if provider == "anthropic":
-            if self._normalize_provider_name(getattr(self.config, "AI_CONSULTIVE_PRIMARY_PROVIDER", "")) == "anthropic":
-                return str(getattr(self.config, "AI_CONSULTIVE_PRIMARY_MODEL", "claude-sonnet-4-20250514") or "claude-sonnet-4-20250514").strip()
-            return str(getattr(self.config, "AI_CONSULTIVE_SECONDARY_MODEL", "claude-sonnet-4-20250514") or "claude-sonnet-4-20250514").strip()
-        return ""
-
-    def _should_request_second_opinion(self, primary_review: ProviderReview, secondary_provider: str) -> bool:
-        if secondary_provider == "none":
-            return False
-        if self._normalize_provider_name(getattr(self.config, "AI_CONSULTIVE_PRIMARY_PROVIDER", "")) == secondary_provider:
-            return False
-        if primary_review.status != "ok":
-            return False
-        threshold = _clamp_int(
-            getattr(self.config, "AI_CONSULTIVE_SECOND_OPINION_THRESHOLD", 70),
-            0,
-            100,
-            70,
-        )
-        return primary_review.confidence < threshold or primary_review.decision == "WAIT_PULLBACK"
-
-    def _call_provider(self, provider: str, snapshot: Dict[str, Any]) -> ProviderReview:
-        model = self._provider_model(provider)
-        if provider == "none":
-            return ProviderReview(
-                provider="none",
-                model="",
-                status="skipped",
-                decision="REJECT",
-                confidence=0,
-                timing_score=0,
-                risk_grade="C",
-                entry_window_min=None,
-                entry_window_max=None,
-                wait_seconds=0,
-                error="provedor secundário desativado",
-            )
-
-        api_key = self._provider_api_key(provider)
+    def _call_provider(self, snapshot: Dict[str, Any]) -> ProviderReview:
+        provider = "openai"
+        model = self._provider_model()
+        api_key = self._provider_api_key()
         if not api_key:
             return ProviderReview(
                 provider=provider,
@@ -598,10 +541,7 @@ class ConsultiveEngine:
             )
 
         try:
-            if provider == "openai":
-                raw_text = self._call_openai(model=model, api_key=api_key, snapshot=snapshot)
-            else:
-                raw_text = self._call_anthropic(model=model, api_key=api_key, snapshot=snapshot)
+            raw_text = self._call_openai(model=model, api_key=api_key, snapshot=snapshot)
         except Exception as exc:
             logger.warning("⚠️ Falha na IA consultiva (%s): %s", provider, exc)
             return ProviderReview(
@@ -685,38 +625,6 @@ class ConsultiveEngine:
                     content_parts.append(text_value.strip())
         return "\n".join(content_parts).strip()
 
-    def _call_anthropic(self, *, model: str, api_key: str, snapshot: Dict[str, Any]) -> str:
-        headers = {
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
-        }
-        user_prompt = json.dumps(snapshot, ensure_ascii=False, separators=(",", ":"))
-        payload = {
-            "model": model,
-            "max_tokens": 700,
-            "system": SYSTEM_PROMPT,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [{"type": "text", "text": user_prompt}],
-                }
-            ],
-        }
-        response = self.session.post(
-            "https://api.anthropic.com/v1/messages",
-            headers=headers,
-            json=payload,
-            timeout=max(1, int(getattr(self.config, "AI_CONSULTIVE_TIMEOUT_SECONDS", 8))),
-        )
-        response.raise_for_status()
-        data = response.json()
-        return "\n".join(
-            part.get("text", "").strip()
-            for part in data.get("content", [])
-            if part.get("type") == "text" and str(part.get("text", "")).strip()
-        ).strip()
-
     def _normalize_provider_payload(
         self,
         *,
@@ -797,60 +705,17 @@ class ConsultiveEngine:
                 error="nenhum provider retornou resposta válida",
             )
 
-        if len(valid_reviews) == 1:
-            chosen = valid_reviews[0]
-            final_decision = chosen.decision
-            final_confidence = chosen.confidence
-            final_timing = chosen.timing_score
-            final_risk = chosen.risk_grade
-            entry_window_min = chosen.entry_window_min
-            entry_window_max = chosen.entry_window_max
-            wait_seconds = chosen.wait_seconds
-            reasons = chosen.reasons
-            invalidators = chosen.invalidators
-            summary = chosen.telegram_summary
-        else:
-            primary, secondary = valid_reviews[0], valid_reviews[1]
-            decision_pair = {primary.decision, secondary.decision}
-            if len(decision_pair) == 1:
-                final_decision = primary.decision
-                summary = primary.telegram_summary or secondary.telegram_summary
-                final_confidence = round((primary.confidence + secondary.confidence) / 2)
-                final_timing = round((primary.timing_score + secondary.timing_score) / 2)
-            elif decision_pair == {"ENTER_NOW", "WAIT_PULLBACK"}:
-                final_decision = "WAIT_PULLBACK"
-                final_confidence = max(primary.confidence, secondary.confidence)
-                final_timing = min(primary.timing_score, secondary.timing_score)
-                summary = "GPT e Claude divergiram. Melhor aguardar pullback."
-            elif decision_pair == {"WAIT_PULLBACK", "REJECT"}:
-                final_decision = "REJECT"
-                final_confidence = max(primary.confidence, secondary.confidence)
-                final_timing = min(primary.timing_score, secondary.timing_score)
-                summary = "Há divergência entre os modelos e o cenário está fraco. Melhor rejeitar."
-            else:
-                final_decision = "WAIT_PULLBACK"
-                final_confidence = max(0, round((primary.confidence + secondary.confidence) / 2) - 10)
-                final_timing = min(primary.timing_score, secondary.timing_score)
-                summary = "Os modelos divergiram entre entrada e rejeição. Melhor aguardar."
-
-            final_risk = max(valid_reviews, key=lambda item: item.risk_grade).risk_grade
-            entry_window_min = next(
-                (item.entry_window_min for item in valid_reviews if item.entry_window_min is not None),
-                None,
-            )
-            entry_window_max = next(
-                (item.entry_window_max for item in valid_reviews if item.entry_window_max is not None),
-                None,
-            )
-            wait_seconds = max(item.wait_seconds for item in valid_reviews)
-            reasons = _dedupe_text_items(
-                [reason for item in valid_reviews for reason in item.reasons],
-                limit=4,
-            )
-            invalidators = _dedupe_text_items(
-                [item_text for item in valid_reviews for item_text in item.invalidators],
-                limit=3,
-            )
+        chosen = valid_reviews[0]
+        final_decision = chosen.decision
+        final_confidence = chosen.confidence
+        final_timing = chosen.timing_score
+        final_risk = chosen.risk_grade
+        entry_window_min = chosen.entry_window_min
+        entry_window_max = chosen.entry_window_max
+        wait_seconds = chosen.wait_seconds
+        reasons = chosen.reasons
+        invalidators = chosen.invalidators
+        summary = chosen.telegram_summary
 
         min_confidence = _clamp_int(
             getattr(self.config, "AI_CONSULTIVE_MIN_CONFIDENCE", 80),

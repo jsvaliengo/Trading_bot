@@ -6,18 +6,13 @@ from trading_bot.ai.consultive_engine import ConsultiveEngine, ConsultiveReview,
 def _make_config(**overrides):
     base = {
         "AI_CONSULTIVE_MODE": "consultive",
-        "AI_CONSULTIVE_PRIMARY_PROVIDER": "openai",
-        "AI_CONSULTIVE_SECONDARY_PROVIDER": "anthropic",
-        "AI_CONSULTIVE_PRIMARY_MODEL": "gpt-5-mini",
-        "AI_CONSULTIVE_SECONDARY_MODEL": "claude-sonnet-4-20250514",
+        "AI_CONSULTIVE_MODEL": "gpt-5-mini",
         "AI_CONSULTIVE_TIMEOUT_SECONDS": 8,
         "AI_CONSULTIVE_CACHE_SECONDS": 180,
         "AI_CONSULTIVE_MIN_CONFIDENCE": 80,
-        "AI_CONSULTIVE_SECOND_OPINION_THRESHOLD": 70,
         "AI_CONSULTIVE_NOTIFY_REJECTED": False,
         "AI_CONSULTIVE_TELEGRAM_ENABLED": True,
         "OPENAI_API_KEY": "openai-key",
-        "ANTHROPIC_API_KEY": "anthropic-key",
     }
     base.update(overrides)
     return SimpleNamespace(**base)
@@ -34,10 +29,9 @@ def _make_snapshot():
 
 
 def _provider_review(provider: str, decision: str, confidence: int) -> ProviderReview:
-    model = "gpt-5-mini" if provider == "openai" else "claude-sonnet-4-20250514"
     return ProviderReview(
         provider=provider,
-        model=model,
+        model="gpt-5-mini",
         status="ok",
         decision=decision,
         confidence=confidence,
@@ -62,21 +56,19 @@ def test_consultive_engine_skips_when_mode_is_off():
     assert review.should_notify is False
 
 
-def test_consultive_engine_requests_second_opinion_on_low_confidence(monkeypatch):
+def test_consultive_engine_uses_single_openai_provider(monkeypatch):
     engine = ConsultiveEngine(config_obj=_make_config())
     calls = []
 
-    def _fake_call(provider, snapshot):
-        calls.append(provider)
-        if provider == "openai":
-            return _provider_review(provider, "ENTER_NOW", 64)
-        return _provider_review(provider, "WAIT_PULLBACK", 84)
+    def _fake_call(snapshot):
+        calls.append(snapshot["symbol"])
+        return _provider_review("openai", "WAIT_PULLBACK", 64)
 
     monkeypatch.setattr(engine, "_call_provider", _fake_call)
 
     review = engine.evaluate_setup(_make_snapshot())
 
-    assert calls == ["openai", "anthropic"]
+    assert calls == ["ETHUSDT"]
     assert review.status == "ok"
     assert review.decision == "WAIT_PULLBACK"
     assert review.should_notify is True
@@ -90,9 +82,9 @@ def test_consultive_engine_reuses_cache_for_same_setup(monkeypatch):
     )
     calls = []
 
-    def _fake_call(provider, snapshot):
-        calls.append(provider)
-        return _provider_review(provider, "ENTER_NOW", 88)
+    def _fake_call(snapshot):
+        calls.append(snapshot["symbol"])
+        return _provider_review("openai", "ENTER_NOW", 88)
 
     monkeypatch.setattr(engine, "_call_provider", _fake_call)
 
@@ -102,7 +94,7 @@ def test_consultive_engine_reuses_cache_for_same_setup(monkeypatch):
     assert first.decision == "ENTER_NOW"
     assert second.from_cache is True
     assert second.should_notify is False
-    assert calls == ["openai"]
+    assert calls == ["ETHUSDT"]
 
 
 def test_consultive_review_compact_for_trade_is_serializable():
