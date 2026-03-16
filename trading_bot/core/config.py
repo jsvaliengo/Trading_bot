@@ -503,6 +503,8 @@ class TradingConfig:
         os.getenv("TRADING_BOT_AI_PRIMARY_MODEL", "gpt-5-mini"),
     ).strip() or "gpt-5-mini"
     AI_CONSULTIVE_TIMEOUT_SECONDS: int = _env_int("TRADING_BOT_AI_TIMEOUT_SECONDS", 8)
+    AI_CONSULTIVE_MAX_OUTPUT_TOKENS: int = _env_int("TRADING_BOT_AI_MAX_OUTPUT_TOKENS", 700)
+    AI_CONSULTIVE_REASONING_EFFORT: str = os.getenv("TRADING_BOT_AI_REASONING_EFFORT", "low").strip().lower() or "low"
     AI_CONSULTIVE_CACHE_SECONDS: int = _env_int("TRADING_BOT_AI_CACHE_SECONDS", 180)
     AI_CONSULTIVE_MIN_CONFIDENCE: int = _env_int("TRADING_BOT_AI_MIN_CONFIDENCE", 80)
     AI_CONSULTIVE_NOTIFY_REJECTED: bool = _env_bool("TRADING_BOT_AI_NOTIFY_REJECTED", False)
@@ -1078,6 +1080,12 @@ class TradingConfig:
 
         if self.AI_CONSULTIVE_TIMEOUT_SECONDS < 1 or self.AI_CONSULTIVE_TIMEOUT_SECONDS > 60:
             errors.append("⚠️  ALERTA: TRADING_BOT_AI_TIMEOUT_SECONDS deve estar entre 1 e 60!")
+
+        if self.AI_CONSULTIVE_MAX_OUTPUT_TOKENS < 50 or self.AI_CONSULTIVE_MAX_OUTPUT_TOKENS > 4000:
+            errors.append("⚠️  ALERTA: TRADING_BOT_AI_MAX_OUTPUT_TOKENS deve estar entre 50 e 4000!")
+
+        if self.AI_CONSULTIVE_REASONING_EFFORT not in {"minimal", "low", "medium", "high"}:
+            errors.append("⚠️  ALERTA: TRADING_BOT_AI_REASONING_EFFORT deve ser minimal, low, medium ou high!")
 
         if self.AI_CONSULTIVE_CACHE_SECONDS < 0 or self.AI_CONSULTIVE_CACHE_SECONDS > 3600:
             errors.append("⚠️  ALERTA: TRADING_BOT_AI_CACHE_SECONDS deve estar entre 0 e 3600!")
