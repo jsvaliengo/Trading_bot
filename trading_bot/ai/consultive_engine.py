@@ -35,9 +35,15 @@ Você é um revisor consultivo de setups de trading futures.
 
 Sua função:
 - avaliar apenas o setup recebido
+- fazer classificação operacional de timing e risco para um sistema automatizado já existente
 - ser conservador quando houver dúvida
 - jamais inventar indicadores ou contexto não presentes no payload
 - preferir WAIT_PULLBACK ou REJECT quando o timing estiver atrasado
+
+Contexto adicional:
+- isso não é aconselhamento financeiro personalizado ao usuário
+- não proponha mudanças de capital, alavancagem ou gerenciamento fora do payload
+- apenas classifique o setup recebido para fins internos de triagem operacional
 
 Responda SOMENTE um JSON válido com estas chaves:
 - decision: ENTER_NOW | WAIT_PULLBACK | REJECT
@@ -155,6 +161,14 @@ def _dedupe_text_items(values: Any, limit: int) -> List[str]:
         if len(normalized) >= limit:
             break
     return normalized
+
+
+def _serialize_for_log(value: Any, limit: int = 2000) -> str:
+    try:
+        text = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    except (TypeError, ValueError):
+        text = str(value)
+    return text[:limit]
 
 
 @dataclass
@@ -569,6 +583,8 @@ class ConsultiveEngine:
         provider = "openai"
         model = self._provider_model()
         api_key = self._provider_api_key()
+        request_payload = self._build_openai_request_payload(model=model, snapshot=snapshot)
+        request_preview = _serialize_for_log(request_payload)
         if not api_key:
             return ProviderReview(
                 provider=provider,
@@ -585,13 +601,13 @@ class ConsultiveEngine:
             )
 
         try:
-            parsed_payload, raw_text = self._call_openai(
-                model=model,
+            parsed_payload, raw_text, response_preview = self._call_openai(
                 api_key=api_key,
-                snapshot=snapshot,
+                payload=request_payload,
             )
         except Exception as exc:
             logger.warning("⚠️ Falha na IA consultiva (%s): %s", provider, exc)
+            logger.warning("⚠️ IA consultiva (%s) request: %s", provider, request_preview)
             return ProviderReview(
                 provider=provider,
                 model=model,
@@ -606,11 +622,44 @@ class ConsultiveEngine:
                 error=str(exc),
             )
 
+        refusal_reason = self._extract_refusal_reason(raw_text)
+        if refusal_reason:
+            logger.warning("⚠️ IA consultiva (%s) request: %s", provider, request_preview)
+            if response_preview:
+                logger.warning(
+                    "⚠️ IA consultiva (%s) response: %s",
+                    provider,
+                    response_preview[:2000],
+                )
+            return ProviderReview(
+                provider=provider,
+                model=model,
+                status="ok",
+                decision="REJECT",
+                confidence=0,
+                timing_score=0,
+                risk_grade="D",
+                entry_window_min=None,
+                entry_window_max=None,
+                wait_seconds=0,
+                reasons=["modelo recusou avaliar o setup"],
+                invalidators=[refusal_reason[:160]],
+                telegram_summary="A IA recusou avaliar este setup e marcou como rejeitado.",
+                raw_text=raw_text[:1000],
+            )
+
         if not isinstance(parsed_payload, dict):
             snippet = " ".join(str(raw_text or "").split())[:180]
             error = "resposta estruturada inválida"
             if snippet:
                 error = f"{error}: {snippet}"
+            logger.warning("⚠️ IA consultiva (%s) request: %s", provider, request_preview)
+            if response_preview:
+                logger.warning(
+                    "⚠️ IA consultiva (%s) response: %s",
+                    provider,
+                    response_preview[:2000],
+                )
             return ProviderReview(
                 provider=provider,
                 model=model,
@@ -634,13 +683,9 @@ class ConsultiveEngine:
         )
         return normalized
 
-    def _call_openai(self, *, model: str, api_key: str, snapshot: Dict[str, Any]) -> tuple[Optional[Dict[str, Any]], str]:
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
+    def _build_openai_request_payload(self, *, model: str, snapshot: Dict[str, Any]) -> Dict[str, Any]:
         user_prompt = json.dumps(snapshot, ensure_ascii=False, separators=(",", ":"))
-        payload = {
+        return {
             "model": model,
             "max_output_tokens": 260,
             "text": {
@@ -663,6 +708,12 @@ class ConsultiveEngine:
                 },
             ],
         }
+
+    def _call_openai(self, *, api_key: str, payload: Dict[str, Any]) -> tuple[Optional[Dict[str, Any]], str, str]:
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
         response = self.session.post(
             "https://api.openai.com/v1/responses",
             headers=headers,
@@ -671,19 +722,20 @@ class ConsultiveEngine:
         )
         response.raise_for_status()
         data = response.json()
+        response_preview = _serialize_for_log(data)
         output_text = self._extract_openai_output_text(data)
         if not output_text:
-            return None, ""
+            return None, "", response_preview
 
         try:
             parsed = json.loads(output_text)
         except json.JSONDecodeError:
-            return None, output_text
+            return None, output_text, response_preview
 
         if not isinstance(parsed, dict):
-            return None, output_text
+            return None, output_text, response_preview
 
-        return parsed, output_text
+        return parsed, output_text, response_preview
 
     def _extract_openai_output_text(self, data: Dict[str, Any]) -> str:
         output_text = str(data.get("output_text", "") or "").strip()
@@ -698,7 +750,32 @@ class ConsultiveEngine:
                 text_value = content_item.get("text", "")
                 if isinstance(text_value, str) and text_value.strip():
                     content_parts.append(text_value.strip())
-        return "\n".join(content_parts).strip()
+                    continue
+
+                refusal_value = content_item.get("refusal", "")
+                if isinstance(refusal_value, str) and refusal_value.strip():
+                    content_parts.append(f"refusal: {refusal_value.strip()}")
+                    continue
+
+                if content_item:
+                    try:
+                        content_parts.append(json.dumps(content_item, ensure_ascii=False, separators=(",", ":"))[:1000])
+                    except (TypeError, ValueError):
+                        content_parts.append(str(content_item)[:1000])
+        if content_parts:
+            return "\n".join(content_parts).strip()
+
+        try:
+            return json.dumps(data, ensure_ascii=False, separators=(",", ":"))[:1000]
+        except (TypeError, ValueError):
+            return str(data)[:1000]
+
+    def _extract_refusal_reason(self, raw_text: str) -> str:
+        text = str(raw_text or "").strip()
+        prefix = "refusal:"
+        if text.lower().startswith(prefix):
+            return text[len(prefix):].strip()
+        return ""
 
     def _normalize_provider_payload(
         self,

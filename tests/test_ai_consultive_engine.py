@@ -167,7 +167,7 @@ def test_consultive_engine_requests_openai_with_strict_json_schema():
     assert request_payload["text"]["format"]["schema"] == OPENAI_CONSULTIVE_SCHEMA
 
 
-def test_consultive_engine_returns_provider_error_when_structured_response_is_invalid():
+def test_consultive_engine_returns_provider_error_when_structured_response_is_invalid(caplog):
     session = _FakeSession({"output_text": "nao eh json"})
     engine = ConsultiveEngine(config_obj=_make_config(), session=session)
 
@@ -178,6 +178,40 @@ def test_consultive_engine_returns_provider_error_when_structured_response_is_in
     assert "openai: resposta estruturada inválida" in review.error
     assert review.providers[0].status == "error"
     assert "resposta estruturada inválida" in review.providers[0].error
+    assert review.providers[0].raw_text == "nao eh json"
+    assert 'IA consultiva (openai) request:' in caplog.text
+    assert 'IA consultiva (openai) response:' in caplog.text
+
+
+def test_consultive_engine_treats_refusal_as_consultive_reject(caplog):
+    session = _FakeSession(
+        {
+            "output": [
+                {
+                    "type": "message",
+                    "content": [
+                        {
+                            "type": "refusal",
+                            "refusal": "Nao posso ajudar com isso do jeito solicitado.",
+                        }
+                    ],
+                }
+            ]
+        }
+    )
+    engine = ConsultiveEngine(config_obj=_make_config(), session=session)
+
+    review = engine.evaluate_setup(_make_snapshot())
+
+    assert review.status == "ok"
+    assert review.decision == "REJECT"
+    assert review.risk_grade == "D"
+    assert review.reasons == ["modelo recusou avaliar o setup"]
+    assert review.invalidators == ["Nao posso ajudar com isso do jeito solicitado."]
+    assert review.telegram_summary == "A IA recusou avaliar este setup e marcou como rejeitado."
+    assert "refusal: Nao posso ajudar com isso do jeito solicitado." in review.providers[0].raw_text
+    assert 'IA consultiva (openai) request:' in caplog.text
+    assert 'IA consultiva (openai) response:' in caplog.text
 
 
 def test_consultive_review_compact_for_trade_is_serializable():
