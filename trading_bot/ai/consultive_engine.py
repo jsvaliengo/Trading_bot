@@ -29,6 +29,39 @@ logger = logging.getLogger(__name__)
 BRT = timezone(timedelta(hours=-3))
 VALID_DECISIONS = {"ENTER_NOW", "WAIT_PULLBACK", "REJECT"}
 VALID_RISK_GRADES = {"A", "B", "C", "D"}
+DECISION_LABELS = {
+    "ENTER_NOW": "Entrar agora",
+    "WAIT_PULLBACK": "Aguardar correção",
+    "REJECT": "Rejeitar",
+}
+SIGNAL_LABELS = {
+    "STRONG_BUY": "Compra forte",
+    "BUY": "Compra",
+    "STRONG_SELL": "Venda forte",
+    "SELL": "Venda",
+    "NEUTRAL": "Neutro",
+}
+STRATEGY_LABELS = {
+    "trend_strong": "Tendência forte",
+    "range_scalping": "Scalping em faixa",
+    "primary": "Principal",
+}
+RISK_LABELS = {
+    "A": "Baixo",
+    "B": "Moderado",
+    "C": "Alto",
+    "D": "Muito alto",
+}
+TEXT_ITEM_LABELS = {
+    "low_volume": "Volume fraco",
+    "volume_ratio_below_1": "Volume abaixo da média",
+    "insufficient_momentum": "Momentum fraco",
+    "overextended_price": "Preço esticado",
+    "trend_conflict": "Tendência sem confirmação",
+    "late_entry": "Entrada atrasada",
+    "weak_trend": "Tendência fraca",
+    "weak_confirmation": "Confirmação fraca",
+}
 
 SYSTEM_PROMPT = """
 Você revisa setups de trading futures para triagem operacional interna.
@@ -36,6 +69,10 @@ Avalie somente o payload recebido.
 Se houver dúvida, atraso ou inconsistência, prefira WAIT_PULLBACK ou REJECT.
 Não invente indicadores, contexto, capital ou gestão fora do payload.
 Isso não é aconselhamento financeiro personalizado.
+Todos os campos textuais devem estar em português do Brasil.
+Seja claro, objetivo e curto.
+Use frases simples.
+Em reasons e invalidators, use linguagem humana. Não use snake_case, siglas soltas nem inglês desnecessário.
 Retorne somente um JSON válido com:
 decision, confidence, timing_score, risk_grade, entry_window_min, entry_window_max, wait_seconds, reasons, invalidators, telegram_summary.
 Sem markdown. Sem texto fora do JSON.
@@ -146,6 +183,76 @@ def _serialize_for_log(value: Any, limit: int = 2000) -> str:
     except (TypeError, ValueError):
         text = str(value)
     return text[:limit]
+
+
+def _translate_strategy_name(name: str) -> str:
+    token = str(name or "").strip()
+    return STRATEGY_LABELS.get(token, token.replace("_", " ").strip().title() or "Estratégia")
+
+
+def _translate_signal_name(signal: str) -> str:
+    token = str(signal or "").strip().upper()
+    return SIGNAL_LABELS.get(token, token.replace("_", " ").strip().title() or "Sinal")
+
+
+def _translate_risk_grade(grade: str) -> str:
+    token = str(grade or "").strip().upper()
+    label = RISK_LABELS.get(token, "Indefinido")
+    return f"{label} ({token})" if token else label
+
+
+def _humanize_wait_seconds(seconds: int) -> str:
+    total = max(0, int(seconds or 0))
+    if total == 0:
+        return "0s"
+    minutes, secs = divmod(total, 60)
+    hours, minutes = divmod(minutes, 60)
+    parts: List[str] = []
+    if hours:
+        parts.append(f"{hours}h")
+    if minutes:
+        parts.append(f"{minutes} min")
+    if secs and not hours:
+        parts.append(f"{secs}s")
+    return " ".join(parts) if parts else "0s"
+
+
+def _humanize_text_item(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    key = raw.lower()
+    if key in TEXT_ITEM_LABELS:
+        return TEXT_ITEM_LABELS[key]
+    if "_" in raw and raw.replace("_", "").isalnum():
+        words = raw.replace("_", " ").strip()
+        return words[:1].upper() + words[1:]
+    return raw
+
+
+def _humanize_summary(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    replacements = {
+        "WAIT:": "Aguardar:",
+        "REJECT:": "Rejeitar:",
+        "ENTER:": "Entrar:",
+        "Trend ": "Tendência ",
+        "bullish": "altista",
+        "bearish": "baixista",
+        " but ": " mas ",
+        " and ": " e ",
+        "pullback": "correção",
+        "volume weak": "volume fraco",
+        "momentum limited": "momentum limitado",
+        "stronger confirmation": "confirmação mais forte",
+        " is preferable ": " é preferível ",
+        "before entering": "antes de entrar",
+    }
+    for source, target in replacements.items():
+        text = text.replace(source, target)
+    return text
 
 
 @dataclass
@@ -461,36 +568,28 @@ class ConsultiveEngine:
         return final_review
 
     def build_telegram_message(self, review: ConsultiveReview) -> str:
-        side_label = "LONG" if review.side == "LONG" else "SHORT"
-        decision_labels = {
-            "ENTER_NOW": "ENTRAR AGORA",
-            "WAIT_PULLBACK": "AGUARDAR PULLBACK",
-            "REJECT": "REJEITAR",
-        }
-        decision_text = decision_labels.get(review.decision, review.decision)
-        provider_names = ", ".join(
-            f"{provider.provider}:{provider.model}"
-            for provider in review.providers
-            if provider.status == "ok"
-        ) or "sem provider válido"
+        decision_text = DECISION_LABELS.get(review.decision, review.decision)
+        signal_text = _translate_signal_name(review.signal)
+        strategy_text = _translate_strategy_name(review.strategy_name)
+        risk_text = _translate_risk_grade(review.risk_grade)
 
         entry_window = ""
         if review.entry_window_min is not None and review.entry_window_max is not None:
             entry_window = (
-                f"\n🎯 <b>Janela:</b> "
+                f"\n🎯 <b>Faixa ideal:</b> "
                 f"{review.entry_window_min:.6f} - {review.entry_window_max:.6f}"
             )
 
         wait_line = ""
         if review.wait_seconds > 0:
-            wait_line = f"\n⏳ <b>Esperar:</b> {int(review.wait_seconds)}s"
+            wait_line = f"\n⏳ <b>Esperar:</b> {_humanize_wait_seconds(review.wait_seconds)}"
 
         reasons = "\n".join(
-            f"   • {html.escape(reason)}" for reason in review.reasons[:4]
+            f"   • {html.escape(_humanize_text_item(reason))}" for reason in review.reasons[:4]
         ) or "   • sem observações"
         invalidators = "\n".join(
-            f"   • {html.escape(item)}" for item in review.invalidators[:3]
-        ) or "   • sem invalidação explícita"
+            f"   • {html.escape(_humanize_text_item(item))}" for item in review.invalidators[:3]
+        ) or "   • sem ponto de atenção"
 
         timestamp = datetime.now(BRT).strftime("%H:%M:%S")
         return f"""
@@ -498,22 +597,21 @@ class ConsultiveEngine:
 ━━━━━━━━━━━━━━━━━━━━━
 
 📍 <b>Par:</b> {html.escape(review.symbol.replace("USDT", ""))}/USDT
-🤖 <b>Estratégia:</b> {html.escape(review.strategy_name)}
-📊 <b>Base:</b> {html.escape(review.signal)} → {side_label}
-🧠 <b>Decisão:</b> {decision_text}
+🤖 <b>Estratégia:</b> {html.escape(strategy_text)}
+📊 <b>Sinal:</b> {html.escape(signal_text)}
+🧠 <b>Ação sugerida:</b> {html.escape(decision_text)}
 📈 <b>Confiança:</b> {review.confidence}/100
-⚠️ <b>Risco:</b> {review.risk_grade}
-🕒 <b>Timing:</b> {review.timing_score}/10{entry_window}{wait_line}
+⚠️ <b>Risco:</b> {html.escape(risk_text)}
+🕒 <b>Momento:</b> {review.timing_score}/10{entry_window}{wait_line}
 
-📝 <b>Resumo:</b> {html.escape(review.telegram_summary)}
+📝 <b>Resumo:</b> {html.escape(_humanize_summary(review.telegram_summary))}
 
-<b>✅ Motivos:</b>
+<b>✅ Por que:</b>
 {reasons}
 
-<b>🧱 Invalidação:</b>
+<b>⚠️ Pontos de atenção:</b>
 {invalidators}
 
-🔌 <b>Providers:</b> {html.escape(provider_names)}
 <i>Modo consultivo: não bloqueia a execução automática.</i>
 ━━━━━━━━━━━━━━━━━━━━━
 """.strip()

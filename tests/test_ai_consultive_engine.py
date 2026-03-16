@@ -244,3 +244,48 @@ def test_consultive_review_compact_for_trade_is_serializable():
     assert payload["decision"] == "ENTER_NOW"
     assert payload["confidence"] == 88
     assert payload["providers"] == ["openai"]
+
+
+def test_build_telegram_message_is_clear_and_translated():
+    engine = ConsultiveEngine(config_obj=_make_config())
+    review = ConsultiveReview(
+        status="ok",
+        decision="WAIT_PULLBACK",
+        approval=False,
+        confidence=60,
+        timing_score=5,
+        risk_grade="B",
+        entry_window_min=1.2345,
+        entry_window_max=1.236,
+        wait_seconds=180,
+        reasons=[
+            "Volume abaixo da média reduz a força da entrada.",
+            "low_volume",
+        ],
+        invalidators=[
+            "volume_ratio_below_1",
+            "insufficient_momentum",
+        ],
+        telegram_summary="WAIT: Trend bullish but volume weak and pullback is preferable before entering.",
+        providers=[_provider_review("openai", "WAIT_PULLBACK", 60)],
+        symbol="XRPUSDT",
+        strategy_name="trend_strong",
+        signal="STRONG_BUY",
+        side="LONG",
+        mode="consultive",
+    )
+
+    message = engine.build_telegram_message(review)
+
+    assert "Estratégia:</b> Tendência forte" in message
+    assert "Sinal:</b> Compra forte" in message
+    assert "Ação sugerida:</b> Aguardar correção" in message
+    assert "Risco:</b> Moderado (B)" in message
+    assert "Momento:</b> 5/10" in message
+    assert "Esperar:</b> 3 min" in message
+    assert "Por que:</b>" in message
+    assert "Pontos de atenção:</b>" in message
+    assert "Volume abaixo da média" in message
+    assert "Momentum fraco" in message
+    assert "Aguardar: Tendência altista mas volume fraco e correção é preferível antes de entrar." in message
+    assert "Providers:" not in message
