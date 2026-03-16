@@ -31,37 +31,14 @@ VALID_DECISIONS = {"ENTER_NOW", "WAIT_PULLBACK", "REJECT"}
 VALID_RISK_GRADES = {"A", "B", "C", "D"}
 
 SYSTEM_PROMPT = """
-Você é um revisor consultivo de setups de trading futures.
-
-Sua função:
-- avaliar apenas o setup recebido
-- fazer classificação operacional de timing e risco para um sistema automatizado já existente
-- ser conservador quando houver dúvida
-- jamais inventar indicadores ou contexto não presentes no payload
-- preferir WAIT_PULLBACK ou REJECT quando o timing estiver atrasado
-
-Contexto adicional:
-- isso não é aconselhamento financeiro personalizado ao usuário
-- não proponha mudanças de capital, alavancagem ou gerenciamento fora do payload
-- apenas classifique o setup recebido para fins internos de triagem operacional
-
-Responda SOMENTE um JSON válido com estas chaves:
-- decision: ENTER_NOW | WAIT_PULLBACK | REJECT
-- confidence: inteiro de 0 a 100
-- timing_score: inteiro de 0 a 10
-- risk_grade: A | B | C | D
-- entry_window_min: número ou null
-- entry_window_max: número ou null
-- wait_seconds: inteiro >= 0
-- reasons: lista de 1 a 4 strings curtas
-- invalidators: lista de 1 a 3 strings curtas
-- telegram_summary: string curta em português
-
-Regras:
-- se o setup estiver inconsistente, atrasado ou fraco, não aprove
-- se faltarem dados suficientes, use REJECT
-- não use markdown
-- não use texto fora do JSON
+Você revisa setups de trading futures para triagem operacional interna.
+Avalie somente o payload recebido.
+Se houver dúvida, atraso ou inconsistência, prefira WAIT_PULLBACK ou REJECT.
+Não invente indicadores, contexto, capital ou gestão fora do payload.
+Isso não é aconselhamento financeiro personalizado.
+Retorne somente um JSON válido com:
+decision, confidence, timing_score, risk_grade, entry_window_min, entry_window_max, wait_seconds, reasons, invalidators, telegram_summary.
+Sem markdown. Sem texto fora do JSON.
 """.strip()
 
 OPENAI_CONSULTIVE_SCHEMA: Dict[str, Any] = {
@@ -292,6 +269,12 @@ class ConsultiveEngine:
     def is_enabled(self) -> bool:
         return str(getattr(self.config, "AI_CONSULTIVE_MODE", "off")).strip().lower() == "consultive"
 
+    def _reasoning_effort(self) -> str:
+        raw = str(getattr(self.config, "AI_CONSULTIVE_REASONING_EFFORT", "low") or "low").strip().lower()
+        if raw not in {"minimal", "low", "medium", "high"}:
+            return "low"
+        return raw
+
     def build_market_snapshot(
         self,
         *,
@@ -348,12 +331,8 @@ class ConsultiveEngine:
 
         confirmation_bias = self._build_trend_bias(confirmation_klines or [])
         execution_bias = self._build_trend_bias(klines)
-        same_symbol_positions = [
-            {
-                "side": str(pos.get("side", "")).upper(),
-                "quantity": float(pos.get("quantity", 0) or 0),
-                "entry_price": float(pos.get("entry_price", 0) or 0),
-            }
+        same_symbol_sides = [
+            str(pos.get("side", "")).upper()
             for pos in open_positions
             if str(pos.get("symbol", "")).upper() == str(symbol or "").upper()
         ]
@@ -370,13 +349,9 @@ class ConsultiveEngine:
             "confirmation_timeframe": str(confirmation_timeframe or ""),
             "current_price": round(current_price, 8),
             "entry_price": round(float(getattr(setup, "entry_price", current_price) or current_price), 8),
-            "stop_loss": round(stop_loss, 8),
-            "take_profit": round(take_profit, 8),
             "stop_distance_percent": round(max(0.0, stop_distance_percent), 6),
             "take_distance_percent": round(max(0.0, take_distance_percent), 6),
             "risk_reward": round(max(0.0, risk_reward), 6),
-            "available_balance": round(float(available_balance or 0.0), 4),
-            "min_notional": round(float(min_notional or 0.0), 4),
             "ema_9": round(ema9, 8),
             "ema_21": round(ema21, 8),
             "ema_200": round(ema200, 8),
@@ -384,15 +359,20 @@ class ConsultiveEngine:
             "rsi_14": round(rsi14, 4),
             "atr_percent": round(max(0.0, atr_percent), 6),
             "volume_ratio": round(max(0.0, volume_ratio), 6),
-            "volume_current": round(current_volume, 4),
-            "volume_avg_20": round(avg_volume, 4),
-            "execution_bias": execution_bias,
-            "confirmation_bias": confirmation_bias,
-            "same_symbol_positions": same_symbol_positions,
+            "execution_direction": execution_bias.get("direction", "NEUTRAL"),
+            "confirmation_direction": confirmation_bias.get("direction", "NEUTRAL"),
             "open_positions_count": len(open_positions),
-            "position_size_usdt": round(float(getattr(setup, "long_size", 0.0) if side == "LONG" else getattr(setup, "short_size", 0.0) or 0.0), 8),
-            "sentiment": sentiment_snapshot or {},
+            "same_symbol_position_count": len(same_symbol_sides),
+            "same_symbol_has_long": "LONG" in same_symbol_sides,
+            "same_symbol_has_short": "SHORT" in same_symbol_sides,
         }
+
+        if available_balance:
+            snapshot["available_balance"] = round(float(available_balance or 0.0), 4)
+        if min_notional:
+            snapshot["min_notional"] = round(float(min_notional or 0.0), 4)
+        if sentiment_snapshot:
+            snapshot["sentiment"] = sentiment_snapshot
 
         if metadata:
             range_fields = {
@@ -687,7 +667,10 @@ class ConsultiveEngine:
         user_prompt = json.dumps(snapshot, ensure_ascii=False, separators=(",", ":"))
         return {
             "model": model,
-            "max_output_tokens": 260,
+            "max_output_tokens": max(200, int(getattr(self.config, "AI_CONSULTIVE_MAX_OUTPUT_TOKENS", 700))),
+            "reasoning": {
+                "effort": self._reasoning_effort(),
+            },
             "text": {
                 "verbosity": "low",
                 "format": {

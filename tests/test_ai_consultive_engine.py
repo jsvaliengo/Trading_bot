@@ -14,6 +14,8 @@ def _make_config(**overrides):
         "AI_CONSULTIVE_MODE": "consultive",
         "AI_CONSULTIVE_MODEL": "gpt-5-mini",
         "AI_CONSULTIVE_TIMEOUT_SECONDS": 8,
+        "AI_CONSULTIVE_MAX_OUTPUT_TOKENS": 700,
+        "AI_CONSULTIVE_REASONING_EFFORT": "low",
         "AI_CONSULTIVE_CACHE_SECONDS": 180,
         "AI_CONSULTIVE_MIN_CONFIDENCE": 80,
         "AI_CONSULTIVE_NOTIFY_REJECTED": False,
@@ -159,7 +161,8 @@ def test_consultive_engine_requests_openai_with_strict_json_schema():
     assert len(session.calls) == 1
     request_payload = session.calls[0]["json"]
     assert request_payload["model"] == "gpt-5-mini"
-    assert request_payload["max_output_tokens"] == 260
+    assert request_payload["max_output_tokens"] == 700
+    assert request_payload["reasoning"]["effort"] == "low"
     assert request_payload["text"]["verbosity"] == "low"
     assert request_payload["text"]["format"]["type"] == "json_schema"
     assert request_payload["text"]["format"]["name"] == "consultive_review"
