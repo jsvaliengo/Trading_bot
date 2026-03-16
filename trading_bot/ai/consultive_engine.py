@@ -58,6 +58,71 @@ Regras:
 - não use texto fora do JSON
 """.strip()
 
+OPENAI_CONSULTIVE_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "decision": {
+            "type": "string",
+            "enum": sorted(VALID_DECISIONS),
+        },
+        "confidence": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100,
+        },
+        "timing_score": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10,
+        },
+        "risk_grade": {
+            "type": "string",
+            "enum": sorted(VALID_RISK_GRADES),
+        },
+        "entry_window_min": {
+            "type": ["number", "null"],
+        },
+        "entry_window_max": {
+            "type": ["number", "null"],
+        },
+        "wait_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 86400,
+        },
+        "reasons": {
+            "type": "array",
+            "items": {"type": "string"},
+            "minItems": 1,
+            "maxItems": 4,
+        },
+        "invalidators": {
+            "type": "array",
+            "items": {"type": "string"},
+            "minItems": 1,
+            "maxItems": 3,
+        },
+        "telegram_summary": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 220,
+        },
+    },
+    "required": [
+        "decision",
+        "confidence",
+        "timing_score",
+        "risk_grade",
+        "entry_window_min",
+        "entry_window_max",
+        "wait_seconds",
+        "reasons",
+        "invalidators",
+        "telegram_summary",
+    ],
+}
+
 
 def _clamp_int(value: Any, low: int, high: int, default: int) -> int:
     try:
@@ -90,27 +155,6 @@ def _dedupe_text_items(values: Any, limit: int) -> List[str]:
         if len(normalized) >= limit:
             break
     return normalized
-
-
-def _extract_json_object(text: str) -> Optional[Dict[str, Any]]:
-    raw = str(text or "").strip()
-    if not raw:
-        return None
-
-    if raw.startswith("```"):
-        raw = raw.strip("`").strip()
-        if raw.lower().startswith("json"):
-            raw = raw[4:].strip()
-
-    start = raw.find("{")
-    end = raw.rfind("}")
-    if start < 0 or end <= start:
-        return None
-
-    try:
-        return json.loads(raw[start:end + 1])
-    except json.JSONDecodeError:
-        return None
 
 
 @dataclass
@@ -541,7 +585,11 @@ class ConsultiveEngine:
             )
 
         try:
-            raw_text = self._call_openai(model=model, api_key=api_key, snapshot=snapshot)
+            parsed_payload, raw_text = self._call_openai(
+                model=model,
+                api_key=api_key,
+                snapshot=snapshot,
+            )
         except Exception as exc:
             logger.warning("⚠️ Falha na IA consultiva (%s): %s", provider, exc)
             return ProviderReview(
@@ -558,8 +606,11 @@ class ConsultiveEngine:
                 error=str(exc),
             )
 
-        parsed = _extract_json_object(raw_text)
-        if not isinstance(parsed, dict):
+        if not isinstance(parsed_payload, dict):
+            snippet = " ".join(str(raw_text or "").split())[:180]
+            error = "resposta estruturada inválida"
+            if snippet:
+                error = f"{error}: {snippet}"
             return ProviderReview(
                 provider=provider,
                 model=model,
@@ -572,18 +623,18 @@ class ConsultiveEngine:
                 entry_window_max=None,
                 wait_seconds=0,
                 raw_text=raw_text[:1000],
-                error="resposta não retornou JSON válido",
+                error=error,
             )
 
         normalized = self._normalize_provider_payload(
             provider=provider,
             model=model,
-            payload=parsed,
+            payload=parsed_payload,
             raw_text=raw_text,
         )
         return normalized
 
-    def _call_openai(self, *, model: str, api_key: str, snapshot: Dict[str, Any]) -> str:
+    def _call_openai(self, *, model: str, api_key: str, snapshot: Dict[str, Any]) -> tuple[Optional[Dict[str, Any]], str]:
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
@@ -591,7 +642,16 @@ class ConsultiveEngine:
         user_prompt = json.dumps(snapshot, ensure_ascii=False, separators=(",", ":"))
         payload = {
             "model": model,
-            "max_output_tokens": 700,
+            "max_output_tokens": 260,
+            "text": {
+                "verbosity": "low",
+                "format": {
+                    "type": "json_schema",
+                    "name": "consultive_review",
+                    "strict": True,
+                    "schema": OPENAI_CONSULTIVE_SCHEMA,
+                },
+            },
             "input": [
                 {
                     "role": "system",
@@ -611,6 +671,21 @@ class ConsultiveEngine:
         )
         response.raise_for_status()
         data = response.json()
+        output_text = self._extract_openai_output_text(data)
+        if not output_text:
+            return None, ""
+
+        try:
+            parsed = json.loads(output_text)
+        except json.JSONDecodeError:
+            return None, output_text
+
+        if not isinstance(parsed, dict):
+            return None, output_text
+
+        return parsed, output_text
+
+    def _extract_openai_output_text(self, data: Dict[str, Any]) -> str:
         output_text = str(data.get("output_text", "") or "").strip()
         if output_text:
             return output_text
@@ -681,6 +756,10 @@ class ConsultiveEngine:
     ) -> ConsultiveReview:
         valid_reviews = [review for review in provider_reviews if review.status == "ok"]
         if not valid_reviews:
+            error_details = "; ".join(
+                f"{review.provider}: {review.error or 'resposta inválida'}"
+                for review in provider_reviews
+            ) or "nenhum provider retornou resposta válida"
             return ConsultiveReview(
                 status="error",
                 decision="SKIPPED",
@@ -702,7 +781,7 @@ class ConsultiveEngine:
                 signal=signal,
                 side=side,
                 mode=str(getattr(self.config, "AI_CONSULTIVE_MODE", "off")),
-                error="nenhum provider retornou resposta válida",
+                error=error_details,
             )
 
         chosen = valid_reviews[0]
