@@ -491,6 +491,26 @@ class TradingConfig:
     SENTIMENT_CACHE_SECONDS: int = _env_int("TRADING_BOT_SENTIMENT_CACHE_SECONDS", 300)
 
     # ============================================
+    # IA CONSULTIVA DE ENTRADA
+    # ============================================
+    # V1 consultiva:
+    # - analisa setups válidos
+    # - envia parecer para Telegram/log
+    # - não bloqueia execução automática
+    AI_CONSULTIVE_MODE: str = os.getenv("TRADING_BOT_AI_MODE", "off").strip().lower() or "off"
+    AI_CONSULTIVE_MODEL: str = os.getenv(
+        "TRADING_BOT_AI_MODEL",
+        os.getenv("TRADING_BOT_AI_PRIMARY_MODEL", "gpt-5-mini"),
+    ).strip() or "gpt-5-mini"
+    AI_CONSULTIVE_TIMEOUT_SECONDS: int = _env_int("TRADING_BOT_AI_TIMEOUT_SECONDS", 8)
+    AI_CONSULTIVE_CACHE_SECONDS: int = _env_int("TRADING_BOT_AI_CACHE_SECONDS", 180)
+    AI_CONSULTIVE_MIN_CONFIDENCE: int = _env_int("TRADING_BOT_AI_MIN_CONFIDENCE", 80)
+    AI_CONSULTIVE_NOTIFY_REJECTED: bool = _env_bool("TRADING_BOT_AI_NOTIFY_REJECTED", False)
+    AI_CONSULTIVE_TELEGRAM_ENABLED: bool = _env_bool("TRADING_BOT_AI_TELEGRAM_ENABLED", True)
+
+    OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "").strip()
+
+    # ============================================
     # RESILIÊNCIA DE API (retry/backoff)
     # ============================================
     # Número máximo de tentativas em chamadas elegíveis para retry
@@ -1052,6 +1072,22 @@ class TradingConfig:
 
         if self.SENTIMENT_CACHE_SECONDS < 5 or self.SENTIMENT_CACHE_SECONDS > 3600:
             errors.append("⚠️  ALERTA: SENTIMENT_CACHE_SECONDS deve estar entre 5 e 3600!")
+
+        if self.AI_CONSULTIVE_MODE not in {"off", "consultive"}:
+            errors.append("⚠️  ALERTA: TRADING_BOT_AI_MODE deve ser 'off' ou 'consultive'!")
+
+        if self.AI_CONSULTIVE_TIMEOUT_SECONDS < 1 or self.AI_CONSULTIVE_TIMEOUT_SECONDS > 60:
+            errors.append("⚠️  ALERTA: TRADING_BOT_AI_TIMEOUT_SECONDS deve estar entre 1 e 60!")
+
+        if self.AI_CONSULTIVE_CACHE_SECONDS < 0 or self.AI_CONSULTIVE_CACHE_SECONDS > 3600:
+            errors.append("⚠️  ALERTA: TRADING_BOT_AI_CACHE_SECONDS deve estar entre 0 e 3600!")
+
+        if self.AI_CONSULTIVE_MIN_CONFIDENCE < 0 or self.AI_CONSULTIVE_MIN_CONFIDENCE > 100:
+            errors.append("⚠️  ALERTA: TRADING_BOT_AI_MIN_CONFIDENCE deve estar entre 0 e 100!")
+
+        if self.AI_CONSULTIVE_MODE == "consultive":
+            if not self.OPENAI_API_KEY:
+                errors.append("⚠️  ALERTA: IA consultiva ativa, mas OPENAI_API_KEY não está configurada!")
 
         if self.DOUBLE_FIRST_SCOPE not in {"global", "symbol"}:
             errors.append("⚠️  ALERTA: DOUBLE_FIRST_SCOPE deve ser 'global' ou 'symbol'!")
