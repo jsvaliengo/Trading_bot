@@ -260,7 +260,9 @@ class TelegramCommandHandler:
         invalid = []
         seen_symbols = set()
         seen_invalid = set()
-        known_pairs = set(self._get_known_pair_symbols()) if validate_known and self.config is not None else set()
+        known_pairs: set[str] = (
+            set(self._get_known_pair_symbols()) if validate_known and self.config is not None else set()
+        )
         known_bases = sorted({self._base_symbol(symbol) for symbol in known_pairs})
 
         for arg in args:
@@ -988,6 +990,11 @@ class TelegramCommandHandler:
             active_pairs = list(getattr(self.config, "TRADING_PAIRS", []) or [])
             disabled_pairs = list(getattr(self.config, "DISABLED_PAIRS", []) or [])
             candidate_pairs = list(getattr(self.config, "BINANCE_COIN_LIST", []) or [])
+            pruned_notice = ""
+            if pruned_disabled:
+                pruned_notice = (
+                    f"🧹 <b>Removidos inválidos:</b> <code>{_display(pruned_disabled)}</code>\n\n"
+                )
             self.send_message(
                 f"🪙 <b>MOEDAS</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -997,7 +1004,7 @@ class TelegramCommandHandler:
                 f"{_display(disabled_pairs)}\n\n"
                 f"📚 <b>Lista permitida ({len(candidate_pairs)}):</b>\n"
                 f"{_display(candidate_pairs)}\n\n"
-                f"{('🧹 <b>Removidos inválidos:</b> <code>' + _display(pruned_disabled) + '</code>\\n\\n') if pruned_disabled else ''}"
+                f"{pruned_notice}"
                 f"Uso:\n"
                 f"• <code>/coins disable ETH SOL ADA</code>\n"
                 f"• <code>/coins enable ETH</code>\n"

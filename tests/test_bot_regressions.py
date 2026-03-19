@@ -3,7 +3,6 @@ from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from trading_bot.ai.consultive_engine import ConsultiveReview, ProviderReview
 from trading_bot.core.bot import TradingBot
 from trading_bot.core.config import config
 from trading_bot.core.strategy import HedgeStrategy, RangeScalpingStrategy, Signal, TradeSetup
@@ -668,7 +667,7 @@ def test_analyze_and_trade_passes_risk_profile_for_trend_strategy(monkeypatch):
     assert captured_kwargs.get("risk_profile") == risk_profile
 
 
-def test_analyze_and_trade_runs_ai_consultive_review_without_blocking_execution(monkeypatch):
+def test_analyze_and_trade_executes_without_ai_consultive_hook(monkeypatch):
     bot = _make_light_bot()
 
     monkeypatch.setattr(config, "USE_DAILY_TARGETS", False)
@@ -686,60 +685,6 @@ def test_analyze_and_trade_runs_ai_consultive_review_without_blocking_execution(
         dca_levels=[],
     )
 
-    class AIStub:
-        def is_enabled(self):
-            return True
-
-        def build_market_snapshot(self, **kwargs):
-            return {
-                "symbol": kwargs["symbol"],
-                "strategy_name": kwargs["strategy_name"],
-                "signal": kwargs["signal_name"],
-                "side": "LONG",
-            }
-
-        def evaluate_setup(self, _snapshot):
-            return ConsultiveReview(
-                status="ok",
-                decision="WAIT_PULLBACK",
-                approval=False,
-                confidence=74,
-                timing_score=7,
-                risk_grade="B",
-                entry_window_min=99.2,
-                entry_window_max=99.8,
-                wait_seconds=120,
-                reasons=["pullback mais limpo esperado"],
-                invalidators=["perda da EMA 21"],
-                telegram_summary="Melhor aguardar pullback.",
-                providers=[
-                    ProviderReview(
-                        provider="openai",
-                        model="gpt-5-mini",
-                        status="ok",
-                        decision="WAIT_PULLBACK",
-                        confidence=74,
-                        timing_score=7,
-                        risk_grade="B",
-                        entry_window_min=99.2,
-                        entry_window_max=99.8,
-                        wait_seconds=120,
-                        reasons=["pullback mais limpo esperado"],
-                        invalidators=["perda da EMA 21"],
-                        telegram_summary="Melhor aguardar pullback.",
-                    )
-                ],
-                symbol="ETHUSDT",
-                strategy_name="primary",
-                signal="STRONG_BUY",
-                side="LONG",
-                mode="consultive",
-                should_notify=True,
-            )
-
-        def build_telegram_message(self, _review):
-            return "ai-message"
-
     bot.exchange = SimpleNamespace(
         get_klines=lambda **_kwargs: [{"open": 99.0, "high": 101.0, "low": 98.5, "close": 100.0, "volume": 10.0}],
         get_available_balance=lambda: 1000.0,
@@ -749,18 +694,18 @@ def test_analyze_and_trade_runs_ai_consultive_review_without_blocking_execution(
     bot.strategy = SimpleNamespace(generate_trade_setup=lambda **_kwargs: setup)
     bot.risk_manager = SimpleNamespace(can_open_position=lambda _total: True)
     bot.sentiment_mode_enabled = False
-    bot.ai_consultive_engine = AIStub()
+    bot.ai_consultive_engine = MagicMock()
     bot.telegram = SimpleNamespace(send_message=MagicMock())
     bot.execute_signal_trade = MagicMock(return_value=True)
 
     result = bot.analyze_and_trade("ETHUSDT")
 
     assert result is True
-    bot.telegram.send_message.assert_called_once_with("ai-message")
+    bot.ai_consultive_engine.is_enabled.assert_not_called()
+    bot.telegram.send_message.assert_not_called()
     bot.execute_signal_trade.assert_called_once()
     executed_setup = bot.execute_signal_trade.call_args.kwargs["setup"]
-    assert executed_setup.metadata["ai_consultive"]["decision"] == "WAIT_PULLBACK"
-    assert executed_setup.metadata["ai_consultive"]["confidence"] == 74
+    assert not getattr(executed_setup, "metadata", {})
 
 
 def test_hedge_strategy_uses_balanced_risk_profile_with_rr_target():
