@@ -582,6 +582,31 @@ def test_coins_command_disable_enable_and_add_pairs():
     assert "MATICUSDT" in config.TRADING_PAIRS
 
 
+def test_coins_command_rejects_unknown_symbol_and_suggests_closest_pair():
+    handler = TelegramCommandHandler(token="token", chat_id="123")
+
+    config = SimpleNamespace(
+        TRADING_PAIRS=["HYPEUSDT", "XRPUSDT", "SOLUSDT"],
+        DISABLED_PAIRS=["HYPERUSDT"],
+        BINANCE_COIN_LIST=["HYPEUSDT", "XRPUSDT", "SOLUSDT"],
+        USE_BINANCE_STRATEGY=False,
+        AUTO_SELECT_PAIRS=False,
+    )
+    bot = SimpleNamespace(save_state=lambda: True)
+    handler.set_bot_reference(bot, config)
+
+    messages = []
+    handler.send_message = lambda text: messages.append(text) or True
+
+    handler.cmd_coins(["disable", "HYPER"])
+
+    assert config.DISABLED_PAIRS == []
+    assert config.TRADING_PAIRS == ["HYPEUSDT", "XRPUSDT", "SOLUSDT"]
+    assert messages
+    assert "HYPER" in messages[-1]
+    assert "HYPE" in messages[-1]
+
+
 def test_process_update_accepts_command_with_bot_mention_suffix():
     handler = TelegramCommandHandler(token="token", chat_id="123")
 

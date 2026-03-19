@@ -13,6 +13,7 @@ Autor: Trading Bot
 import logging
 import threading
 import time
+from difflib import get_close_matches
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List
 import requests
@@ -205,18 +206,100 @@ class TelegramCommandHandler:
             return token
         return f"{token}USDT"
 
-    def _parse_coin_symbols(self, args: List[str]) -> List[str]:
-        """Converte argumentos do comando em lista de símbolos normalizados."""
+    def _normalize_pair_list(self, pairs: List[str]) -> List[str]:
+        """Normaliza e deduplica lista de símbolos."""
+        if self.config is not None and hasattr(self.config, "normalize_pair_list"):
+            return self.config.normalize_pair_list(pairs)
+
         symbols = []
         seen = set()
+        for raw_symbol in pairs or []:
+            symbol = self._normalize_pair_symbol(raw_symbol)
+            if not symbol or symbol in seen:
+                continue
+            seen.add(symbol)
+            symbols.append(symbol)
+        return symbols
+
+    def _base_symbol(self, symbol: str) -> str:
+        """Retorna símbolo base sem sufixo USDT."""
+        normalized = self._normalize_pair_symbol(symbol)
+        return normalized[:-4] if normalized.endswith("USDT") else normalized
+
+    def _get_known_pair_symbols(self) -> List[str]:
+        """Retorna universo conhecido de pares válidos para comandos Telegram."""
+        sources = []
+        for attr_name in ("BINANCE_COIN_LIST", "TRADING_PAIRS", "FIXED_PAIRS"):
+            sources.extend(list(getattr(self.config, attr_name, []) or []))
+
+        for profile in list(getattr(self.config, "STRATEGY_PROFILES", []) or []):
+            if isinstance(profile, dict):
+                sources.extend(list(profile.get("pairs", []) or []))
+
+        return self._normalize_pair_list(sources)
+
+    def _prune_unknown_disabled_pairs(self) -> List[str]:
+        """Remove pares desabilitados inválidos deixados por versões antigas do comando."""
+        if self.config is None:
+            return []
+
+        valid_pairs = set(self._get_known_pair_symbols())
+        if not valid_pairs:
+            return []
+
+        current_disabled = self._normalize_pair_list(list(getattr(self.config, "DISABLED_PAIRS", []) or []))
+        kept = [symbol for symbol in current_disabled if symbol in valid_pairs]
+        removed = [symbol for symbol in current_disabled if symbol not in valid_pairs]
+        if removed:
+            self.config.DISABLED_PAIRS = kept
+        return removed
+
+    def _parse_coin_symbols(self, args: List[str], *, validate_known: bool = False) -> tuple[list[str], list[dict[str, Any]]]:
+        """Converte argumentos do comando em lista de símbolos normalizados."""
+        symbols = []
+        invalid = []
+        seen_symbols = set()
+        seen_invalid = set()
+        known_pairs = set(self._get_known_pair_symbols()) if validate_known and self.config is not None else set()
+        known_bases = sorted({self._base_symbol(symbol) for symbol in known_pairs})
+
         for arg in args:
             for raw_token in str(arg).replace(",", " ").split():
+                token = self._base_symbol(raw_token)
                 symbol = self._normalize_pair_symbol(raw_token)
-                if not symbol or symbol in seen:
+                if not symbol:
                     continue
-                seen.add(symbol)
+                if validate_known and symbol not in known_pairs:
+                    if token not in seen_invalid:
+                        seen_invalid.add(token)
+                        invalid.append(
+                            {
+                                "token": token,
+                                "suggestions": get_close_matches(token, known_bases, n=3, cutoff=0.6),
+                            }
+                        )
+                    continue
+                if symbol in seen_symbols:
+                    continue
+                seen_symbols.add(symbol)
                 symbols.append(symbol)
-        return symbols
+        return symbols, invalid
+
+    def _format_invalid_coin_symbols(self, invalid_symbols: List[dict[str, Any]]) -> str:
+        """Formata resposta de símbolos inválidos com sugestões."""
+        if not invalid_symbols:
+            return ""
+
+        lines = []
+        for item in invalid_symbols:
+            token = str(item.get("token", "") or "").upper()
+            suggestions = [str(s).upper() for s in (item.get("suggestions") or [])]
+            if suggestions:
+                lines.append(f"• <code>{token}</code> → talvez <code>{', '.join(suggestions)}</code>")
+            else:
+                lines.append(f"• <code>{token}</code>")
+
+        return "⚠️ <b>Símbolos não reconhecidos:</b>\n" + "\n".join(lines)
 
     def _refresh_pairs_after_coin_change(self, action: str) -> dict:
         """Recalcula pares ativos após alteração manual de moedas."""
@@ -894,6 +977,10 @@ class TelegramCommandHandler:
             self.send_message("❌ Config não disponível")
             return
 
+        pruned_disabled = self._prune_unknown_disabled_pairs()
+        if pruned_disabled:
+            self._persist_runtime_state()
+
         def _display(symbols: list) -> str:
             return ", ".join([s.replace("USDT", "") for s in symbols]) if symbols else "-"
 
@@ -910,6 +997,7 @@ class TelegramCommandHandler:
                 f"{_display(disabled_pairs)}\n\n"
                 f"📚 <b>Lista permitida ({len(candidate_pairs)}):</b>\n"
                 f"{_display(candidate_pairs)}\n\n"
+                f"{('🧹 <b>Removidos inválidos:</b> <code>' + _display(pruned_disabled) + '</code>\\n\\n') if pruned_disabled else ''}"
                 f"Uso:\n"
                 f"• <code>/coins disable ETH SOL ADA</code>\n"
                 f"• <code>/coins enable ETH</code>\n"
@@ -918,14 +1006,18 @@ class TelegramCommandHandler:
             return
 
         action = str(args[0]).strip().lower()
-        symbols = self._parse_coin_symbols(args[1:])
+        validate_known = action in {"disable", "off", "enable", "on"}
+        symbols, invalid_symbols = self._parse_coin_symbols(args[1:], validate_known=validate_known)
+        invalid_block = self._format_invalid_coin_symbols(invalid_symbols)
 
         if action in {"disable", "off"}:
             if not symbols:
+                detail = f"\n\n{invalid_block}" if invalid_block else ""
                 self.send_message(
                     "❌ Informe ao menos 1 moeda.\n\n"
                     "Exemplo:\n"
                     "<code>/coins disable ETH SOL ADA</code>"
+                    f"{detail}"
                 )
                 return
 
@@ -953,6 +1045,7 @@ class TelegramCommandHandler:
                 f"⛔ <b>PARES DESABILITADOS</b>\n\n"
                 f"✅ Novos: <code>{_display(added)}</code>\n"
                 f"ℹ️ Já estavam: <code>{_display(already)}</code>\n"
+                f"{invalid_block + chr(10) + chr(10) if invalid_block else ''}"
                 f"🧾 Ativos agora ({len(refresh_info.get('new_pairs', []))}):\n"
                 f"<code>{_display(refresh_info.get('new_pairs', []))}</code>"
             )
@@ -960,10 +1053,12 @@ class TelegramCommandHandler:
 
         if action in {"enable", "on"}:
             if not symbols:
+                detail = f"\n\n{invalid_block}" if invalid_block else ""
                 self.send_message(
                     "❌ Informe ao menos 1 moeda.\n\n"
                     "Exemplo:\n"
                     "<code>/coins enable ETH</code>"
+                    f"{detail}"
                 )
                 return
 
@@ -987,6 +1082,7 @@ class TelegramCommandHandler:
                 f"✅ <b>PARES HABILITADOS</b>\n\n"
                 f"✅ Reabilitados: <code>{_display(enabled_now)}</code>\n"
                 f"ℹ️ Já estavam habilitados: <code>{_display(not_disabled)}</code>\n"
+                f"{invalid_block + chr(10) + chr(10) if invalid_block else ''}"
                 f"🧾 Ativos agora ({len(refresh_info.get('new_pairs', []))}):\n"
                 f"<code>{_display(refresh_info.get('new_pairs', []))}</code>"
             )
