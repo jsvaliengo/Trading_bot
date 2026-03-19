@@ -2673,23 +2673,25 @@ class TradingBot:
             logger.info("⏸️  Limite de risco atingido")
             return False
 
-        self._maybe_run_ai_consultive_review(
-            symbol=symbol,
-            strategy_name=strategy_label,
-            strategy_type=strategy_type,
-            entry_mode=entry_mode,
-            signal_name=signal_name,
-            setup=setup,
-            klines=klines,
-            confirmation_klines=confirmation_klines,
-            execution_timeframe=execution_timeframe,
-            confirmation_timeframe=confirmation_timeframe,
-            available_balance=available_balance,
-            open_positions=open_positions,
-            should_open_long=should_open_long,
-            should_open_short=should_open_short,
-            min_notional=min_notional,
-        )
+        # IA consultiva temporariamente desativada no fluxo de entrada.
+        # Para reativar, restaurar a chamada abaixo.
+        # self._maybe_run_ai_consultive_review(
+        #     symbol=symbol,
+        #     strategy_name=strategy_label,
+        #     strategy_type=strategy_type,
+        #     entry_mode=entry_mode,
+        #     signal_name=signal_name,
+        #     setup=setup,
+        #     klines=klines,
+        #     confirmation_klines=confirmation_klines,
+        #     execution_timeframe=execution_timeframe,
+        #     confirmation_timeframe=confirmation_timeframe,
+        #     available_balance=available_balance,
+        #     open_positions=open_positions,
+        #     should_open_long=should_open_long,
+        #     should_open_short=should_open_short,
+        #     min_notional=min_notional,
+        # )
         
         # Executa o trade baseado no sinal
         return self.execute_signal_trade(
