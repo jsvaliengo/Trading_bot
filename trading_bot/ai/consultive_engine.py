@@ -621,11 +621,13 @@ class ConsultiveEngine:
 
         notify_rejected = bool(getattr(self.config, "AI_CONSULTIVE_NOTIFY_REJECTED", False))
         telegram_enabled = bool(getattr(self.config, "AI_CONSULTIVE_TELEGRAM_ENABLED", True))
+        gated_mode = str(getattr(self.config, "AI_CONSULTIVE_MODE", "off")).strip().lower() == "gated"
         final_review.should_notify = bool(
             telegram_enabled and
             final_review.status == "ok" and
             not final_review.from_cache and
-            (final_review.decision != "REJECT" or notify_rejected)
+            (final_review.decision != "REJECT" or notify_rejected) and
+            (not gated_mode or final_review.approval)
         )
 
         self._review_cache[cache_key] = {"ts": now_monotonic, "review": final_review}
