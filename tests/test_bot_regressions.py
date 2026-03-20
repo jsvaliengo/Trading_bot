@@ -667,12 +667,13 @@ def test_analyze_and_trade_passes_risk_profile_for_trend_strategy(monkeypatch):
     assert captured_kwargs.get("risk_profile") == risk_profile
 
 
-def test_analyze_and_trade_executes_without_ai_consultive_hook(monkeypatch):
+def test_analyze_and_trade_runs_ai_consultive_review_without_blocking_execution(monkeypatch):
     bot = _make_light_bot()
 
     monkeypatch.setattr(config, "USE_DAILY_TARGETS", False)
     monkeypatch.setattr(config, "TIMEFRAME", "5m")
     monkeypatch.setattr(config, "CANDLES_LOOKBACK", 50)
+    monkeypatch.setattr(config, "AI_CONSULTIVE_MODE", "consultive")
 
     setup = TradeSetup(
         symbol="ETHUSDT",
@@ -694,18 +695,209 @@ def test_analyze_and_trade_executes_without_ai_consultive_hook(monkeypatch):
     bot.strategy = SimpleNamespace(generate_trade_setup=lambda **_kwargs: setup)
     bot.risk_manager = SimpleNamespace(can_open_position=lambda _total: True)
     bot.sentiment_mode_enabled = False
-    bot.ai_consultive_engine = MagicMock()
+    class AIStub:
+        def is_enabled(self):
+            return True
+
+        def build_market_snapshot(self, **kwargs):
+            return {
+                "symbol": kwargs["symbol"],
+                "strategy_name": kwargs["strategy_name"],
+                "signal": kwargs["signal_name"],
+                "side": "LONG",
+            }
+
+        def evaluate_setup(self, _snapshot):
+            return SimpleNamespace(
+                status="ok",
+                decision="WAIT_PULLBACK",
+                approval=False,
+                confidence=74,
+                timing_score=7,
+                risk_grade="B",
+                entry_window_min=99.2,
+                entry_window_max=99.8,
+                wait_seconds=120,
+                reasons=["pullback mais limpo esperado"],
+                invalidators=["perda da EMA 21"],
+                telegram_summary="Melhor aguardar pullback.",
+                providers=[],
+                from_cache=False,
+                should_notify=True,
+                error="",
+                mode="consultive",
+                compact_for_trade=lambda: {
+                    "decision": "WAIT_PULLBACK",
+                    "approval": False,
+                    "confidence": 74,
+                },
+            )
+
+        def build_telegram_message(self, _review):
+            return "ai-message"
+
+    bot.ai_consultive_engine = AIStub()
     bot.telegram = SimpleNamespace(send_message=MagicMock())
     bot.execute_signal_trade = MagicMock(return_value=True)
 
     result = bot.analyze_and_trade("ETHUSDT")
 
     assert result is True
-    bot.ai_consultive_engine.is_enabled.assert_not_called()
-    bot.telegram.send_message.assert_not_called()
+    bot.telegram.send_message.assert_called_once_with("ai-message")
     bot.execute_signal_trade.assert_called_once()
     executed_setup = bot.execute_signal_trade.call_args.kwargs["setup"]
-    assert not getattr(executed_setup, "metadata", {})
+    assert executed_setup.metadata["ai_consultive"]["decision"] == "WAIT_PULLBACK"
+    assert executed_setup.metadata["ai_consultive"]["confidence"] == 74
+
+
+def test_analyze_and_trade_blocks_execution_when_ai_gated_review_is_not_positive(monkeypatch):
+    bot = _make_light_bot()
+
+    monkeypatch.setattr(config, "USE_DAILY_TARGETS", False)
+    monkeypatch.setattr(config, "TIMEFRAME", "5m")
+    monkeypatch.setattr(config, "CANDLES_LOOKBACK", 50)
+    monkeypatch.setattr(config, "AI_CONSULTIVE_MODE", "gated")
+    monkeypatch.setattr(config, "AI_CONSULTIVE_MIN_CONFIDENCE", 80)
+
+    setup = TradeSetup(
+        symbol="ETHUSDT",
+        signal=Signal.STRONG_BUY,
+        long_size=5.0,
+        short_size=5.0,
+        entry_price=100.0,
+        stop_loss=99.0,
+        take_profit=102.0,
+        dca_levels=[],
+    )
+
+    class AIStub:
+        def is_enabled(self):
+            return True
+
+        def build_market_snapshot(self, **kwargs):
+            return {"symbol": kwargs["symbol"]}
+
+        def evaluate_setup(self, _snapshot):
+            return SimpleNamespace(
+                status="ok",
+                decision="WAIT_PULLBACK",
+                approval=False,
+                confidence=74,
+                timing_score=7,
+                risk_grade="B",
+                entry_window_min=99.2,
+                entry_window_max=99.8,
+                wait_seconds=120,
+                reasons=["pullback mais limpo esperado"],
+                invalidators=["perda da EMA 21"],
+                telegram_summary="Melhor aguardar pullback.",
+                providers=[],
+                from_cache=False,
+                should_notify=False,
+                error="",
+                mode="gated",
+                compact_for_trade=lambda: {
+                    "decision": "WAIT_PULLBACK",
+                    "approval": False,
+                    "confidence": 74,
+                },
+            )
+
+        def build_telegram_message(self, _review):
+            return "ai-message"
+
+    bot.exchange = SimpleNamespace(
+        get_klines=lambda **_kwargs: [{"open": 99.0, "high": 101.0, "low": 98.5, "close": 100.0, "volume": 10.0}],
+        get_available_balance=lambda: 1000.0,
+        get_symbol_info=lambda _symbol: {"minNotional": 5.0},
+        get_open_positions=lambda: [],
+    )
+    bot.strategy = SimpleNamespace(generate_trade_setup=lambda **_kwargs: setup)
+    bot.risk_manager = SimpleNamespace(can_open_position=lambda _total: True)
+    bot.sentiment_mode_enabled = False
+    bot.ai_consultive_engine = AIStub()
+    bot.telegram = SimpleNamespace(send_message=MagicMock())
+    bot.execute_signal_trade = MagicMock(return_value=True)
+
+    result = bot.analyze_and_trade("ETHUSDT")
+
+    assert result is False
+    bot.execute_signal_trade.assert_not_called()
+
+
+def test_analyze_and_trade_allows_execution_when_ai_gated_review_is_positive(monkeypatch):
+    bot = _make_light_bot()
+
+    monkeypatch.setattr(config, "USE_DAILY_TARGETS", False)
+    monkeypatch.setattr(config, "TIMEFRAME", "5m")
+    monkeypatch.setattr(config, "CANDLES_LOOKBACK", 50)
+    monkeypatch.setattr(config, "AI_CONSULTIVE_MODE", "gated")
+    monkeypatch.setattr(config, "AI_CONSULTIVE_MIN_CONFIDENCE", 80)
+
+    setup = TradeSetup(
+        symbol="ETHUSDT",
+        signal=Signal.STRONG_BUY,
+        long_size=5.0,
+        short_size=5.0,
+        entry_price=100.0,
+        stop_loss=99.0,
+        take_profit=102.0,
+        dca_levels=[],
+    )
+
+    class AIStub:
+        def is_enabled(self):
+            return True
+
+        def build_market_snapshot(self, **kwargs):
+            return {"symbol": kwargs["symbol"]}
+
+        def evaluate_setup(self, _snapshot):
+            return SimpleNamespace(
+                status="ok",
+                decision="ENTER_NOW",
+                approval=True,
+                confidence=82,
+                timing_score=8,
+                risk_grade="B",
+                entry_window_min=99.2,
+                entry_window_max=99.8,
+                wait_seconds=0,
+                reasons=["setup alinhado"],
+                invalidators=["perda da EMA 21"],
+                telegram_summary="Entrar agora.",
+                providers=[],
+                from_cache=False,
+                should_notify=False,
+                error="",
+                mode="gated",
+                compact_for_trade=lambda: {
+                    "decision": "ENTER_NOW",
+                    "approval": True,
+                    "confidence": 82,
+                },
+            )
+
+        def build_telegram_message(self, _review):
+            return "ai-message"
+
+    bot.exchange = SimpleNamespace(
+        get_klines=lambda **_kwargs: [{"open": 99.0, "high": 101.0, "low": 98.5, "close": 100.0, "volume": 10.0}],
+        get_available_balance=lambda: 1000.0,
+        get_symbol_info=lambda _symbol: {"minNotional": 5.0},
+        get_open_positions=lambda: [],
+    )
+    bot.strategy = SimpleNamespace(generate_trade_setup=lambda **_kwargs: setup)
+    bot.risk_manager = SimpleNamespace(can_open_position=lambda _total: True)
+    bot.sentiment_mode_enabled = False
+    bot.ai_consultive_engine = AIStub()
+    bot.telegram = SimpleNamespace(send_message=MagicMock())
+    bot.execute_signal_trade = MagicMock(return_value=True)
+
+    result = bot.analyze_and_trade("ETHUSDT")
+
+    assert result is True
+    bot.execute_signal_trade.assert_called_once()
 
 
 def test_hedge_strategy_uses_balanced_risk_profile_with_rr_target():

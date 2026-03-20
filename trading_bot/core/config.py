@@ -493,10 +493,10 @@ class TradingConfig:
     # ============================================
     # IA CONSULTIVA DE ENTRADA
     # ============================================
-    # V1 consultiva:
-    # - analisa setups válidos
-    # - envia parecer para Telegram/log
-    # - não bloqueia execução automática
+    # Modos:
+    # - off: IA desligada
+    # - consultive: analisa setups válidos e não bloqueia execução
+    # - gated: só permite entrada com aprovação positiva da IA
     AI_CONSULTIVE_MODE: str = os.getenv("TRADING_BOT_AI_MODE", "off").strip().lower() or "off"
     AI_CONSULTIVE_MODEL: str = os.getenv(
         "TRADING_BOT_AI_MODEL",
@@ -1075,8 +1075,8 @@ class TradingConfig:
         if self.SENTIMENT_CACHE_SECONDS < 5 or self.SENTIMENT_CACHE_SECONDS > 3600:
             errors.append("⚠️  ALERTA: SENTIMENT_CACHE_SECONDS deve estar entre 5 e 3600!")
 
-        if self.AI_CONSULTIVE_MODE not in {"off", "consultive"}:
-            errors.append("⚠️  ALERTA: TRADING_BOT_AI_MODE deve ser 'off' ou 'consultive'!")
+        if self.AI_CONSULTIVE_MODE not in {"off", "consultive", "gated"}:
+            errors.append("⚠️  ALERTA: TRADING_BOT_AI_MODE deve ser 'off', 'consultive' ou 'gated'!")
 
         if self.AI_CONSULTIVE_TIMEOUT_SECONDS < 1 or self.AI_CONSULTIVE_TIMEOUT_SECONDS > 60:
             errors.append("⚠️  ALERTA: TRADING_BOT_AI_TIMEOUT_SECONDS deve estar entre 1 e 60!")
@@ -1093,7 +1093,7 @@ class TradingConfig:
         if self.AI_CONSULTIVE_MIN_CONFIDENCE < 0 or self.AI_CONSULTIVE_MIN_CONFIDENCE > 100:
             errors.append("⚠️  ALERTA: TRADING_BOT_AI_MIN_CONFIDENCE deve estar entre 0 e 100!")
 
-        if self.AI_CONSULTIVE_MODE == "consultive":
+        if self.AI_CONSULTIVE_MODE in {"consultive", "gated"}:
             if not self.OPENAI_API_KEY:
                 errors.append("⚠️  ALERTA: IA consultiva ativa, mas OPENAI_API_KEY não está configurada!")
 

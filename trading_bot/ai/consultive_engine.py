@@ -377,7 +377,7 @@ class ConsultiveEngine:
         self._review_cache: Dict[str, Dict[str, Any]] = {}
 
     def is_enabled(self) -> bool:
-        return str(getattr(self.config, "AI_CONSULTIVE_MODE", "off")).strip().lower() == "consultive"
+        return str(getattr(self.config, "AI_CONSULTIVE_MODE", "off")).strip().lower() in {"consultive", "gated"}
 
     def _reasoning_effort(self) -> str:
         raw = str(getattr(self.config, "AI_CONSULTIVE_REASONING_EFFORT", "low") or "low").strip().lower()
@@ -600,6 +600,10 @@ class ConsultiveEngine:
             f"   • {html.escape(_humanize_text_item(item))}" for item in review.invalidators[:3]
         ) or "   • sem ponto de atenção"
 
+        mode_text = "Modo consultivo: não bloqueia a execução automática."
+        if str(review.mode or "").strip().lower() == "gated":
+            mode_text = "Modo com gate: só entra quando a IA aprova o setup."
+
         timestamp = datetime.now(BRT).strftime("%H:%M:%S")
         return f"""
 🤖 <b>IA CONSULTIVA</b> <i>({timestamp})</i>
@@ -621,7 +625,7 @@ class ConsultiveEngine:
 <b>⚠️ Pontos de atenção:</b>
 {invalidators}
 
-<i>Modo consultivo: não bloqueia a execução automática.</i>
+<i>{html.escape(mode_text)}</i>
 ━━━━━━━━━━━━━━━━━━━━━
 """.strip()
 

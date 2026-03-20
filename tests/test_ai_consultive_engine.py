@@ -92,6 +92,12 @@ def test_consultive_engine_skips_when_mode_is_off():
     assert review.should_notify is False
 
 
+def test_consultive_engine_is_enabled_for_gated_mode():
+    engine = ConsultiveEngine(config_obj=_make_config(AI_CONSULTIVE_MODE="gated"))
+
+    assert engine.is_enabled() is True
+
+
 def test_consultive_engine_uses_single_openai_provider(monkeypatch):
     engine = ConsultiveEngine(config_obj=_make_config())
     calls = []
@@ -291,6 +297,34 @@ def test_build_telegram_message_is_clear_and_translated():
     assert "Momentum fraco" in message
     assert "Aguardar: Tendência altista mas volume fraco e correção é preferível antes de entrar." in message
     assert "Providers:" not in message
+
+
+def test_build_telegram_message_mentions_gated_mode():
+    engine = ConsultiveEngine(config_obj=_make_config(AI_CONSULTIVE_MODE="gated"))
+    review = ConsultiveReview(
+        status="ok",
+        decision="ENTER_NOW",
+        approval=True,
+        confidence=82,
+        timing_score=8,
+        risk_grade="B",
+        entry_window_min=1.0,
+        entry_window_max=1.1,
+        wait_seconds=0,
+        reasons=["setup alinhado"],
+        invalidators=["perda da EMA 21"],
+        telegram_summary="Entrada aprovada.",
+        providers=[_provider_review("openai", "ENTER_NOW", 82)],
+        symbol="ETHUSDT",
+        strategy_name="trend_strong",
+        signal="STRONG_BUY",
+        side="LONG",
+        mode="gated",
+    )
+
+    message = engine.build_telegram_message(review)
+
+    assert "Modo com gate" in message
 
 
 def test_build_market_snapshot_marks_opposite_side_entry_as_allowed_in_hedge_mode():
