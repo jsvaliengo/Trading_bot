@@ -236,6 +236,52 @@ def test_execute_signal_trade_skips_fixed_sl_on_exchange_when_individual_sl_disa
     assert sltp_calls[-1]["take_profit_price"] == 98.0
 
 
+def test_execute_signal_trade_notifies_when_gated_ai_trade_is_blocked_by_exposure(monkeypatch):
+    bot = _make_light_bot()
+    send_message = MagicMock(return_value=True)
+    send_trade_alert = MagicMock(return_value=True)
+
+    bot.exchange = SimpleNamespace(
+        get_symbol_price=lambda _symbol: 100.0,
+        get_symbol_info=lambda _symbol: {"minNotional": 5.0, "pricePrecision": 2},
+        get_account_balance=lambda: 213.49,
+    )
+    bot.telegram = SimpleNamespace(send_trade_alert=send_trade_alert, send_message=send_message)
+    bot._get_total_open_notional_percent = lambda: 450.0
+
+    monkeypatch.setattr(config, "CHECK_FUNDING_RATE", False)
+    monkeypatch.setattr(config, "USE_BINANCE_STRATEGY", False)
+    monkeypatch.setattr(config, "USE_INDIVIDUAL_STOP_LOSS", False)
+    monkeypatch.setattr(config, "LEVERAGE", 20)
+    monkeypatch.setattr(config, "MAX_TOTAL_NOTIONAL_PERCENT", 300.0)
+    monkeypatch.setattr(config, "MAX_POSITION_CONCENTRATION_PERCENT", 100.0)
+    monkeypatch.setattr(config, "AI_CONSULTIVE_MODE", "gated")
+
+    setup = TradeSetup(
+        symbol="XRPUSDT",
+        signal=Signal.STRONG_SELL,
+        long_size=6.0,
+        short_size=6.0,
+        entry_price=100.0,
+        stop_loss=100.5,
+        take_profit=98.6,
+        dca_levels=[],
+    )
+    setup.metadata = {
+        "ai_consultive": {
+            "approval": True,
+            "confidence": 85,
+            "decision": "ENTER_NOW",
+        }
+    }
+
+    assert bot.execute_signal_trade(setup, open_short=True, strategy_name="trend_strong") is False
+    send_trade_alert.assert_not_called()
+    send_message.assert_called_once()
+    assert "Exposição total excedida" in send_message.call_args.args[0]
+    assert "85/100" in send_message.call_args.args[0]
+
+
 def test_monitor_positions_ignores_custom_stop_loss_when_individual_sl_disabled(monkeypatch):
     bot = _make_light_bot()
 

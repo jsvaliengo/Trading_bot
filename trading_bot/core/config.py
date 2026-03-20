@@ -442,9 +442,10 @@ class TradingConfig:
 
     # Exposição total máxima em % do saldo (Improvement 4)
     # Como o bot usa alavancagem 20x e tickets pequenos por posição, um teto muito baixo
-    # bloqueia novas entradas cedo demais. 300% permite mais posições simultâneas sem
-    # remover os demais freios de risco (concentração por posição, limite diário, etc.).
-    MAX_TOTAL_NOTIONAL_PERCENT: float = float(os.getenv("TRADING_BOT_MAX_TOTAL_NOTIONAL_PERCENT", "300.0"))
+    # bloqueia novas entradas cedo demais. 700% acomoda até 12 posições de $6 de margem
+    # com saldo na faixa de ~$200 sem remover os demais freios de risco
+    # (concentração por posição, limite diário, etc.).
+    MAX_TOTAL_NOTIONAL_PERCENT: float = float(os.getenv("TRADING_BOT_MAX_TOTAL_NOTIONAL_PERCENT", "700.0"))
 
     # Concentração máxima de margem por posição em % do saldo (Improvement 10)
     # Baseado em margem (order_size / saldo), não em notional.

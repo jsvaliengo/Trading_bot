@@ -18,6 +18,7 @@ import logging
 import signal
 import sys
 import json
+import html
 import os
 import shutil
 import fcntl
@@ -197,6 +198,7 @@ class TradingBot:
         self.sentiment_mode_enabled = bool(getattr(config, "USE_MARKET_SENTIMENT_FILTER", False))
         self.sentiment_cache: Dict[str, Dict[str, Any]] = {}
         self.ai_consultive_engine = None
+        self._ai_execution_block_notifications: Dict[str, float] = {}
         self._instance_lock_handle = None
         self._strategy_engines: Dict[str, Any] = {}
         self.strategy_profiles: List[Dict[str, Any]] = []
@@ -2543,6 +2545,56 @@ class TradingBot:
             )
         return candidate_setup
 
+    def _notify_ai_approved_trade_block(
+        self,
+        *,
+        symbol: str,
+        side: str,
+        strategy_name: str,
+        reason: str,
+        detail: str = "",
+        setup_metadata: Dict[str, Any] | None = None,
+    ) -> bool:
+        """Notifica quando a IA aprovou o setup, mas a ordem foi barrada depois."""
+        telegram = getattr(self, "telegram", None)
+        if telegram is None:
+            return False
+
+        if str(getattr(config, "AI_CONSULTIVE_MODE", "off")).strip().lower() != "gated":
+            return False
+
+        ai_metadata = dict((setup_metadata or {}).get("ai_consultive", {}) or {})
+        if not bool(ai_metadata.get("approval")):
+            return False
+
+        now_monotonic = time.monotonic()
+        cache_key = f"{symbol}:{side}:{reason}"
+        last_sent = float(self._ai_execution_block_notifications.get(cache_key, 0.0) or 0.0)
+        if (now_monotonic - last_sent) < 180.0:
+            return False
+        self._ai_execution_block_notifications[cache_key] = now_monotonic
+
+        confidence = int(ai_metadata.get("confidence", 0) or 0)
+        decision = str(ai_metadata.get("decision", "ENTER_NOW") or "ENTER_NOW")
+        side_label = "Compra" if side == "LONG" else "Venda" if side == "SHORT" else side
+        strategy_label = str(strategy_name or "primary").replace("_", " ")
+        detail_line = f"\n📝 <b>Detalhe:</b> {html.escape(detail)}" if detail else ""
+
+        message = f"""
+⏸️ <b>ENTRADA CANCELADA</b> <i>({datetime.now(timezone(timedelta(hours=-3))).strftime("%H:%M:%S")})</i>
+━━━━━━━━━━━━━━━━━━━━━
+
+📍 <b>Par:</b> {html.escape(symbol.replace("USDT", ""))}/USDT
+🤖 <b>Estratégia:</b> {html.escape(strategy_label)}
+🧭 <b>Direção:</b> {html.escape(side_label)}
+🧠 <b>IA:</b> {html.escape(decision)} ({confidence}/100)
+⚠️ <b>Motivo do bloqueio:</b> {html.escape(reason)}{detail_line}
+
+<i>A IA aprovou o setup, mas a execução foi barrada pelos freios operacionais do bot.</i>
+━━━━━━━━━━━━━━━━━━━━━
+""".strip()
+        return bool(telegram.send_message(message))
+
     def analyze_and_trade(self, symbol: str, strategy_name: str | None = None) -> bool:
         """
         Analisa um par e executa trades se houver oportunidade.
@@ -2805,6 +2857,7 @@ class TradingBot:
         symbol = setup.symbol
         signal_name = setup.signal.name if hasattr(setup.signal, 'name') else str(setup.signal)
         setup_metadata = dict(getattr(setup, "metadata", {}) or {})
+        requested_side = "LONG" if open_long else "SHORT" if open_short else "NONE"
 
         def _safe_float(value):
             try:
@@ -2847,6 +2900,14 @@ class TradingBot:
             price = self.exchange.get_symbol_price(symbol)
             if price <= 0:
                 logger.error(f"❌ Preço inválido para {symbol}: {price} — abortando abertura")
+                self._notify_ai_approved_trade_block(
+                    symbol=symbol,
+                    side=requested_side,
+                    strategy_name=strategy_name,
+                    reason="Preço inválido",
+                    detail=f"Preço retornado pela exchange: {price}",
+                    setup_metadata=setup_metadata,
+                )
                 return False
             info = self.exchange.get_symbol_info(symbol)
 
@@ -2902,6 +2963,14 @@ class TradingBot:
                         logger.info(
                             f"⏱️ Sinal expirado para {symbol}: {_signal_age:.0f}s > {_max_age:.0f}s — pulando"
                         )
+                        self._notify_ai_approved_trade_block(
+                            symbol=symbol,
+                            side=requested_side,
+                            strategy_name=strategy_name,
+                            reason="Sinal expirado",
+                            detail=f"Idade {int(_signal_age)}s acima do máximo de {int(_max_age)}s",
+                            setup_metadata=setup_metadata,
+                        )
                         return False
                 except Exception:
                     pass
@@ -2912,6 +2981,14 @@ class TradingBot:
             if _notional_pct >= _max_notional:
                 logger.warning(
                     f"⚠️ Exposição total {_notional_pct:.1f}% excede limite {_max_notional:.0f}%"
+                )
+                self._notify_ai_approved_trade_block(
+                    symbol=symbol,
+                    side=requested_side,
+                    strategy_name=strategy_name,
+                    reason="Exposição total excedida",
+                    detail=f"{_notional_pct:.1f}% acima do limite de {_max_notional:.0f}%",
+                    setup_metadata=setup_metadata,
                 )
                 return False
 
@@ -2927,6 +3004,14 @@ class TradingBot:
                         logger.warning(
                             f"⚠️ {symbol}: Margem da posição {_conc_pct:.1f}% do saldo "
                             f"excede limite {_max_conc:.0f}%"
+                        )
+                        self._notify_ai_approved_trade_block(
+                            symbol=symbol,
+                            side=requested_side,
+                            strategy_name=strategy_name,
+                            reason="Concentração da posição excedida",
+                            detail=f"Margem { _conc_pct:.1f}% do saldo acima do limite de {_max_conc:.0f}%",
+                            setup_metadata=setup_metadata,
                         )
                         return False
             except Exception:
@@ -2944,6 +3029,14 @@ class TradingBot:
                         f"   Mínimo: ${min_notional:.2f}, Notional: ${effective_notional:.2f} "
                         f"(Order Size: ${order_size:.2f} x {leverage:g}x)"
                     )
+                    self._notify_ai_approved_trade_block(
+                        symbol=symbol,
+                        side="LONG",
+                        strategy_name=strategy_name,
+                        reason="Posição abaixo do mínimo da Binance",
+                        detail=f"Notional ${effective_notional:.2f} abaixo do mínimo de ${min_notional:.2f}",
+                        setup_metadata=setup_metadata,
+                    )
                     return False
 
                 long_qty = (order_size * config.LEVERAGE) / price
@@ -2958,6 +3051,14 @@ class TradingBot:
 
                 if not long_order:
                     logger.error("❌ Falha ao abrir posição LONG")
+                    self._notify_ai_approved_trade_block(
+                        symbol=symbol,
+                        side="LONG",
+                        strategy_name=strategy_name,
+                        reason="Falha ao abrir posição LONG",
+                        detail="A exchange rejeitou ou não retornou a ordem de mercado.",
+                        setup_metadata=setup_metadata,
+                    )
                     return False
 
                 if double_first_applied:
@@ -3059,6 +3160,14 @@ class TradingBot:
                         f"   Mínimo: ${min_notional:.2f}, Notional: ${effective_notional:.2f} "
                         f"(Order Size: ${order_size:.2f} x {leverage:g}x)"
                     )
+                    self._notify_ai_approved_trade_block(
+                        symbol=symbol,
+                        side="SHORT",
+                        strategy_name=strategy_name,
+                        reason="Posição abaixo do mínimo da Binance",
+                        detail=f"Notional ${effective_notional:.2f} abaixo do mínimo de ${min_notional:.2f}",
+                        setup_metadata=setup_metadata,
+                    )
                     return False
 
                 short_qty = (order_size * config.LEVERAGE) / price
@@ -3073,6 +3182,14 @@ class TradingBot:
 
                 if not short_order:
                     logger.error("❌ Falha ao abrir posição SHORT")
+                    self._notify_ai_approved_trade_block(
+                        symbol=symbol,
+                        side="SHORT",
+                        strategy_name=strategy_name,
+                        reason="Falha ao abrir posição SHORT",
+                        detail="A exchange rejeitou ou não retornou a ordem de mercado.",
+                        setup_metadata=setup_metadata,
+                    )
                     return False
 
                 if double_first_applied:
@@ -3166,6 +3283,14 @@ class TradingBot:
             
         except Exception as e:
             logger.error(f"❌ Erro ao executar trade: {e}")
+            self._notify_ai_approved_trade_block(
+                symbol=symbol,
+                side=requested_side,
+                strategy_name=strategy_name,
+                reason="Erro ao executar trade",
+                detail=str(e),
+                setup_metadata=setup_metadata,
+            )
             return False
     
     def _should_force_exit_range_break(self, symbol: str, side: str, range_mid_price) -> bool:
