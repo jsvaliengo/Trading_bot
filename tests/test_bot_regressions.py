@@ -711,6 +711,7 @@ def test_analyze_and_trade_runs_ai_consultive_review_without_blocking_execution(
             return SimpleNamespace(
                 status="ok",
                 decision="WAIT_PULLBACK",
+                entry_side="LONG",
                 approval=False,
                 confidence=74,
                 timing_score=7,
@@ -781,6 +782,7 @@ def test_analyze_and_trade_blocks_execution_when_ai_gated_review_is_not_positive
             return SimpleNamespace(
                 status="ok",
                 decision="WAIT_PULLBACK",
+                entry_side="LONG",
                 approval=False,
                 confidence=74,
                 timing_score=7,
@@ -856,6 +858,7 @@ def test_analyze_and_trade_allows_execution_when_ai_gated_review_is_positive(mon
             return SimpleNamespace(
                 status="ok",
                 decision="ENTER_NOW",
+                entry_side="LONG",
                 approval=True,
                 confidence=82,
                 timing_score=8,
@@ -898,6 +901,124 @@ def test_analyze_and_trade_allows_execution_when_ai_gated_review_is_positive(mon
 
     assert result is True
     bot.execute_signal_trade.assert_called_once()
+
+
+def test_analyze_and_trade_allows_gated_ai_override_when_trend_strong_setup_is_neutral(monkeypatch):
+    bot = _make_light_bot()
+
+    monkeypatch.setattr(config, "USE_DAILY_TARGETS", False)
+    monkeypatch.setattr(config, "TIMEFRAME", "5m")
+    monkeypatch.setattr(config, "CANDLES_LOOKBACK", 50)
+    monkeypatch.setattr(config, "AI_CONSULTIVE_MODE", "gated")
+    monkeypatch.setattr(config, "AI_CONSULTIVE_MIN_CONFIDENCE", 80)
+    monkeypatch.setattr(config, "TREND_STRONG_EXECUTION_TIMEFRAME", "3m")
+    monkeypatch.setattr(config, "TREND_STRONG_CONFIRM_TIMEFRAME", "5m")
+    monkeypatch.setattr(config, "TREND_STRONG_CANDLES_LOOKBACK", 220)
+
+    candidate_setup = TradeSetup(
+        symbol="ETHUSDT",
+        signal=Signal.STRONG_BUY,
+        long_size=5.0,
+        short_size=5.0,
+        entry_price=100.0,
+        stop_loss=99.0,
+        take_profit=102.0,
+        dca_levels=[],
+        metadata={
+            "source_signal": "NEUTRAL",
+            "ai_override_from_neutral": True,
+            "trend_candidate_side": "LONG",
+        },
+    )
+
+    klines = [
+        {"open": 99.0, "high": 101.0, "low": 98.5, "close": 100.0, "volume": 10.0}
+    ] * 240
+
+    captured = {"override_called": 0}
+
+    class StrategyStub:
+        def generate_trade_setup(self, **_kwargs):
+            return None
+
+        def build_ai_override_candidate_setup(self, **kwargs):
+            captured["override_called"] += 1
+            assert kwargs["symbol"] == "ETHUSDT"
+            return candidate_setup
+
+    class AIStub:
+        def is_enabled(self):
+            return True
+
+        def build_market_snapshot(self, **kwargs):
+            assert kwargs["requested_side"] == "LONG"
+            assert kwargs["allowed_entry_sides"] == ["LONG"]
+            return {"symbol": kwargs["symbol"], "allowed_entry_sides": ["LONG"]}
+
+        def evaluate_setup(self, _snapshot):
+            return SimpleNamespace(
+                status="ok",
+                decision="ENTER_NOW",
+                entry_side="LONG",
+                approval=True,
+                confidence=84,
+                timing_score=8,
+                risk_grade="B",
+                entry_window_min=99.5,
+                entry_window_max=100.2,
+                wait_seconds=0,
+                reasons=["tendência alinhada"],
+                invalidators=["perda da EMA 21"],
+                telegram_summary="Entrar agora.",
+                providers=[],
+                from_cache=False,
+                should_notify=False,
+                error="",
+                mode="gated",
+                compact_for_trade=lambda: {
+                    "decision": "ENTER_NOW",
+                    "entry_side": "LONG",
+                    "approval": True,
+                    "confidence": 84,
+                },
+            )
+
+        def build_telegram_message(self, _review):
+            return "ai-message"
+
+    strategy = StrategyStub()
+    bot.strategy_profiles = [
+        {
+            "name": "trend_strong",
+            "strategy_type": "trend_signal",
+            "entry_mode": "strong_only",
+            "risk_profile": None,
+            "pairs": ["ETHUSDT"],
+            "strategy": strategy,
+        }
+    ]
+    bot.strategy = strategy
+    bot.exchange = SimpleNamespace(
+        get_klines=lambda **_kwargs: klines,
+        get_available_balance=lambda: 1000.0,
+        get_symbol_info=lambda _symbol: {"minNotional": 5.0},
+        get_open_positions=lambda: [],
+    )
+    bot.risk_manager = SimpleNamespace(can_open_position=lambda _total: True)
+    bot.sentiment_mode_enabled = False
+    bot.ai_consultive_engine = AIStub()
+    bot.telegram = SimpleNamespace(send_message=MagicMock())
+    bot.execute_signal_trade = MagicMock(return_value=True)
+
+    result = bot.analyze_and_trade("ETHUSDT", strategy_name="trend_strong")
+
+    assert result is True
+    assert captured["override_called"] == 1
+    bot.execute_signal_trade.assert_called_once()
+    assert bot.execute_signal_trade.call_args.kwargs["open_long"] is True
+    assert bot.execute_signal_trade.call_args.kwargs["open_short"] is False
+    executed_setup = bot.execute_signal_trade.call_args.kwargs["setup"]
+    assert executed_setup.metadata["ai_consultive"]["entry_side"] == "LONG"
 
 
 def test_hedge_strategy_uses_balanced_risk_profile_with_rr_target():

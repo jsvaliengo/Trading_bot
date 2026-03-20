@@ -2439,6 +2439,8 @@ class TradingBot:
         should_open_long: bool,
         should_open_short: bool,
         min_notional: float,
+        requested_side: str | None = None,
+        allowed_entry_sides: List[str] | None = None,
     ):
         """Executa revisão consultiva via IA sem alterar a lógica de execução."""
         engine = getattr(self, "ai_consultive_engine", None)
@@ -2470,6 +2472,8 @@ class TradingBot:
                 should_open_short=should_open_short,
                 min_notional=min_notional,
                 sentiment_snapshot=sentiment_snapshot,
+                requested_side=requested_side,
+                allowed_entry_sides=allowed_entry_sides,
             )
             review = engine.evaluate_setup(snapshot)
 
@@ -2498,6 +2502,46 @@ class TradingBot:
         except Exception as exc:
             logger.warning(f"⚠️ Erro na IA consultiva para {symbol}: {exc}")
             return None
+
+    def _maybe_build_gated_ai_override_setup(
+        self,
+        *,
+        strategy_engine: Any,
+        strategy_label: str,
+        strategy_type: str,
+        symbol: str,
+        klines: List[Dict[str, Any]],
+        confirmation_klines: List[Dict[str, Any]] | None,
+        available_balance: float,
+        min_notional: float,
+        risk_profile: Any,
+    ):
+        ai_mode = str(getattr(config, "AI_CONSULTIVE_MODE", "off") or "off").strip().lower()
+        if ai_mode != "gated":
+            return None
+        if strategy_type != "trend_signal" or strategy_label != "trend_strong":
+            return None
+        if not confirmation_klines:
+            return None
+        if not hasattr(strategy_engine, "build_ai_override_candidate_setup"):
+            return None
+
+        candidate_setup = strategy_engine.build_ai_override_candidate_setup(
+            symbol=symbol,
+            execution_klines=klines,
+            confirmation_klines=confirmation_klines,
+            available_capital=available_balance,
+            min_notional=min_notional,
+            risk_profile=risk_profile,
+        )
+        if candidate_setup is not None:
+            logger.info(
+                "🤖 [%s] %s sem setup clássico; candidato %s enviado ao gate da IA",
+                strategy_label,
+                symbol,
+                (getattr(candidate_setup, "metadata", {}) or {}).get("trend_candidate_side", "?"),
+            )
+        return candidate_setup
 
     def analyze_and_trade(self, symbol: str, strategy_name: str | None = None) -> bool:
         """
@@ -2578,6 +2622,7 @@ class TradingBot:
         # Busca informações do símbolo (incluindo mínimo notional)
         symbol_info = self.exchange.get_symbol_info(symbol)
         min_notional = symbol_info.get('minNotional', 5.0)
+        ai_mode = str(getattr(config, "AI_CONSULTIVE_MODE", "off") or "off").strip().lower()
         
         # Gera setup de trade
         setup_kwargs = {
@@ -2597,8 +2642,20 @@ class TradingBot:
         )
         
         if not setup:
-            logger.info(f"⏸️  Sem setup válido para {symbol}")
-            return False
+            setup = self._maybe_build_gated_ai_override_setup(
+                strategy_engine=strategy_engine,
+                strategy_label=strategy_label,
+                strategy_type=strategy_type,
+                symbol=symbol,
+                klines=klines,
+                confirmation_klines=confirmation_klines,
+                available_balance=available_balance,
+                min_notional=min_notional,
+                risk_profile=risk_profile,
+            )
+            if not setup:
+                logger.info(f"⏸️  Sem setup válido para {symbol}")
+                return False
         
         # ============================================
         # VERIFICA O SINAL
@@ -2673,6 +2730,9 @@ class TradingBot:
             logger.info("⏸️  Limite de risco atingido")
             return False
 
+        requested_side = "LONG" if should_open_long else "SHORT" if should_open_short else "NONE"
+        allowed_entry_sides = [requested_side] if requested_side in {"LONG", "SHORT"} else []
+
         review = self._maybe_run_ai_consultive_review(
             symbol=symbol,
             strategy_name=strategy_label,
@@ -2689,9 +2749,10 @@ class TradingBot:
             should_open_long=should_open_long,
             should_open_short=should_open_short,
             min_notional=min_notional,
+            requested_side=requested_side,
+            allowed_entry_sides=allowed_entry_sides,
         )
 
-        ai_mode = str(getattr(config, "AI_CONSULTIVE_MODE", "off") or "off").strip().lower()
         if ai_mode == "gated":
             if review is None:
                 logger.info(f"⏸️  Entrada bloqueada por IA em {symbol} - revisão indisponível")
@@ -2707,6 +2768,11 @@ class TradingBot:
                     f"⏸️  Entrada bloqueada por IA em {symbol} - decisão={review.decision} "
                     f"conf={review.confidence} min={getattr(config, 'AI_CONSULTIVE_MIN_CONFIDENCE', 80)}"
                 )
+                return False
+            should_open_long = review.entry_side == "LONG"
+            should_open_short = review.entry_side == "SHORT"
+            if not should_open_long and not should_open_short:
+                logger.info(f"⏸️  Entrada bloqueada por IA em {symbol} - lado inválido")
                 return False
         
         # Executa o trade baseado no sinal

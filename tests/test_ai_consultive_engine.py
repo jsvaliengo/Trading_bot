@@ -32,6 +32,7 @@ def _make_snapshot():
         "strategy_name": "trend_strong",
         "signal": "STRONG_BUY",
         "side": "LONG",
+        "allowed_entry_sides": ["LONG"],
         "current_price": 2500.0,
     }
 
@@ -42,6 +43,7 @@ def _provider_review(provider: str, decision: str, confidence: int) -> ProviderR
         model="gpt-5-mini",
         status="ok",
         decision=decision,
+        entry_side="LONG",
         confidence=confidence,
         timing_score=8,
         risk_grade="B",
@@ -145,6 +147,7 @@ def test_consultive_engine_requests_openai_with_strict_json_schema():
             "output_text": json.dumps(
                 {
                     "decision": "WAIT_PULLBACK",
+                    "entry_side": "LONG",
                     "confidence": 74,
                     "timing_score": 6,
                     "risk_grade": "B",
@@ -164,6 +167,7 @@ def test_consultive_engine_requests_openai_with_strict_json_schema():
 
     assert review.status == "ok"
     assert review.decision == "WAIT_PULLBACK"
+    assert review.entry_side == "LONG"
     assert len(session.calls) == 1
     request_payload = session.calls[0]["json"]
     assert request_payload["model"] == "gpt-5-mini"
@@ -229,6 +233,7 @@ def test_consultive_review_compact_for_trade_is_serializable():
     review = ConsultiveReview(
         status="ok",
         decision="ENTER_NOW",
+        entry_side="LONG",
         approval=True,
         confidence=88,
         timing_score=8,
@@ -250,6 +255,7 @@ def test_consultive_review_compact_for_trade_is_serializable():
     payload = review.compact_for_trade()
 
     assert payload["decision"] == "ENTER_NOW"
+    assert payload["entry_side"] == "LONG"
     assert payload["confidence"] == 88
     assert payload["providers"] == ["openai"]
 
@@ -259,6 +265,7 @@ def test_build_telegram_message_is_clear_and_translated():
     review = ConsultiveReview(
         status="ok",
         decision="WAIT_PULLBACK",
+        entry_side="LONG",
         approval=False,
         confidence=60,
         timing_score=5,
@@ -287,6 +294,7 @@ def test_build_telegram_message_is_clear_and_translated():
 
     assert "Estratégia:</b> Tendência forte" in message
     assert "Sinal:</b> Compra forte" in message
+    assert "Direção sugerida:</b> Compra" in message
     assert "Ação sugerida:</b> Aguardar correção" in message
     assert "Risco:</b> Moderado (B)" in message
     assert "Momento:</b> 5/10" in message
@@ -304,6 +312,7 @@ def test_build_telegram_message_mentions_gated_mode():
     review = ConsultiveReview(
         status="ok",
         decision="ENTER_NOW",
+        entry_side="LONG",
         approval=True,
         confidence=82,
         timing_score=8,
@@ -370,3 +379,41 @@ def test_build_market_snapshot_marks_opposite_side_entry_as_allowed_in_hedge_mod
     assert snapshot["same_side_position_open"] is False
     assert snapshot["opposite_side_position_open"] is True
     assert snapshot["same_symbol_has_short"] is True
+
+
+def test_build_market_snapshot_defaults_side_to_none_when_not_requested():
+    engine = ConsultiveEngine(config_obj=_make_config())
+    setup = SimpleNamespace(
+        entry_price=100.0,
+        stop_loss=99.0,
+        take_profit=102.0,
+        metadata={},
+    )
+    klines = [
+        {"close": "100", "high": "101", "low": "99", "volume": "10"},
+        {"close": "101", "high": "102", "low": "100", "volume": "12"},
+        {"close": "102", "high": "103", "low": "101", "volume": "14"},
+    ] * 80
+
+    snapshot = engine.build_market_snapshot(
+        symbol="SOLUSDT",
+        strategy_name="trend_strong",
+        strategy_type="trend_signal",
+        entry_mode="strong_only",
+        signal_name="NEUTRAL",
+        setup=setup,
+        klines=klines,
+        confirmation_klines=klines,
+        execution_timeframe="3m",
+        confirmation_timeframe="5m",
+        available_balance=100.0,
+        open_positions=[],
+        should_open_long=False,
+        should_open_short=False,
+        min_notional=5.0,
+        sentiment_snapshot=None,
+        allowed_entry_sides=[],
+    )
+
+    assert snapshot["side"] == "NONE"
+    assert snapshot["allowed_entry_sides"] == []
