@@ -56,7 +56,10 @@ log "Atualizando pip e dependências..."
 "$PYTHON_BIN" -m pip install --upgrade pip
 "$PYTHON_BIN" -m pip install -r requirements.txt
 
-log "Executando testes (pytest)..."
+log "Executando testes (pytest) com ambiente isolado do .env de produção..."
+TRADING_BOT_ENV_FILE=/dev/null \
+TRADING_BOT_ENV=test \
+APP_ENV=test \
 "$PYTHON_BIN" -m pytest -q
 
 log "Testes passaram. Reiniciando bot..."
