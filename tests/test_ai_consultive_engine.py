@@ -141,6 +141,40 @@ def test_consultive_engine_reuses_cache_for_same_setup(monkeypatch):
     assert calls == ["ETHUSDT"]
 
 
+def test_consultive_engine_gated_review_below_confidence_does_not_notify(monkeypatch):
+    engine = ConsultiveEngine(config_obj=_make_config(AI_CONSULTIVE_MODE="gated", AI_CONSULTIVE_MIN_CONFIDENCE=80))
+
+    monkeypatch.setattr(
+        engine,
+        "_call_provider",
+        lambda _snapshot: _provider_review("openai", "ENTER_NOW", 65),
+    )
+
+    review = engine.evaluate_setup(_make_snapshot())
+
+    assert review.status == "ok"
+    assert review.decision == "ENTER_NOW"
+    assert review.approval is False
+    assert review.should_notify is False
+
+
+def test_consultive_engine_gated_review_above_confidence_notifies(monkeypatch):
+    engine = ConsultiveEngine(config_obj=_make_config(AI_CONSULTIVE_MODE="gated", AI_CONSULTIVE_MIN_CONFIDENCE=80))
+
+    monkeypatch.setattr(
+        engine,
+        "_call_provider",
+        lambda _snapshot: _provider_review("openai", "ENTER_NOW", 82),
+    )
+
+    review = engine.evaluate_setup(_make_snapshot())
+
+    assert review.status == "ok"
+    assert review.decision == "ENTER_NOW"
+    assert review.approval is True
+    assert review.should_notify is True
+
+
 def test_consultive_engine_requests_openai_with_strict_json_schema():
     session = _FakeSession(
         {
