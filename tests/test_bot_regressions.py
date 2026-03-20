@@ -293,6 +293,7 @@ def test_notify_ai_approved_trade_block_sends_telegram_message(monkeypatch):
     bot.telegram = SimpleNamespace(send_message=send_message)
 
     monkeypatch.setattr(config, "AI_CONSULTIVE_MODE", "gated")
+    monkeypatch.setattr("trading_bot.core.bot.time.monotonic", lambda: 100.0)
 
     result = bot._notify_ai_approved_trade_block(
         symbol="XRPUSDT",
@@ -315,6 +316,33 @@ def test_notify_ai_approved_trade_block_sends_telegram_message(monkeypatch):
     assert "ENTRADA CANCELADA" in message
     assert "Exposição total excedida" in message
     assert "ENTER_NOW (85/100)" in message
+
+
+def test_notify_ai_approved_trade_block_does_not_suppress_first_notification_when_monotonic_is_low(monkeypatch):
+    bot = _make_light_bot()
+    send_message = MagicMock(return_value=True)
+    bot.telegram = SimpleNamespace(send_message=send_message)
+
+    monkeypatch.setattr(config, "AI_CONSULTIVE_MODE", "gated")
+    monkeypatch.setattr("trading_bot.core.bot.time.monotonic", lambda: 12.0)
+
+    result = bot._notify_ai_approved_trade_block(
+        symbol="SOLUSDT",
+        side="LONG",
+        strategy_name="trend_strong",
+        reason="Exposição total excedida",
+        detail="450.0% acima do limite de 300%",
+        setup_metadata={
+            "ai_consultive": {
+                "approval": True,
+                "confidence": 81,
+                "decision": "ENTER_NOW",
+            }
+        },
+    )
+
+    assert result is True
+    send_message.assert_called_once()
 
 
 def test_monitor_positions_ignores_custom_stop_loss_when_individual_sl_disabled(monkeypatch):
