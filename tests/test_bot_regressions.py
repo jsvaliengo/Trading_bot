@@ -238,16 +238,17 @@ def test_execute_signal_trade_skips_fixed_sl_on_exchange_when_individual_sl_disa
 
 def test_execute_signal_trade_notifies_when_gated_ai_trade_is_blocked_by_exposure(monkeypatch):
     bot = _make_light_bot()
-    send_message = MagicMock(return_value=True)
     send_trade_alert = MagicMock(return_value=True)
+    notify_block = MagicMock(return_value=True)
 
     bot.exchange = SimpleNamespace(
         get_symbol_price=lambda _symbol: 100.0,
         get_symbol_info=lambda _symbol: {"minNotional": 5.0, "pricePrecision": 2},
         get_account_balance=lambda: 213.49,
     )
-    bot.telegram = SimpleNamespace(send_trade_alert=send_trade_alert, send_message=send_message)
+    bot.telegram = SimpleNamespace(send_trade_alert=send_trade_alert, send_message=MagicMock(return_value=True))
     bot._get_total_open_notional_percent = lambda: 450.0
+    bot._notify_ai_approved_trade_block = notify_block
 
     monkeypatch.setattr(config, "CHECK_FUNDING_RATE", False)
     monkeypatch.setattr(config, "USE_BINANCE_STRATEGY", False)
@@ -277,9 +278,71 @@ def test_execute_signal_trade_notifies_when_gated_ai_trade_is_blocked_by_exposur
 
     assert bot.execute_signal_trade(setup, open_short=True, strategy_name="trend_strong") is False
     send_trade_alert.assert_not_called()
+    notify_block.assert_called_once()
+    assert notify_block.call_args.kwargs["symbol"] == "XRPUSDT"
+    assert notify_block.call_args.kwargs["side"] == "SHORT"
+    assert notify_block.call_args.kwargs["strategy_name"] == "trend_strong"
+    assert notify_block.call_args.kwargs["reason"] == "Exposição total excedida"
+    assert "450.0%" in notify_block.call_args.kwargs["detail"]
+    assert notify_block.call_args.kwargs["setup_metadata"]["ai_consultive"]["confidence"] == 85
+
+
+def test_notify_ai_approved_trade_block_sends_telegram_message(monkeypatch):
+    bot = _make_light_bot()
+    send_message = MagicMock(return_value=True)
+    bot.telegram = SimpleNamespace(send_message=send_message)
+
+    monkeypatch.setattr(config, "AI_CONSULTIVE_MODE", "gated")
+    monkeypatch.setattr("trading_bot.core.bot.time.monotonic", lambda: 100.0)
+
+    result = bot._notify_ai_approved_trade_block(
+        symbol="XRPUSDT",
+        side="SHORT",
+        strategy_name="trend_strong",
+        reason="Exposição total excedida",
+        detail="450.0% acima do limite de 300%",
+        setup_metadata={
+            "ai_consultive": {
+                "approval": True,
+                "confidence": 85,
+                "decision": "ENTER_NOW",
+            }
+        },
+    )
+
+    assert result is True
     send_message.assert_called_once()
-    assert "Exposição total excedida" in send_message.call_args.args[0]
-    assert "85/100" in send_message.call_args.args[0]
+    message = send_message.call_args.args[0]
+    assert "ENTRADA CANCELADA" in message
+    assert "Exposição total excedida" in message
+    assert "ENTER_NOW (85/100)" in message
+
+
+def test_notify_ai_approved_trade_block_does_not_suppress_first_notification_when_monotonic_is_low(monkeypatch):
+    bot = _make_light_bot()
+    send_message = MagicMock(return_value=True)
+    bot.telegram = SimpleNamespace(send_message=send_message)
+
+    monkeypatch.setattr(config, "AI_CONSULTIVE_MODE", "gated")
+    monkeypatch.setattr("trading_bot.core.bot.time.monotonic", lambda: 12.0)
+
+    result = bot._notify_ai_approved_trade_block(
+        symbol="SOLUSDT",
+        side="LONG",
+        strategy_name="trend_strong",
+        reason="Exposição total excedida",
+        detail="450.0% acima do limite de 300%",
+        setup_metadata={
+            "ai_consultive": {
+                "approval": True,
+                "confidence": 81,
+                "decision": "ENTER_NOW",
+            }
+        },
+    )
+
+    assert result is True
+    send_message.assert_called_once()
 
 
 def test_monitor_positions_ignores_custom_stop_loss_when_individual_sl_disabled(monkeypatch):

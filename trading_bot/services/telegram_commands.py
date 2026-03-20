@@ -229,7 +229,9 @@ class TelegramCommandHandler:
     def _get_known_pair_symbols(self) -> List[str]:
         """Retorna universo conhecido de pares válidos para comandos Telegram."""
         sources = []
-        for attr_name in ("BINANCE_COIN_LIST", "TRADING_PAIRS", "FIXED_PAIRS"):
+        sources.extend(self._get_exchange_pair_symbols())
+
+        for attr_name in ("BINANCE_COIN_LIST", "TRADING_PAIRS", "FIXED_PAIRS", "DISABLED_PAIRS"):
             sources.extend(list(getattr(self.config, attr_name, []) or []))
 
         for profile in list(getattr(self.config, "STRATEGY_PROFILES", []) or []):
@@ -238,18 +240,45 @@ class TelegramCommandHandler:
 
         return self._normalize_pair_list(sources)
 
+    def _get_exchange_pair_symbols(self) -> List[str]:
+        """Retorna pares USDT perpétuos ativos direto da exchange, sem filtrar desabilitados."""
+        if self.bot is None or not hasattr(self.bot, "exchange") or self.bot.exchange is None:
+            return []
+
+        exchange = self.bot.exchange
+        if not hasattr(exchange, "get_exchange_info"):
+            return []
+
+        try:
+            exchange_info = exchange.get_exchange_info()
+        except Exception as exc:
+            logger.debug("⚠️ Falha ao buscar universo da exchange para /coins: %s", exc)
+            return []
+
+        symbols = []
+        for symbol_info in list((exchange_info or {}).get("symbols", []) or []):
+            symbol = self._normalize_pair_symbol(symbol_info.get("symbol"))
+            if not symbol or not symbol.endswith("USDT"):
+                continue
+            if symbol_info.get("contractType") != "PERPETUAL":
+                continue
+            if symbol_info.get("status") != "TRADING":
+                continue
+            symbols.append(symbol)
+        return self._normalize_pair_list(symbols)
+
     def _prune_unknown_disabled_pairs(self) -> List[str]:
         """Remove pares desabilitados inválidos deixados por versões antigas do comando."""
         if self.config is None:
             return []
 
-        valid_pairs = set(self._get_known_pair_symbols())
-        if not valid_pairs:
+        exchange_pairs = set(self._get_exchange_pair_symbols())
+        if not exchange_pairs:
             return []
 
         current_disabled = self._normalize_pair_list(list(getattr(self.config, "DISABLED_PAIRS", []) or []))
-        kept = [symbol for symbol in current_disabled if symbol in valid_pairs]
-        removed = [symbol for symbol in current_disabled if symbol not in valid_pairs]
+        kept = [symbol for symbol in current_disabled if symbol in exchange_pairs]
+        removed = [symbol for symbol in current_disabled if symbol not in exchange_pairs]
         if removed:
             self.config.DISABLED_PAIRS = kept
         return removed

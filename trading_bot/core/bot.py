@@ -2569,8 +2569,8 @@ class TradingBot:
 
         now_monotonic = time.monotonic()
         cache_key = f"{symbol}:{side}:{reason}"
-        last_sent = float(self._ai_execution_block_notifications.get(cache_key, 0.0) or 0.0)
-        if (now_monotonic - last_sent) < 180.0:
+        last_sent = self._ai_execution_block_notifications.get(cache_key)
+        if last_sent is not None and (now_monotonic - float(last_sent)) < 180.0:
             return False
         self._ai_execution_block_notifications[cache_key] = now_monotonic
 
