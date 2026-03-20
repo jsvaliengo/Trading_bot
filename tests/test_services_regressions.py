@@ -592,7 +592,17 @@ def test_coins_command_rejects_unknown_symbol_and_suggests_closest_pair():
         USE_BINANCE_STRATEGY=False,
         AUTO_SELECT_PAIRS=False,
     )
-    bot = SimpleNamespace(save_state=lambda: True)
+    class ExchangeStub:
+        def get_exchange_info(self):
+            return {
+                "symbols": [
+                    {"symbol": "HYPEUSDT", "contractType": "PERPETUAL", "status": "TRADING"},
+                    {"symbol": "XRPUSDT", "contractType": "PERPETUAL", "status": "TRADING"},
+                    {"symbol": "SOLUSDT", "contractType": "PERPETUAL", "status": "TRADING"},
+                ]
+            }
+
+    bot = SimpleNamespace(save_state=lambda: True, exchange=ExchangeStub())
     handler.set_bot_reference(bot, config)
 
     messages = []
@@ -605,6 +615,101 @@ def test_coins_command_rejects_unknown_symbol_and_suggests_closest_pair():
     assert messages
     assert "HYPER" in messages[-1]
     assert "HYPE" in messages[-1]
+
+
+def test_coins_command_keeps_disabled_pairs_recognized_in_dynamic_binance_mode():
+    handler = TelegramCommandHandler(token="token", chat_id="123")
+
+    exchange_symbols = [
+        "HYPEUSDT",
+        "BTCUSDT",
+        "PAXGUSDT",
+        "XRPUSDT",
+        "SOLUSDT",
+        "ZECUSDT",
+        "DOGEUSDT",
+    ]
+
+    config = SimpleNamespace(
+        TRADING_PAIRS=list(exchange_symbols),
+        DISABLED_PAIRS=[],
+        BINANCE_COIN_LIST=list(exchange_symbols),
+        FIXED_PAIRS=[],
+        STRATEGY_PROFILES=[],
+        USE_BINANCE_STRATEGY=True,
+        AUTO_SELECT_PAIRS=False,
+    )
+    config.normalize_pair_symbol = lambda symbol: (
+        (token := str(symbol or "").strip().upper().strip(",;").replace("/", "").replace("-", "").replace("_", ""))
+        and (token if token.endswith("USDT") else f"{token}USDT")
+    ) or ""
+
+    def normalize_pair_list(pairs):
+        normalized = []
+        seen = set()
+        for item in pairs or []:
+            symbol = config.normalize_pair_symbol(item)
+            if not symbol or symbol in seen:
+                continue
+            seen.add(symbol)
+            normalized.append(symbol)
+        return normalized
+
+    config.normalize_pair_list = normalize_pair_list
+    config.filter_disabled_pairs = lambda pairs: [
+        symbol
+        for symbol in normalize_pair_list(pairs)
+        if symbol not in set(normalize_pair_list(config.DISABLED_PAIRS))
+    ]
+
+    class ExchangeStub:
+        def get_exchange_info(self):
+            return {
+                "symbols": [
+                    {"symbol": symbol, "contractType": "PERPETUAL", "status": "TRADING"}
+                    for symbol in exchange_symbols
+                ]
+            }
+
+    class BotStub:
+        def __init__(self):
+            self.exchange = ExchangeStub()
+
+        def save_state(self):
+            return True
+
+        def refresh_trading_pairs(self, trigger_reason="manual"):
+            # Reproduz o comportamento do modo dinâmico: a lista permitida passa a refletir
+            # apenas pares atualmente habilitados.
+            config.BINANCE_COIN_LIST = config.filter_disabled_pairs(exchange_symbols)
+            config.TRADING_PAIRS = list(config.BINANCE_COIN_LIST)
+            return {"new_pairs": list(config.TRADING_PAIRS)}
+
+    bot = BotStub()
+    handler.set_bot_reference(bot, config)
+
+    messages = []
+    handler.send_message = lambda text: messages.append(text) or True
+
+    handler.cmd_coins(["disable", "HYPE"])
+    assert set(config.DISABLED_PAIRS) == {"HYPEUSDT"}
+    assert "HYPEUSDT" not in config.TRADING_PAIRS
+
+    handler.cmd_coins(["disable", "BTC"])
+    assert set(config.DISABLED_PAIRS) == {"HYPEUSDT", "BTCUSDT"}
+    assert "HYPEUSDT" not in config.TRADING_PAIRS
+    assert "BTCUSDT" not in config.TRADING_PAIRS
+
+    handler.cmd_coins(["disable", "HYPE", "BTC"])
+    assert set(config.DISABLED_PAIRS) == {"HYPEUSDT", "BTCUSDT"}
+    assert "Já estavam" in messages[-1]
+    assert "HYPE, BTC" in messages[-1]
+    assert "não reconhecidos" not in messages[-1].lower()
+
+    handler.cmd_coins(["disable", "HYPE,BTC"])
+    assert set(config.DISABLED_PAIRS) == {"HYPEUSDT", "BTCUSDT"}
+    assert "HYPE, BTC" in messages[-1]
+    assert "não reconhecidos" not in messages[-1].lower()
 
 
 def test_process_update_accepts_command_with_bot_mention_suffix():
