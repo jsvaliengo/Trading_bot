@@ -10,6 +10,7 @@ import math
 from typing import Any, Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
 from enum import Enum
+from datetime import datetime
 import numpy as np
 
 from .config import config
@@ -723,6 +724,89 @@ class HedgeStrategy:
                 take_profit = entry_price * (1 - self.config.TAKE_PROFIT_PERCENT / 100)
         
         return (_round_price(stop_loss), _round_price(take_profit))
+
+    def build_ai_override_candidate_setup(
+        self,
+        *,
+        symbol: str,
+        execution_klines: List[Dict[str, Any]],
+        confirmation_klines: List[Dict[str, Any]],
+        available_capital: float,
+        min_notional: float = 5.0,
+        risk_profile: Optional[Dict[str, Any]] = None,
+    ) -> Optional[TradeSetup]:
+        """
+        Cria um setup candidato para gate da IA quando o trend_strong ficou neutro.
+
+        Só gera candidato quando a tendência está alinhada no timeframe de execução
+        e confirmação. A IA continua sendo o gate final de entrada.
+        """
+        if not execution_klines or not confirmation_klines:
+            return None
+
+        exec_ctx = self._build_trend_context(execution_klines)
+        confirm_ctx = self._build_trend_context(confirmation_klines)
+        if not exec_ctx or not confirm_ctx:
+            return None
+
+        exec_direction = str(exec_ctx.get("direction", "NEUTRAL"))
+        confirm_direction = str(confirm_ctx.get("direction", "NEUTRAL"))
+        if exec_direction == "NEUTRAL" or exec_direction != confirm_direction:
+            return None
+
+        candidate_signal = Signal.STRONG_BUY if exec_direction == "LONG" else Signal.STRONG_SELL
+        entry_price = self._to_float(execution_klines[-1].get("close"))
+        if entry_price <= 0:
+            return None
+
+        long_size, short_size = self.calculate_position_sizes(
+            candidate_signal,
+            available_capital,
+            min_notional=min_notional,
+        )
+        if long_size == 0 and short_size == 0:
+            logger.info(
+                "⏸️ Pulando %s - sem sizing válido para candidato de IA (%s)",
+                symbol,
+                getattr(self, "_last_sizing_decision", "unknown"),
+            )
+            return None
+
+        closes = [self._to_float(k.get("close")) for k in execution_klines]
+        highs = [self._to_float(k.get("high")) for k in execution_klines]
+        lows = [self._to_float(k.get("low")) for k in execution_klines]
+        atr = self.ta.calculate_atr(highs, lows, closes)
+        stop_loss, take_profit = self.calculate_stop_loss_take_profit(
+            entry_price,
+            candidate_signal,
+            atr,
+            risk_profile=risk_profile,
+        )
+
+        return TradeSetup(
+            symbol=symbol,
+            signal=candidate_signal,
+            long_size=long_size,
+            short_size=short_size,
+            entry_price=entry_price,
+            stop_loss=stop_loss,
+            take_profit=take_profit,
+            dca_levels=[],
+            metadata={
+                "strategy_type": "trend_signal",
+                "custom_stop_loss": round(stop_loss, 8),
+                "custom_take_profit": round(take_profit, 8),
+                "signal_timestamp": datetime.now(),
+                "source_signal": Signal.NEUTRAL.name,
+                "ai_override_from_neutral": True,
+                "ai_override_reason": (
+                    f"tendência alinhada em {exec_direction} sem gatilho clássico confirmado"
+                ),
+                "trend_candidate_side": exec_direction,
+                "execution_direction": exec_direction,
+                "confirmation_direction": confirm_direction,
+            },
+        )
 
     def generate_trade_setup(
         self, 

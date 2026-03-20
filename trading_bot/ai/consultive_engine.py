@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 BRT = timezone(timedelta(hours=-3))
 VALID_DECISIONS = {"ENTER_NOW", "WAIT_PULLBACK", "REJECT"}
 VALID_RISK_GRADES = {"A", "B", "C", "D"}
+VALID_ENTRY_SIDES = {"LONG", "SHORT", "NONE"}
 DECISION_LABELS = {
     "ENTER_NOW": "Entrar agora",
     "WAIT_PULLBACK": "Aguardar correção",
@@ -51,6 +52,11 @@ RISK_LABELS = {
     "B": "Moderado",
     "C": "Alto",
     "D": "Muito alto",
+}
+SIDE_LABELS = {
+    "LONG": "Compra",
+    "SHORT": "Venda",
+    "NONE": "Nenhuma",
 }
 TEXT_ITEM_LABELS = {
     "low_volume": "Volume fraco",
@@ -76,8 +82,10 @@ Em reasons e invalidators, use linguagem humana. Não use snake_case, siglas sol
 Respeite as regras operacionais do payload.
 Se hedge_mode_enabled=true e opposite_side_entry_allowed=true, a existência de posição no lado oposto no mesmo símbolo NÃO é motivo suficiente para rejeitar a entrada.
 Só trate posição aberta no mesmo símbolo como impeditiva quando same_side_entry_blocked=true e same_side_position_open=true.
+Se allowed_entry_sides contiver apenas um lado, use somente esse lado ou NONE.
+Se decision=ENTER_NOW, entry_side precisa ser LONG ou SHORT e respeitar allowed_entry_sides.
 Retorne somente um JSON válido com:
-decision, confidence, timing_score, risk_grade, entry_window_min, entry_window_max, wait_seconds, reasons, invalidators, telegram_summary.
+decision, entry_side, confidence, timing_score, risk_grade, entry_window_min, entry_window_max, wait_seconds, reasons, invalidators, telegram_summary.
 Sem markdown. Sem texto fora do JSON.
 """.strip()
 
@@ -88,6 +96,10 @@ OPENAI_CONSULTIVE_SCHEMA: Dict[str, Any] = {
         "decision": {
             "type": "string",
             "enum": sorted(VALID_DECISIONS),
+        },
+        "entry_side": {
+            "type": "string",
+            "enum": sorted(VALID_ENTRY_SIDES),
         },
         "confidence": {
             "type": "integer",
@@ -134,6 +146,7 @@ OPENAI_CONSULTIVE_SCHEMA: Dict[str, Any] = {
     },
     "required": [
         "decision",
+        "entry_side",
         "confidence",
         "timing_score",
         "risk_grade",
@@ -204,6 +217,11 @@ def _translate_risk_grade(grade: str) -> str:
     return f"{label} ({token})" if token else label
 
 
+def _translate_side_name(side: str) -> str:
+    token = str(side or "").strip().upper()
+    return SIDE_LABELS.get(token, token.title() if token else "Nenhuma")
+
+
 def _humanize_wait_seconds(seconds: int) -> str:
     total = max(0, int(seconds or 0))
     if total == 0:
@@ -264,6 +282,7 @@ class ProviderReview:
     model: str
     status: str
     decision: str
+    entry_side: str
     confidence: int
     timing_score: int
     risk_grade: str
@@ -282,6 +301,7 @@ class ProviderReview:
             "model": self.model,
             "status": self.status,
             "decision": self.decision,
+            "entry_side": self.entry_side,
             "confidence": self.confidence,
             "timing_score": self.timing_score,
             "risk_grade": self.risk_grade,
@@ -299,6 +319,7 @@ class ProviderReview:
 class ConsultiveReview:
     status: str
     decision: str
+    entry_side: str
     approval: bool
     confidence: int
     timing_score: int
@@ -324,6 +345,7 @@ class ConsultiveReview:
         return {
             "status": self.status,
             "decision": self.decision,
+            "entry_side": self.entry_side,
             "approval": self.approval,
             "confidence": self.confidence,
             "timing_score": self.timing_score,
@@ -350,6 +372,7 @@ class ConsultiveReview:
         return {
             "status": self.status,
             "decision": self.decision,
+            "entry_side": self.entry_side,
             "approval": self.approval,
             "confidence": self.confidence,
             "timing_score": self.timing_score,
@@ -377,7 +400,7 @@ class ConsultiveEngine:
         self._review_cache: Dict[str, Dict[str, Any]] = {}
 
     def is_enabled(self) -> bool:
-        return str(getattr(self.config, "AI_CONSULTIVE_MODE", "off")).strip().lower() == "consultive"
+        return str(getattr(self.config, "AI_CONSULTIVE_MODE", "off")).strip().lower() in {"consultive", "gated"}
 
     def _reasoning_effort(self) -> str:
         raw = str(getattr(self.config, "AI_CONSULTIVE_REASONING_EFFORT", "low") or "low").strip().lower()
@@ -404,8 +427,26 @@ class ConsultiveEngine:
         should_open_short: bool,
         min_notional: float,
         sentiment_snapshot: Optional[Dict[str, Any]] = None,
+        requested_side: Optional[str] = None,
+        allowed_entry_sides: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
-        side = "LONG" if should_open_long and not should_open_short else "SHORT"
+        normalized_requested_side = str(requested_side or "").strip().upper()
+        if normalized_requested_side not in {"LONG", "SHORT"}:
+            if should_open_long and not should_open_short:
+                normalized_requested_side = "LONG"
+            elif should_open_short and not should_open_long:
+                normalized_requested_side = "SHORT"
+            else:
+                normalized_requested_side = "NONE"
+        normalized_allowed_sides = [
+            side
+            for side in [str(item or "").strip().upper() for item in (allowed_entry_sides or [])]
+            if side in {"LONG", "SHORT"}
+        ]
+        if not normalized_allowed_sides and normalized_requested_side in {"LONG", "SHORT"}:
+            normalized_allowed_sides = [normalized_requested_side]
+
+        side = normalized_requested_side
         closes = [float(item.get("close", 0) or 0) for item in klines]
         highs = [float(item.get("high", 0) or 0) for item in klines]
         lows = [float(item.get("low", 0) or 0) for item in klines]
@@ -430,9 +471,12 @@ class ConsultiveEngine:
         if side == "LONG":
             stop_distance_percent = ((current_price - stop_loss) / current_price * 100.0) if current_price > 0 and stop_loss > 0 else 0.0
             take_distance_percent = ((take_profit - current_price) / current_price * 100.0) if current_price > 0 and take_profit > 0 else 0.0
-        else:
+        elif side == "SHORT":
             stop_distance_percent = ((stop_loss - current_price) / current_price * 100.0) if current_price > 0 and stop_loss > 0 else 0.0
             take_distance_percent = ((current_price - take_profit) / current_price * 100.0) if current_price > 0 and take_profit > 0 else 0.0
+        else:
+            stop_distance_percent = 0.0
+            take_distance_percent = 0.0
 
         risk_reward = (
             take_distance_percent / max(stop_distance_percent, 1e-9)
@@ -446,7 +490,7 @@ class ConsultiveEngine:
             for pos in open_positions
             if str(pos.get("symbol", "")).upper() == str(symbol or "").upper()
         ]
-        opposite_side = "SHORT" if side == "LONG" else "LONG"
+        opposite_side = "SHORT" if side == "LONG" else "LONG" if side == "SHORT" else ""
 
         metadata = dict(getattr(setup, "metadata", {}) or {})
         snapshot: Dict[str, Any] = {
@@ -456,6 +500,7 @@ class ConsultiveEngine:
             "entry_mode": str(entry_mode or "strong_only"),
             "signal": str(signal_name or ""),
             "side": side,
+            "allowed_entry_sides": list(normalized_allowed_sides),
             "execution_timeframe": str(execution_timeframe or ""),
             "confirmation_timeframe": str(confirmation_timeframe or ""),
             "current_price": round(current_price, 8),
@@ -479,8 +524,8 @@ class ConsultiveEngine:
             "hedge_mode_enabled": True,
             "opposite_side_entry_allowed": True,
             "same_side_entry_blocked": True,
-            "same_side_position_open": side in same_symbol_sides,
-            "opposite_side_position_open": opposite_side in same_symbol_sides,
+            "same_side_position_open": side in same_symbol_sides if side in {"LONG", "SHORT"} else False,
+            "opposite_side_position_open": opposite_side in same_symbol_sides if opposite_side else False,
         }
 
         if available_balance:
@@ -503,6 +548,14 @@ class ConsultiveEngine:
                 key: value for key, value in range_fields.items()
                 if value is not None and value != ""
             }
+            source_signal = str(metadata.get("source_signal", "") or "").strip().upper()
+            if source_signal:
+                snapshot["source_signal"] = source_signal
+            if metadata.get("ai_override_from_neutral"):
+                snapshot["ai_override_from_neutral"] = True
+            candidate_reason = str(metadata.get("ai_override_reason", "") or "").strip()
+            if candidate_reason:
+                snapshot["ai_override_reason"] = candidate_reason[:160]
         else:
             snapshot["setup_metadata"] = {}
 
@@ -521,6 +574,7 @@ class ConsultiveEngine:
             return ConsultiveReview(
                 status="skipped",
                 decision="SKIPPED",
+                entry_side="NONE",
                 approval=False,
                 confidence=0,
                 timing_score=0,
@@ -562,6 +616,7 @@ class ConsultiveEngine:
             signal=signal_name,
             side=side,
             cache_key=cache_key,
+            allowed_entry_sides=snapshot.get("allowed_entry_sides"),
         )
 
         notify_rejected = bool(getattr(self.config, "AI_CONSULTIVE_NOTIFY_REJECTED", False))
@@ -581,6 +636,7 @@ class ConsultiveEngine:
         signal_text = _translate_signal_name(review.signal)
         strategy_text = _translate_strategy_name(review.strategy_name)
         risk_text = _translate_risk_grade(review.risk_grade)
+        side_text = _translate_side_name(review.entry_side)
 
         entry_window = ""
         if review.entry_window_min is not None and review.entry_window_max is not None:
@@ -600,6 +656,10 @@ class ConsultiveEngine:
             f"   • {html.escape(_humanize_text_item(item))}" for item in review.invalidators[:3]
         ) or "   • sem ponto de atenção"
 
+        mode_text = "Modo consultivo: não bloqueia a execução automática."
+        if str(review.mode or "").strip().lower() == "gated":
+            mode_text = "Modo com gate: só entra quando a IA aprova o setup."
+
         timestamp = datetime.now(BRT).strftime("%H:%M:%S")
         return f"""
 🤖 <b>IA CONSULTIVA</b> <i>({timestamp})</i>
@@ -608,6 +668,7 @@ class ConsultiveEngine:
 📍 <b>Par:</b> {html.escape(review.symbol.replace("USDT", ""))}/USDT
 🤖 <b>Estratégia:</b> {html.escape(strategy_text)}
 📊 <b>Sinal:</b> {html.escape(signal_text)}
+🧭 <b>Direção sugerida:</b> {html.escape(side_text)}
 🧠 <b>Ação sugerida:</b> {html.escape(decision_text)}
 📈 <b>Confiança:</b> {review.confidence}/100
 ⚠️ <b>Risco:</b> {html.escape(risk_text)}
@@ -621,7 +682,7 @@ class ConsultiveEngine:
 <b>⚠️ Pontos de atenção:</b>
 {invalidators}
 
-<i>Modo consultivo: não bloqueia a execução automática.</i>
+<i>{html.escape(mode_text)}</i>
 ━━━━━━━━━━━━━━━━━━━━━
 """.strip()
 
@@ -678,6 +739,7 @@ class ConsultiveEngine:
                 model=model,
                 status="error",
                 decision="REJECT",
+                entry_side="NONE",
                 confidence=0,
                 timing_score=0,
                 risk_grade="C",
@@ -700,6 +762,7 @@ class ConsultiveEngine:
                 model=model,
                 status="error",
                 decision="REJECT",
+                entry_side="NONE",
                 confidence=0,
                 timing_score=0,
                 risk_grade="C",
@@ -723,6 +786,7 @@ class ConsultiveEngine:
                 model=model,
                 status="ok",
                 decision="REJECT",
+                entry_side="NONE",
                 confidence=0,
                 timing_score=0,
                 risk_grade="D",
@@ -752,6 +816,7 @@ class ConsultiveEngine:
                 model=model,
                 status="error",
                 decision="REJECT",
+                entry_side="NONE",
                 confidence=0,
                 timing_score=0,
                 risk_grade="C",
@@ -878,6 +943,9 @@ class ConsultiveEngine:
         decision = str(payload.get("decision", "REJECT") or "REJECT").strip().upper()
         if decision not in VALID_DECISIONS:
             decision = "REJECT"
+        entry_side = str(payload.get("entry_side", "NONE") or "NONE").strip().upper()
+        if entry_side not in VALID_ENTRY_SIDES:
+            entry_side = "NONE"
 
         confidence = _clamp_int(payload.get("confidence"), 0, 100, 0)
         timing_score = _clamp_int(payload.get("timing_score"), 0, 10, 0)
@@ -899,6 +967,7 @@ class ConsultiveEngine:
             model=model,
             status="ok",
             decision=decision,
+            entry_side=entry_side,
             confidence=confidence,
             timing_score=timing_score,
             risk_grade=risk_grade,
@@ -920,6 +989,7 @@ class ConsultiveEngine:
         signal: str,
         side: str,
         cache_key: str,
+        allowed_entry_sides: Any = None,
     ) -> ConsultiveReview:
         valid_reviews = [review for review in provider_reviews if review.status == "ok"]
         if not valid_reviews:
@@ -930,6 +1000,7 @@ class ConsultiveEngine:
             return ConsultiveReview(
                 status="error",
                 decision="SKIPPED",
+                entry_side="NONE",
                 approval=False,
                 confidence=0,
                 timing_score=0,
@@ -953,6 +1024,7 @@ class ConsultiveEngine:
 
         chosen = valid_reviews[0]
         final_decision = chosen.decision
+        final_entry_side = chosen.entry_side
         final_confidence = chosen.confidence
         final_timing = chosen.timing_score
         final_risk = chosen.risk_grade
@@ -969,11 +1041,21 @@ class ConsultiveEngine:
             100,
             80,
         )
-        approval = final_decision == "ENTER_NOW" and final_confidence >= min_confidence
+        allowed_sides = [
+            item
+            for item in [str(value or "").strip().upper() for value in (allowed_entry_sides or [])]
+            if item in {"LONG", "SHORT"}
+        ]
+        approval = (
+            final_decision == "ENTER_NOW"
+            and final_confidence >= min_confidence
+            and final_entry_side in allowed_sides
+        )
 
         return ConsultiveReview(
             status="ok",
             decision=final_decision,
+            entry_side=final_entry_side,
             approval=approval,
             confidence=final_confidence,
             timing_score=final_timing,
