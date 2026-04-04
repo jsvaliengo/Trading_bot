@@ -1643,6 +1643,49 @@ def test_setup_exchange_restores_open_positions_for_reentry_tracking(monkeypatch
     assert bot.known_positions["ETHUSDT_LONG"]["quantity"] == 0.4
 
 
+def test_check_for_deposit_updates_capital_and_refreshes_snapshot(monkeypatch):
+    bot = _make_light_bot()
+
+    strategy_refresh_calls = []
+    save_state_calls = []
+    telegram_messages = []
+
+    bot.initial_capital = 200.0
+    bot.last_transfer_check_ts_ms = 1_000
+    bot.processed_transfer_ids = []
+    bot.telegram = SimpleNamespace(
+        send_message=lambda message: telegram_messages.append(message) or True
+    )
+    bot.exchange = SimpleNamespace(
+        get_income_history=lambda **_kwargs: [
+            {"time": 2_000, "asset": "USDT", "income": "100.0", "tranId": "abc123"}
+        ],
+        get_account_info=lambda: {
+            "wallet_balance": 300.0,
+            "unrealized_pnl": 0.0,
+        },
+        get_daily_pnl_from_binance=lambda: {"total": 0.0},
+    )
+    bot.check_and_update_binance_strategy = lambda: strategy_refresh_calls.append(True)
+    bot.save_state = lambda: save_state_calls.append(True) or True
+
+    monkeypatch.setattr(config, "CAPITAL_TRANSFER_DETECTION_ENABLED", True)
+    monkeypatch.setattr(config, "CAPITAL_TRANSFER_MIN_ABS_USDT", 1.0)
+    monkeypatch.setattr(config, "CAPITAL_TRANSFER_TRACKED_IDS_LIMIT", 500)
+    monkeypatch.setattr(config, "USE_BINANCE_STRATEGY", True)
+
+    detected = bot.check_for_deposit()
+
+    assert detected is True
+    assert bot.initial_capital == 300.0
+    assert bot.processed_transfer_ids == ["tranId:abc123"]
+    assert strategy_refresh_calls == [True]
+    assert save_state_calls == [True]
+    assert len(bot.portfolio_history) == 1
+    assert bot.portfolio_history[0]["balance"] == 300.0
+    assert telegram_messages
+
+
 def test_sort_binance_coins_by_score_uses_dynamic_binance_universe(monkeypatch):
     bot = _make_light_bot()
 

@@ -562,6 +562,13 @@ class TradingConfig:
     # usado no cálculo de risco global.
     CAPITAL_TRANSFER_DETECTION_ENABLED: bool = True
 
+    # Intervalo de checagem de movimentações de capital (depósito/saque).
+    # Mantido separado do loop principal para reagir mais rápido a aportes.
+    CAPITAL_TRANSFER_CHECK_INTERVAL_SECONDS: int = _env_int(
+        "TRADING_BOT_CAPITAL_TRANSFER_CHECK_INTERVAL_SECONDS",
+        60,
+    )
+
     # Ignora transferências muito pequenas (ruído)
     CAPITAL_TRANSFER_MIN_ABS_USDT: float = 1.0
 
@@ -1135,6 +1142,9 @@ class TradingConfig:
 
         if self.CAPITAL_TRANSFER_MIN_ABS_USDT < 0:
             errors.append("⚠️  ALERTA: CAPITAL_TRANSFER_MIN_ABS_USDT deve ser >= 0!")
+
+        if self.CAPITAL_TRANSFER_CHECK_INTERVAL_SECONDS < 5:
+            errors.append("⚠️  ALERTA: CAPITAL_TRANSFER_CHECK_INTERVAL_SECONDS deve ser >= 5 segundos!")
 
         if self.CAPITAL_TRANSFER_TRACKED_IDS_LIMIT < 100:
             errors.append("⚠️  ALERTA: CAPITAL_TRANSFER_TRACKED_IDS_LIMIT deve ser >= 100!")

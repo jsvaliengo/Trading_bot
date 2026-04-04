@@ -1719,22 +1719,22 @@ class TradingBot:
         if len(self.processed_transfer_ids) > tracked_limit:
             self.processed_transfer_ids = self.processed_transfer_ids[-tracked_limit:]
     
-    def check_for_deposit(self):
+    def check_for_deposit(self) -> bool:
         """
         Detecta TRANSFER (entrada/saída) na Futures e ajusta capital base.
 
         Usa incomeType=TRANSFER da Binance para evitar falso positivo por P&L.
         """
         if not config.CAPITAL_TRANSFER_DETECTION_ENABLED:
-            return
+            return False
 
         if self.initial_capital is None:
-            return
+            return False
 
         now_ts_ms = int(time.time() * 1000)
         if self.last_transfer_check_ts_ms <= 0:
             self.last_transfer_check_ts_ms = now_ts_ms
-            return
+            return False
 
         try:
             # Sobrepõe 60s entre janelas para não perder evento no limite.
@@ -1747,7 +1747,7 @@ class TradingBot:
 
             if not transfer_events:
                 self.last_transfer_check_ts_ms = now_ts_ms
-                return
+                return False
 
             known_ids = set(self.processed_transfer_ids)
             min_abs = max(0.0, float(config.CAPITAL_TRANSFER_MIN_ABS_USDT))
@@ -1791,7 +1791,7 @@ class TradingBot:
             self.last_transfer_check_ts_ms = max(now_ts_ms, latest_event_ts)
 
             if not relevant_events:
-                return
+                return False
 
             old_initial_capital = float(self.initial_capital)
             new_initial_capital = old_initial_capital + net_transfer_usdt
@@ -1822,21 +1822,39 @@ class TradingBot:
                 event_lines.append(f"• {event_time}: <code>${event['amount']:+.2f}</code>")
             events_text = "\n".join(event_lines)
 
-            self.telegram.send_message(
-                f"{movement_emoji} <b>MOVIMENTAÇÃO DE CAPITAL DETECTADA</b>\n\n"
-                f"📥📤 <b>Tipo:</b> {movement_type}\n"
-                f"💵 <b>Variação líquida:</b> <code>${net_transfer_usdt:+.2f}</code>\n"
-                f"🧮 <b>Capital base (SL global):</b>\n"
-                f"   • Anterior: <code>${old_initial_capital:.2f}</code>\n"
-                f"   • Novo: <code>${new_initial_capital:.2f}</code>\n\n"
-                f"<b>Últimos eventos:</b>\n{events_text}"
-            )
+            telegram = getattr(self, "telegram", None)
+            if telegram is not None and hasattr(telegram, "send_message"):
+                telegram.send_message(
+                    f"{movement_emoji} <b>MOVIMENTAÇÃO DE CAPITAL DETECTADA</b>\n\n"
+                    f"📥📤 <b>Tipo:</b> {movement_type}\n"
+                    f"💵 <b>Variação líquida:</b> <code>${net_transfer_usdt:+.2f}</code>\n"
+                    f"🧮 <b>Capital base (SL global):</b>\n"
+                    f"   • Anterior: <code>${old_initial_capital:.2f}</code>\n"
+                    f"   • Novo: <code>${new_initial_capital:.2f}</code>\n\n"
+                    f"<b>Últimos eventos:</b>\n{events_text}"
+                )
+
+            # Recalcula imediatamente a faixa/estratégia baseada no saldo novo.
+            if config.USE_BINANCE_STRATEGY:
+                try:
+                    self.check_and_update_binance_strategy()
+                except Exception as exc:
+                    logger.warning(f"⚠️ Falha ao atualizar estratégia após transferência: {exc}")
+
+            # Força snapshot para refletir o novo saldo sem esperar a janela de 30 min.
+            try:
+                self.last_snapshot_time = None
+                self.take_portfolio_snapshot()
+            except Exception as exc:
+                logger.warning(f"⚠️ Falha ao capturar snapshot após transferência: {exc}")
 
             # Persiste imediatamente para sobreviver reinício.
             self.save_state()
+            return True
 
         except Exception as e:
             logger.warning(f"⚠️ Erro ao detectar transferência de capital: {e}")
+            return False
     
     def check_and_update_binance_strategy(self):
         """
@@ -4901,7 +4919,10 @@ class TradingBot:
         state_save_interval = base_interval * 30
         commission_update_interval = base_interval * 360
         self._pair_update_interval = base_interval * 2160
-        deposit_check_interval = base_interval * 60
+        deposit_check_interval = max(
+            5,
+            int(getattr(config, "CAPITAL_TRANSFER_CHECK_INTERVAL_SECONDS", 60) or 60),
+        )
         strategy_check_interval = base_interval * 60
 
         now = time.monotonic()
