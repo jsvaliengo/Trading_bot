@@ -454,7 +454,7 @@ class TradingBot:
             })
 
         return {
-            'version': '1.7',  # Persistência atômica com fallback de backup
+            'version': '1.8',  # Persistência atômica com fallback de backup
             'saved_at': datetime.now().isoformat(),
             'start_time': self.start_time.isoformat() if isinstance(self.start_time, datetime) else self.start_time,
             'initial_capital': self.initial_capital,
@@ -473,6 +473,9 @@ class TradingBot:
             'peak_prices': self.peak_prices,
             'trailing_activated': self.trailing_activated,
             'double_first_used': self.double_first_used,
+            'max_drawdown_from_peak_percent': float(
+                getattr(config, 'MAX_DRAWDOWN_FROM_PEAK_PERCENT', 0.0) or 0.0
+            ),
             'sentiment_mode_enabled': bool(self.sentiment_mode_enabled),
             'last_daily_performance_report_date': self.last_daily_performance_report_date,
             'last_transfer_check_ts_ms': int(self.last_transfer_check_ts_ms or 0),
@@ -614,6 +617,12 @@ class TradingBot:
             self.double_first_used = self._normalize_double_first_state(
                 state.get('double_first_used', {})
             )
+            saved_max_drawdown = state.get('max_drawdown_from_peak_percent')
+            if saved_max_drawdown is not None:
+                try:
+                    config.MAX_DRAWDOWN_FROM_PEAK_PERCENT = max(0.0, float(saved_max_drawdown))
+                except (TypeError, ValueError):
+                    pass
             self.sentiment_mode_enabled = bool(
                 state.get('sentiment_mode_enabled', self.sentiment_mode_enabled)
             )
