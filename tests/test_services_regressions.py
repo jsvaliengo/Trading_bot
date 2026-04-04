@@ -45,6 +45,9 @@ def _build_handler_with_full_stubs():
         def get_symbol_price(self, symbol):
             return 102.0
 
+        def get_account_balance(self):
+            return 900.0
+
         def get_daily_pnl_from_binance(self):
             return {
                 "realized_pnl": 5.5,
@@ -68,6 +71,7 @@ def _build_handler_with_full_stubs():
         TAKE_PROFIT_PERCENT=2.0,
         STOP_LOSS_PERCENT=1.0,
         USE_INDIVIDUAL_STOP_LOSS=True,
+        MAX_DRAWDOWN_FROM_PEAK_PERCENT=30.0,
         TRAILING_ACTIVATION_PERCENT=0.5,
         TRAILING_DISTANCE_PERCENT=0.25,
         SENTIMENT_TIMEFRAME="1h",
@@ -162,6 +166,8 @@ def _build_handler_with_full_stubs():
         total_pnl=9.5,
         trades_win_count=3,
         trades_loss_count=1,
+        peak_equity=1200.0,
+        peak_equity_ts=None,
         exchange=exchange,
         binance_strategy={"capital_range": "0-1k", "order_size": 5.0, "num_coins": 3},
         sentiment_mode_enabled=False,
@@ -299,6 +305,7 @@ def test_all_registered_commands_have_smoke_path():
         ("/ordersize 6", None),
         ("/tp 3", None),
         ("/sl 1", None),
+        ("/drawdown", None),
         ("/trailing 0.7 0.3", None),
         ("/closeall confirm", None),
         ("/help", None),
@@ -504,6 +511,42 @@ def test_dailyreport_command_toggles_auto_and_sends_now():
 
     handler.cmd_dailyreport(["now"])
     assert calls == [True]
+
+
+def test_drawdown_command_reports_status_and_can_disable():
+    handler, bot, config, messages, events = _build_handler_with_full_stubs()
+
+    handler.cmd_drawdown([])
+    assert "DRAWDOWN DESDE O PICO" in messages[-1]
+    assert "25.00%" in messages[-1]
+    assert "NÃO" in messages[-1]
+
+    handler.cmd_drawdown(["off"])
+
+    assert config.MAX_DRAWDOWN_FROM_PEAK_PERCENT == 0.0
+    assert events[-1] == ("save_state",)
+    assert "DESATIVADA" in messages[-1]
+
+
+def test_drawdown_command_resets_peak_to_current_balance():
+    handler, bot, _config, messages, events = _build_handler_with_full_stubs()
+
+    handler.cmd_drawdown(["reset"])
+
+    assert bot.peak_equity == 900.0
+    assert bot.peak_equity_ts is not None
+    assert events[-1] == ("save_state",)
+    assert "PICO DE EQUITY RESETADO" in messages[-1]
+
+
+def test_drawdown_command_updates_limit_and_warns_when_still_blocked():
+    handler, _bot, config, messages, events = _build_handler_with_full_stubs()
+
+    handler.cmd_drawdown(["20"])
+
+    assert config.MAX_DRAWDOWN_FROM_PEAK_PERCENT == 20.0
+    assert events[-1] == ("save_state",)
+    assert "continuarão bloqueadas" in messages[-1]
 
 
 def test_start_does_not_fake_restart_when_process_is_stopped():

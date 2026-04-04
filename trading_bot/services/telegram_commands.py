@@ -79,6 +79,7 @@ class TelegramCommandHandler:
             '/ordersize': self.cmd_ordersize,
             '/tp': self.cmd_take_profit,
             '/sl': self.cmd_stop_loss,
+            '/drawdown': self.cmd_drawdown,
             '/trailing': self.cmd_trailing,
             '/closeall': self.cmd_close_all,
             '/help': self.cmd_help,
@@ -373,6 +374,37 @@ class TelegramCommandHandler:
                 self.bot.save_state()
             except Exception as e:
                 logger.warning(f"⚠️ Falha ao salvar estado após comando Telegram: {e}")
+
+    def _get_drawdown_snapshot(self) -> dict[str, Any]:
+        """Monta snapshot do drawdown desde o pico para uso nos comandos Telegram."""
+        limit_pct = float(getattr(self.config, "MAX_DRAWDOWN_FROM_PEAK_PERCENT", 0) or 0)
+        peak_equity = float(getattr(self.bot, "peak_equity", 0) or 0)
+        peak_ts = getattr(self.bot, "peak_equity_ts", None)
+        current_balance = None
+        drawdown_pct = None
+        blocked = False
+        balance_error = None
+
+        exchange = getattr(self.bot, "exchange", None) if self.bot is not None else None
+        if exchange is not None and hasattr(exchange, "get_account_balance"):
+            try:
+                current_balance = float(exchange.get_account_balance())
+            except Exception as exc:
+                balance_error = str(exc)
+
+        if peak_equity > 0 and current_balance is not None and current_balance > 0:
+            drawdown_pct = max(0.0, (peak_equity - current_balance) / peak_equity * 100)
+            blocked = bool(limit_pct > 0 and drawdown_pct >= limit_pct)
+
+        return {
+            "limit_pct": limit_pct,
+            "peak_equity": peak_equity,
+            "peak_ts": peak_ts,
+            "current_balance": current_balance,
+            "drawdown_pct": drawdown_pct,
+            "blocked": blocked,
+            "balance_error": balance_error,
+        }
     
     def start_polling(self):
         """Inicia o polling de comandos em uma thread separada."""
@@ -698,6 +730,20 @@ class TelegramCommandHandler:
         if self.config is None:
             self.send_message("❌ Config não disponível")
             return
+
+        drawdown = self._get_drawdown_snapshot() if self.bot is not None else {}
+        drawdown_limit = float(drawdown.get("limit_pct", 0) or 0)
+        drawdown_limit_display = "OFF" if drawdown_limit <= 0 else f"{drawdown_limit:.2f}%"
+        peak_equity = float(drawdown.get("peak_equity", 0) or 0)
+        current_balance = drawdown.get("current_balance")
+        drawdown_pct = drawdown.get("drawdown_pct")
+        peak_display = self._format_usd_brl(peak_equity, 2, False) if peak_equity > 0 else "n/d"
+        current_display = (
+            self._format_usd_brl(float(current_balance), 2, False)
+            if current_balance is not None and float(current_balance) >= 0
+            else "n/d"
+        )
+        drawdown_display = f"{float(drawdown_pct):.2f}%" if drawdown_pct is not None else "n/d"
         
         # Estratégia Binance
         if self.config.USE_BINANCE_STRATEGY and hasattr(self.bot, 'binance_strategy') and self.bot.binance_strategy:
@@ -734,6 +780,12 @@ class TelegramCommandHandler:
    • Multiplicador: <code>{self.config.DOUBLE_FIRST_MULTIPLIER:.2f}x</code>
    • Cap de margem: <code>{self._format_usd_brl(self.config.DOUBLE_FIRST_MAX_MARGIN_USDT, 2, False) if self.config.DOUBLE_FIRST_MAX_MARGIN_USDT > 0 else 'sem limite'}</code>
    • Escopo: <code>{self.config.DOUBLE_FIRST_SCOPE}</code>
+
+📉 <b>DRAWDOWN:</b>
+   • Limite: <code>{drawdown_limit_display}</code>
+   • Pico da sessão: <code>{peak_display}</code>
+   • Equity atual: <code>{current_display}</code>
+   • Drawdown atual: <code>{drawdown_display}</code>
 
 🎯 <b>METAS DIÁRIAS:</b> {'Ativas' if self.config.USE_DAILY_TARGETS else 'Desativadas'}
 {strategy_info}
@@ -1417,7 +1469,125 @@ class TelegramCommandHandler:
             
         except ValueError:
             self.send_message("❌ Valor inválido.\n\nExemplos:\n• <code>/sl 5</code>\n• <code>/sl on</code>\n• <code>/sl off</code>")
-    
+
+    def cmd_drawdown(self, args: list):
+        """Consulta, ajusta ou reseta a proteção de drawdown desde o pico."""
+        if self.config is None or self.bot is None:
+            self.send_message("❌ Bot/config não disponível")
+            return
+
+        snapshot = self._get_drawdown_snapshot()
+        limit_pct = float(snapshot["limit_pct"])
+        peak_equity = float(snapshot["peak_equity"])
+        current_balance = snapshot["current_balance"]
+        drawdown_pct = snapshot["drawdown_pct"]
+        peak_ts = snapshot["peak_ts"]
+        limit_display = "OFF" if limit_pct <= 0 else f"{limit_pct:.2f}%"
+        peak_display = self._format_usd_brl(peak_equity, 2, False) if peak_equity > 0 else "n/d"
+        current_display = (
+            self._format_usd_brl(float(current_balance), 2, False)
+            if current_balance is not None and float(current_balance) >= 0
+            else "n/d"
+        )
+        drawdown_display = f"{float(drawdown_pct):.2f}%" if drawdown_pct is not None else "n/d"
+        peak_ts_display = peak_ts.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC") if isinstance(peak_ts, datetime) else "n/d"
+        blocked_display = "SIM" if snapshot["blocked"] else "NÃO"
+
+        if not args or args[0].strip().lower() in {"status", "info"}:
+            extra = ""
+            if snapshot["balance_error"]:
+                extra = f"\n⚠️ Saldo atual indisponível: <code>{snapshot['balance_error']}</code>"
+            self.send_message(
+                f"📉 <b>DRAWDOWN DESDE O PICO</b>\n\n"
+                f"• Limite: <code>{limit_display}</code>\n"
+                f"• Pico da sessão: <code>{peak_display}</code>\n"
+                f"• Pico registrado em: <code>{peak_ts_display}</code>\n"
+                f"• Equity atual: <code>{current_display}</code>\n"
+                f"• Drawdown atual: <code>{drawdown_display}</code>\n"
+                f"• Entradas bloqueadas: <code>{blocked_display}</code>"
+                f"{extra}\n\n"
+                f"Uso:\n"
+                f"• <code>/drawdown reset</code>\n"
+                f"• <code>/drawdown off</code>\n"
+                f"• <code>/drawdown 40</code>"
+            )
+            return
+
+        action = args[0].strip().lower()
+
+        if action in {"reset", "clear"}:
+            if current_balance is not None and float(current_balance) > 0:
+                self.bot.peak_equity = float(current_balance)
+                self.bot.peak_equity_ts = datetime.now(timezone.utc)
+                self._persist_runtime_state()
+                self.send_message(
+                    f"✅ <b>PICO DE EQUITY RESETADO</b>\n\n"
+                    f"• Novo pico: <code>{self._format_usd_brl(float(current_balance), 2, False)}</code>\n"
+                    f"• Limite atual: <code>{limit_display}</code>\n\n"
+                    f"Novas entradas deixam de ser bloqueadas por esse drawdown acumulado."
+                )
+                return
+
+            self.bot.peak_equity = 0.0
+            self.bot.peak_equity_ts = None
+            self._persist_runtime_state()
+            self.send_message(
+                "✅ <b>PICO DE EQUITY LIMPO</b>\n\n"
+                "Não foi possível ler o saldo atual, então o pico foi zerado.\n"
+                "No próximo ciclo o bot recalcula a referência automaticamente."
+            )
+            return
+
+        if action in {"off", "disable"}:
+            self.config.MAX_DRAWDOWN_FROM_PEAK_PERCENT = 0.0
+            self._persist_runtime_state()
+            self.send_message(
+                "✅ <b>PROTEÇÃO DE DRAWDOWN DESATIVADA</b>\n\n"
+                "O bot não vai mais bloquear novas entradas por drawdown desde o pico."
+            )
+            return
+
+        try:
+            new_limit = float(action)
+        except ValueError:
+            self.send_message(
+                "❌ Opção inválida.\n\n"
+                "Use:\n"
+                "• <code>/drawdown</code>\n"
+                "• <code>/drawdown reset</code>\n"
+                "• <code>/drawdown off</code>\n"
+                "• <code>/drawdown 40</code>"
+            )
+            return
+
+        if new_limit < 0 or new_limit > 100:
+            self.send_message("❌ O limite de drawdown deve ficar entre 0% e 100%.")
+            return
+
+        self.config.MAX_DRAWDOWN_FROM_PEAK_PERCENT = new_limit
+        self._persist_runtime_state()
+
+        suffix = ""
+        if drawdown_pct is not None and new_limit > 0:
+            if float(drawdown_pct) >= new_limit:
+                suffix = (
+                    f"\n\n⚠️ O drawdown atual ainda está em <code>{float(drawdown_pct):.2f}%</code>."
+                    f"\nNovas entradas continuarão bloqueadas até você usar <code>/drawdown reset</code>"
+                    f"\nou aumentar mais o limite."
+                )
+            else:
+                suffix = (
+                    f"\n\n✅ Com drawdown atual em <code>{float(drawdown_pct):.2f}%</code>,"
+                    f"\nas novas entradas já ficam liberadas."
+                )
+
+        state_label = "desativado" if new_limit == 0 else f"{new_limit:.2f}%"
+        self.send_message(
+            f"✅ <b>LIMITE DE DRAWDOWN ATUALIZADO</b>\n\n"
+            f"• Novo limite: <code>{state_label}</code>"
+            f"{suffix}"
+        )
+
     def cmd_trailing(self, args: list):
         """Altera configurações do Trailing Stop."""
         if self.config is None:
@@ -1645,6 +1815,7 @@ class TelegramCommandHandler:
 /ordersize [valor] - Tamanho ordem
 /tp [valor] - Take Profit %
 /sl [valor/on/off] - Stop Loss %
+/drawdown [valor/off/reset] - Limite e reset
 /trailing [ativ] [dist] - Trailing
 
 <b>🧠 ESTRATÉGIAS:</b>
@@ -1665,6 +1836,7 @@ class TelegramCommandHandler:
 • <code>/sentiment on</code>
 • <code>/sentiment SOL</code>
 • <code>/sl off</code>
+• <code>/drawdown reset</code>
 • <code>/trailing 0.5 0.25</code>
 • <code>/coins disable ETH SOL ADA</code>
 """

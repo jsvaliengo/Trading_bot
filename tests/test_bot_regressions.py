@@ -137,6 +137,19 @@ def test_save_state_writes_atomic_file_and_backup(tmp_path):
     assert (tmp_path / "bot_state.json.tmp").exists() is False
 
 
+def test_save_state_persists_runtime_drawdown_limit(tmp_path, monkeypatch):
+    bot = _make_light_bot()
+    state_file = tmp_path / "bot_state.json"
+    bot._state_file_path = str(state_file)
+
+    monkeypatch.setattr(config, "MAX_DRAWDOWN_FROM_PEAK_PERCENT", 42.5)
+
+    assert bot.save_state() is True
+
+    persisted = json.loads(state_file.read_text(encoding="utf-8"))
+    assert persisted["max_drawdown_from_peak_percent"] == 42.5
+
+
 def test_load_state_uses_backup_when_primary_is_corrupted(tmp_path):
     bot = _make_light_bot()
     state_file = tmp_path / "bot_state.json"
@@ -159,6 +172,26 @@ def test_load_state_uses_backup_when_primary_is_corrupted(tmp_path):
     assert bot.load_state() is True
     assert bot.closed_trades_count == 9
     assert bot.total_pnl == 12.34
+
+
+def test_load_state_restores_runtime_drawdown_limit(tmp_path, monkeypatch):
+    bot = _make_light_bot()
+    state_file = tmp_path / "bot_state.json"
+    bot._state_file_path = str(state_file)
+
+    monkeypatch.setattr(config, "MAX_DRAWDOWN_FROM_PEAK_PERCENT", 30.0)
+    state_file.write_text(
+        json.dumps(
+            {
+                "daily_date": datetime.utcnow().strftime("%Y-%m-%d"),
+                "max_drawdown_from_peak_percent": 55.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert bot.load_state() is True
+    assert config.MAX_DRAWDOWN_FROM_PEAK_PERCENT == 55.0
 
 
 def test_load_state_ignores_backup_when_primary_is_empty(tmp_path):
