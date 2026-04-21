@@ -389,7 +389,7 @@ class TradingConfig:
     
     # Take Profit em percentual (continua ativo por posição)
     # Com trades de $6.25, 50% = $3.12 de lucro por trade
-    TAKE_PROFIT_PERCENT: float = 1.5  # Scalp real: sai rápido com lucro modesto
+    TAKE_PROFIT_PERCENT: float = _env_float("TRADING_BOT_TAKE_PROFIT_PERCENT", 1.5)
     
     # ============================================
     # TRAILING STOP (Stop Móvel)
@@ -418,8 +418,11 @@ class TradingConfig:
     # NOTA: Breakeven = 0.10% (taxa taker 0.05% × 2 ordens)
     
     USE_TRAILING_STOP: bool = True
-    TRAILING_ACTIVATION_PERCENT: float = 0.40   # Ativa mais cedo pra proteger ganhos pequenos
-    TRAILING_DISTANCE_PERCENT: float = 0.50     # Distância maior pra não stopar por ruído
+    # Invariante: ACTIVATION >= DISTANCE + ~0.15% (fee_floor do breakeven lock).
+    # Se violada, o breakeven floor pina o stop em ~+0.15% da entrada até o pico
+    # subir além de DISTANCE+fee_floor, esmagando o trailing. Ver validate_params().
+    TRAILING_ACTIVATION_PERCENT: float = _env_float("TRADING_BOT_TRAILING_ACTIVATION_PERCENT", 0.70)
+    TRAILING_DISTANCE_PERCENT: float = _env_float("TRADING_BOT_TRAILING_DISTANCE_PERCENT", 0.40)
     # TRAILING_MIN_PROFIT_USD removido — gate em USD bloqueava fechamento em posições pequenas
     # (order=$3 × 10x = $30 notional → profit_usd < $0.20 na ativação)
     
@@ -1236,10 +1239,25 @@ class TradingConfig:
 
         if self.LOOP_OVERRUN_FACTOR < 1.0:
             errors.append("⚠️  ALERTA: LOOP_OVERRUN_FACTOR deve ser >= 1.0!")
-        
+
+        # Breakeven lock no trailing pina o stop em ~+0.15% (taker 0.05% × 2 + 0.05%
+        # de margem) até o pico subir DISTANCE acima disso. Se ACTIVATION < DISTANCE
+        # + 0.15%, o trailing ativa mas o stop já nasce achatado contra o breakeven,
+        # fechando a posição em micro-retração sem trailing efetivo.
+        if self.USE_TRAILING_STOP:
+            fee_floor_pct = 0.15
+            min_activation = self.TRAILING_DISTANCE_PERCENT + fee_floor_pct
+            if self.TRAILING_ACTIVATION_PERCENT < min_activation:
+                errors.append(
+                    f"⚠️  ALERTA: TRAILING_ACTIVATION_PERCENT ({self.TRAILING_ACTIVATION_PERCENT:.2f}%) "
+                    f"é menor que TRAILING_DISTANCE_PERCENT + ~0.15% fee_floor ({min_activation:.2f}%). "
+                    "O breakeven lock vai pinar o stop em ~+0.15% da entrada e o trailing "
+                    "nunca vai respirar. Aumente ACTIVATION ou diminua DISTANCE."
+                )
+
         for error in errors:
             logger.warning(error)
-        
+
         return len(errors) == 0
 
 
