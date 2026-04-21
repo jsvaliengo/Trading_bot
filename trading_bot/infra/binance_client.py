@@ -15,6 +15,9 @@ from typing import Any, Callable, Dict, List, Optional
 from binance.client import Client
 from binance.exceptions import BinanceAPIException, BinanceRequestException
 from ..core.config import config
+from ..observability import metrics
+from .binance_streams import WebSocketKlineStore
+from .binance_user_stream import UserStreamMonitor
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +54,72 @@ class BinanceConnection:
         self._symbol_info_cache_ttl: float = 21600.0  # 6 horas
         self._exchange_info_cache: Optional[Dict] = None
         self._exchange_info_cache_ts: float = 0.0
+
+        # Improvement 7: TTL cache para endpoints de alta frequência (account + funding_rate).
+        # Balance TTL curto (2s): saldo muda pouco entre ticks, mas nunca fica realmente stale.
+        # Funding rate TTL longo (60s): funding roda a cada 8h; a leitura é quase estável.
+        # Invalidação manual: invalidate_balance_cache() após place_market_order / close_position.
+        self._cache_lock = threading.Lock()
+        self._balance_cache: Optional[Dict[str, float]] = None  # {"wallet","available","ts"}
+        self._balance_cache_ttl: float = 2.0
+        self._funding_rate_cache: Dict[str, Dict[str, Any]] = {}  # symbol -> {"data","ts"}
+        # TTL longo: funding rate só muda a cada 8h no settlement. 5min dá hit rate
+        # > 95% mesmo com status print a cada 30s iterando 9 pares.
+        self._funding_rate_cache_ttl: float = 300.0
+        # Daily PnL: quase só muda quando trade fecha. Cache longo + invalidação
+        # junto do balance (via invalidate_balance_cache após place_market_order).
+        self._daily_pnl_cache: Optional[Dict[str, Any]] = None  # {"data","ts"}
+        self._daily_pnl_cache_ttl: float = 30.0
+        # Open positions cache (Fase 3.4 C): TTL curto pra não sacrificar
+        # precisão de trailing stop. Invalidado manualmente após place_market_order
+        # / close_position, e via WebSocket user stream (ACCOUNT_UPDATE) em tempo real.
+        self._positions_cache: Optional[Dict[str, Any]] = None  # {"data","ts"}
+        self._positions_cache_ttl: float = 5.0
+
+        # Improvement 8: WebSocket kline store (substitui REST polling em get_klines).
+        # Se habilitado, start() + subscribe por par/intervalo. REST é fallback automático.
+        # Kill switch via TRADING_BOT_WEBSOCKET_ENABLED=false.
+        self._ws_store: Optional[WebSocketKlineStore] = None
+        if bool(getattr(self.config, "WEBSOCKET_ENABLED", True)):
+            try:
+                self._ws_store = WebSocketKlineStore(
+                    api_key=self.config.API_KEY,
+                    api_secret=self.config.API_SECRET,
+                    testnet=bool(self.config.USE_TESTNET),
+                    rest_seed_fetcher=self._rest_get_klines,
+                    staleness_seconds=float(
+                        getattr(self.config, "WEBSOCKET_STALENESS_SECONDS", 30.0)
+                    ),
+                    # Seed 400 velas dá margem folgada sobre os 260 típicos da
+                    # estratégia, evitando miss em casos de borda.
+                    seed_limit=400,
+                )
+                if not self._ws_store.start():
+                    logger.warning("⚠️ WebSocketKlineStore não iniciou; seguindo com REST")
+                    self._ws_store = None
+            except Exception as exc:
+                logger.warning(f"⚠️ Falha ao criar WebSocketKlineStore: {exc}")
+                self._ws_store = None
+
+        # User stream (Fase 3.4 C): recebe ACCOUNT_UPDATE / ORDER_TRADE_UPDATE
+        # pra invalidar positions_cache em tempo real. Compartilha o TWM do
+        # ws_store — criar um segundo TWM no mesmo processo causa
+        # "This event loop is already running" no asyncio do Python 3.13.
+        self._user_stream: Optional[UserStreamMonitor] = None
+        shared_twm = self._ws_store.get_twm() if self._ws_store is not None else None
+        if shared_twm is not None:
+            try:
+                self._user_stream = UserStreamMonitor(
+                    twm=shared_twm,
+                    on_account_update=self._on_user_account_update,
+                    on_order_update=self._on_user_order_update,
+                )
+                if not self._user_stream.start():
+                    logger.warning("⚠️ UserStreamMonitor não iniciou; cache de posições só com TTL")
+                    self._user_stream = None
+            except Exception as exc:
+                logger.warning(f"⚠️ Falha ao criar UserStreamMonitor: {exc}")
+                self._user_stream = None
 
         # Inicializa o cliente
         if self.config.USE_TESTNET:
@@ -470,45 +539,156 @@ class BinanceConnection:
             logger.error(f"❌ Erro de conexão: {e}")
             raise ConnectionError(f"Não foi possível conectar à Binance: {e}")
     
-    def get_account_balance(self) -> float:
+    def _fetch_account_cached(self, force_refresh: bool = False) -> Dict[str, float]:
+        """
+        Retorna saldo wallet + available de Futuros, com cache TTL curto.
+
+        Consolida as duas leituras num único snapshot pra evitar chamadas
+        redundantes no mesmo tick (análise de 9 pares faria 18+ chamadas).
+
+        O cache é invalidado automaticamente após place_market_order e
+        close_position via `invalidate_balance_cache()`.
+        """
+        now = time.monotonic()
+        with self._cache_lock:
+            cached = self._balance_cache
+            if (not force_refresh) and cached and (now - cached["ts"]) < self._balance_cache_ttl:
+                metrics.record_cache_hit("balance")
+                return cached
+
+        metrics.record_cache_miss("balance")
+        try:
+            account = self._api_call("futures_account", self.client.futures_account)
+        except Exception as e:
+            logger.error(f"Erro ao obter account da Binance: {e}")
+            # Se temos cache stale, devolve ele em vez de zerar tudo — preserva decisão
+            # de risco razoável durante quedas transitórias de API.
+            with self._cache_lock:
+                if self._balance_cache:
+                    return self._balance_cache
+            return {"wallet": 0.0, "available": 0.0, "ts": now}
+
+        wallet = float(account.get('totalWalletBalance', 0) or 0)
+        available = 0.0
+        for asset in account.get('assets', []) or []:
+            if asset.get('asset') == 'USDT':
+                available = float(asset.get('availableBalance', 0) or 0)
+                break
+
+        snapshot = {"wallet": wallet, "available": available, "ts": time.monotonic()}
+        with self._cache_lock:
+            self._balance_cache = snapshot
+        return snapshot
+
+    def get_account_balance(self, force_refresh: bool = False) -> float:
         """
         Retorna o saldo TOTAL da carteira de FUTUROS (walletBalance).
-        
+
         Este é o valor que aparece na Binance como "Saldo da Carteira".
         Inclui a margem usada em posições abertas.
-        
-        Para saldo DISPONÍVEL (livre para novos trades), use get_available_balance()
+
+        Para saldo DISPONÍVEL (livre para novos trades), use get_available_balance().
+
+        Args:
+            force_refresh: Se True, ignora o cache e força chamada à API.
+                           Use após ordens que mudam estado (open/close position).
         """
-        try:
-            account = self._api_call("futures_account", self.client.futures_account)
-            
-            # Retorna o saldo TOTAL da carteira (não apenas o disponível)
-            wallet_balance = float(account.get('totalWalletBalance', 0))
-            return wallet_balance
-            
-        except Exception as e:
-            logger.error(f"Erro ao obter saldo de Futuros: {e}")
-            return 0.0
-    
-    def get_available_balance(self) -> float:
+        return self._fetch_account_cached(force_refresh=force_refresh)["wallet"]
+
+    def get_available_balance(self, force_refresh: bool = False) -> float:
         """
         Retorna o saldo DISPONÍVEL em USDT (livre para abrir novas posições).
-        
+
         Este valor é menor que o walletBalance quando há posições abertas,
         pois parte do saldo está sendo usada como margem.
+
+        Args:
+            force_refresh: Se True, ignora o cache e força chamada à API.
+                           Use após ordens que mudam estado (open/close position).
         """
-        try:
-            account = self._api_call("futures_account", self.client.futures_account)
-            
-            for asset in account.get('assets', []):
-                if asset['asset'] == 'USDT':
-                    return float(asset['availableBalance'])
-            
-            return 0.0
-            
-        except Exception as e:
-            logger.error(f"Erro ao obter saldo disponível: {e}")
-            return 0.0
+        return self._fetch_account_cached(force_refresh=force_refresh)["available"]
+
+    def invalidate_balance_cache(self) -> None:
+        """
+        Marca o cache de balance E daily_pnl como stale. Próxima leitura força fetch.
+        Chame após qualquer ação que mude o saldo (abertura/fechamento de posição,
+        ajuste de alavancagem em posição aberta, depósito/saque detectado).
+
+        daily_pnl é invalidado junto porque fechamento de posição afeta o P&L realizado.
+        """
+        with self._cache_lock:
+            self._balance_cache = None
+            self._daily_pnl_cache = None
+
+    # ------------------------------------------------------------------
+    # WebSocket kline streams (delegados ao _ws_store)
+    # ------------------------------------------------------------------
+
+    def subscribe_klines_stream(self, symbol: str, interval: str) -> bool:
+        """
+        Inscreve o par/intervalo no stream WS de klines.
+        No-op se WS está desligado. Safe de chamar múltiplas vezes.
+        """
+        if self._ws_store is None:
+            return False
+        return self._ws_store.subscribe(symbol, interval)
+
+    def unsubscribe_klines_stream(self, symbol: str, interval: str) -> None:
+        """Remove subscrição WS do par/intervalo. Idempotente."""
+        if self._ws_store is None:
+            return
+        self._ws_store.unsubscribe(symbol, interval)
+
+    def get_ws_stats(self) -> Optional[Dict[str, Any]]:
+        """Snapshot das métricas WS pra exportação Prometheus. None se desligado."""
+        if self._ws_store is None:
+            return None
+        return self._ws_store.get_stats()
+
+    def get_user_stream_stats(self) -> Optional[Dict[str, Any]]:
+        """Snapshot das métricas do user stream. None se desligado."""
+        if self._user_stream is None:
+            return None
+        return self._user_stream.get_stats()
+
+    def _on_user_account_update(self, msg: dict) -> None:
+        """
+        Callback de ACCOUNT_UPDATE via user stream. Invalida caches
+        derivados (positions / balance / daily_pnl) pra próxima leitura
+        refletir o estado real imediatamente.
+        """
+        self.invalidate_positions_cache()
+        self.invalidate_balance_cache()
+
+    def _on_user_order_update(self, msg: dict) -> None:
+        """
+        Callback de ORDER_TRADE_UPDATE. Só invalida caches quando a ordem
+        efetivamente afeta a posição (FILLED / PARTIALLY_FILLED). Status
+        puro de NEW/CANCELED não muda estado.
+        """
+        order_data = msg.get("o") or {}
+        status = order_data.get("X")  # execution type (FILLED, PARTIALLY_FILLED, ...)
+        if status in ("FILLED", "PARTIALLY_FILLED"):
+            self.invalidate_positions_cache()
+            self.invalidate_balance_cache()
+
+    def shutdown(self) -> None:
+        """
+        Encerra conexões auxiliares (WebSocket). Chame no shutdown do bot
+        pra não vazar threads.
+        """
+        if getattr(self, "_ws_store", None) is not None:
+            try:
+                self._ws_store.stop()
+            except Exception as exc:
+                logger.warning(f"Erro ao parar WS store: {exc}")
+            self._ws_store = None
+        if getattr(self, "_user_stream", None) is not None:
+            try:
+                self._user_stream.stop()
+            except Exception as exc:
+                logger.warning(f"Erro ao parar user stream: {exc}")
+            self._user_stream = None
     
     def get_account_info(self) -> dict:
         """
@@ -575,51 +755,58 @@ class BinanceConnection:
             logger.error(f"Erro ao obter histórico de income: {e}")
             return []
     
-    def get_daily_pnl_from_binance(self) -> dict:
+    def get_daily_pnl_from_binance(self, force_refresh: bool = False) -> dict:
         """
-        Calcula o P&L diário REAL como a Binance mostra.
-        
+        Calcula o P&L diário REAL como a Binance mostra, com cache TTL 30s.
+
         Busca diretamente da API o histórico de income do dia e soma:
         - REALIZED_PNL: Lucros/perdas de trades fechados
         - FUNDING_FEE: Taxas de funding (a cada 8h)
         - COMMISSION: Comissões de trades
-        
-        Isso garante que o P&L mostrado seja IGUAL ao da Binance.
-        
+
+        O valor só muda quando trade fecha — o bot já invalida o cache
+        automaticamente via invalidate_balance_cache() após place_market_order.
+        TTL de 30s dá margem para refletir funding periódico.
+
+        Args:
+            force_refresh: Se True, ignora cache e força fetch.
+
         Returns:
-            dict com:
-            - realized_pnl: P&L de trades
-            - funding_fee: Total de funding fees
-            - commission: Total de comissões
-            - total: Soma de tudo (o que a Binance mostra)
+            dict com realized_pnl / funding_fee / commission / total / income_count / income_types
         """
+        now_mono = time.monotonic()
+        with self._cache_lock:
+            cached = self._daily_pnl_cache
+            if (not force_refresh) and cached and (now_mono - cached["ts"]) < self._daily_pnl_cache_ttl:
+                metrics.record_cache_hit("daily_pnl")
+                return cached["data"]
+
+        metrics.record_cache_miss("daily_pnl")
         try:
             from datetime import datetime, timezone
-            
+
             # Início do dia UTC (00:00:00 UTC)
             now = datetime.now(timezone.utc)
             start_of_day = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
             start_timestamp = int(start_of_day.timestamp() * 1000)
-            
-            # Busca todo o income do dia
+
             income_list = self._api_call(
                 "futures_income_history_daily",
                 self.client.futures_income_history,
                 startTime=start_timestamp,
-                limit=1000  # Máximo permitido
+                limit=1000,  # Máximo permitido
             )
-            
-            # Agrupa por tipo
+
             realized_pnl = 0.0
             funding_fee = 0.0
             commission = 0.0
-            income_types_found = set()  # Debug: tipos encontrados
-            
+            income_types_found = set()
+
             for item in income_list:
                 income_type = item.get('incomeType', '')
                 amount = float(item.get('income', 0))
                 income_types_found.add(income_type)
-                
+
                 if income_type == 'REALIZED_PNL':
                     realized_pnl += amount
                 elif income_type == 'FUNDING_FEE':
@@ -627,32 +814,36 @@ class BinanceConnection:
                     logger.debug(f"💸 Funding encontrado: ${amount:.4f} - {item.get('symbol', 'N/A')}")
                 elif income_type == 'COMMISSION':
                     commission += amount
-            
-            # Log de debug: tipos de income encontrados
+
             if income_types_found:
                 logger.debug(f"📊 Tipos de income encontrados: {', '.join(income_types_found)}")
-            
-            # Total = soma de tudo (como a Binance mostra)
+
             total = realized_pnl + funding_fee + commission
-            
-            return {
+            result = {
                 'realized_pnl': realized_pnl,
                 'funding_fee': funding_fee,
                 'commission': commission,
-                'total': total,  # Este é o valor que a Binance mostra!
+                'total': total,
                 'income_count': len(income_list),
-                'income_types': list(income_types_found)  # Debug info
+                'income_types': list(income_types_found),
             }
-            
+            with self._cache_lock:
+                self._daily_pnl_cache = {"data": result, "ts": time.monotonic()}
+            return result
+
         except Exception as e:
             logger.error(f"Erro ao obter P&L diário da Binance: {e}")
+            # Fallback: cache stale se existir, senão dict vazio
+            with self._cache_lock:
+                if self._daily_pnl_cache:
+                    return self._daily_pnl_cache["data"]
             return {
                 'realized_pnl': 0.0,
                 'funding_fee': 0.0,
                 'commission': 0.0,
                 'total': 0.0,
                 'income_count': 0,
-                'income_types': []
+                'income_types': [],
             }
     
     def get_current_price(self, symbol: str) -> float:
@@ -676,17 +867,18 @@ class BinanceConnection:
             logger.error(f"Erro ao obter preço de {symbol}: {e}")
             return 0.0
     
-    def get_funding_rate(self, symbol: str) -> dict:
+    def get_funding_rate(self, symbol: str, force_refresh: bool = False) -> dict:
         """
-        Busca o funding rate atual de um par.
-        
+        Busca o funding rate atual de um par, com cache TTL de 60s.
+
         O funding rate é cobrado/pago a cada 8 horas (00:00, 08:00, 16:00 UTC).
         - Rate POSITIVO: LONGs pagam para SHORTs
         - Rate NEGATIVO: SHORTs pagam para LONGs
-        
+
         Args:
             symbol: Par de trading (ex: 'BTCUSDT')
-        
+            force_refresh: Se True, ignora o cache e força fetch.
+
         Returns:
             Dict com:
             - rate: Taxa atual (ex: 0.0001 = 0.01%)
@@ -694,6 +886,14 @@ class BinanceConnection:
             - long_pays: True se LONGs pagam (rate > 0)
             - next_funding_time: Próximo horário de cobrança
         """
+        now = time.monotonic()
+        with self._cache_lock:
+            entry = self._funding_rate_cache.get(symbol)
+            if (not force_refresh) and entry and (now - entry["ts"]) < self._funding_rate_cache_ttl:
+                metrics.record_cache_hit("funding_rate")
+                return entry["data"]
+
+        metrics.record_cache_miss("funding_rate")
         try:
             # Busca informações do funding rate
             funding_info = self._api_call(
@@ -702,12 +902,12 @@ class BinanceConnection:
                 symbol=symbol,
                 limit=1
             )
-            
+
             if funding_info and len(funding_info) > 0:
                 rate = float(funding_info[0].get('fundingRate', 0))
             else:
                 rate = 0.0
-            
+
             # Busca próximo horário de funding
             premium_info = self._api_call(
                 "futures_mark_price",
@@ -723,7 +923,7 @@ class BinanceConnection:
             else:
                 next_funding_dt = None
             
-            return {
+            result = {
                 'rate': rate,
                 'rate_percent': rate * 100,  # Em percentual
                 'long_pays': rate > 0,       # True = LONGs pagam
@@ -731,9 +931,17 @@ class BinanceConnection:
                 'next_funding_time': next_funding_dt,
                 'favorable_side': 'SHORT' if rate > 0 else 'LONG' if rate < 0 else 'NEUTRAL'
             }
-            
+            with self._cache_lock:
+                self._funding_rate_cache[symbol] = {"data": result, "ts": time.monotonic()}
+            return result
+
         except Exception as e:
             logger.error(f"Erro ao obter funding rate de {symbol}: {e}")
+            # Fallback: devolve cache stale se existir, senão valores neutros
+            with self._cache_lock:
+                entry = self._funding_rate_cache.get(symbol)
+                if entry:
+                    return entry["data"]
             return {
                 'rate': 0.0,
                 'rate_percent': 0.0,
@@ -1016,10 +1224,12 @@ class BinanceConnection:
             logger.error(f"Erro ao obter klines raw de {symbol}: {e}")
             return []
     
-    def get_klines(self, symbol: str, interval: str, limit: int = 50) -> List[Dict]:
+    def _rest_get_klines(self, symbol: str, interval: str, limit: int = 50) -> List[Dict]:
         """
-        Retorna os candles (OHLCV) de um par.
-        Usado para análise técnica.
+        Busca klines direto via REST API da Binance (sem passar pelo WS).
+
+        Usado como fallback quando WS está indisponível/stale, e como
+        seed inicial no WebSocketKlineStore.
         """
         try:
             klines = self._api_call(
@@ -1027,57 +1237,115 @@ class BinanceConnection:
                 self.client.futures_klines,
                 symbol=symbol,
                 interval=interval,
-                limit=limit
+                limit=limit,
             )
-            
-            # Formata os dados para facilitar o uso
-            formatted = []
-            for k in klines:
-                formatted.append({
+            return [
+                {
                     'timestamp': k[0],
                     'open': float(k[1]),
                     'high': float(k[2]),
                     'low': float(k[3]),
                     'close': float(k[4]),
                     'volume': float(k[5]),
-                })
-            
-            return formatted
-            
+                }
+                for k in klines
+            ]
+        except Exception as e:
+            logger.error(f"Erro ao obter klines de {symbol}: {e}")
+            return []
+
+    def get_klines(self, symbol: str, interval: str, limit: int = 50) -> List[Dict]:
+        """
+        Retorna os candles (OHLCV) de um par.
+
+        Tenta WebSocket store primeiro (se habilitado e fresh); cai em REST
+        automaticamente em caso contrário. Callers não precisam saber qual path
+        foi usado — interface idêntica ao original.
+        """
+        ws_store = getattr(self, "_ws_store", None)
+        miss_reason = None
+
+        if ws_store is None:
+            miss_reason = "store_disabled"
+        elif not ws_store.is_fresh(symbol, interval):
+            miss_reason = "stale"
+        else:
+            cached = ws_store.get_klines(symbol, interval, limit)
+            if cached is not None:
+                metrics.record_cache_hit("klines_ws")
+                return cached
+            miss_reason = "insufficient_buffer"
+
+        # Telemetria: conta miss agregado + sub-motivo específico
+        metrics.record_cache_miss("klines_ws")
+        metrics.record_cache_miss(f"klines_ws:{miss_reason}")
+
+        try:
+            return self._rest_get_klines(symbol, interval, limit)
         except Exception as e:
             logger.error(f"Erro ao obter klines de {symbol}: {e}")
             return []
     
-    def get_open_positions(self) -> List[Dict]:
+    def get_open_positions(self, force_refresh: bool = False) -> List[Dict]:
         """
-        Retorna todas as posições abertas.
+        Retorna todas as posições abertas, com cache TTL curto (5s).
+
+        Args:
+            force_refresh: se True, ignora cache. Use em paths críticos
+                (execução de SL, fechamento, /close_all) pra garantir snapshot fresco.
+
+        Raises:
+            Exception: propaga qualquer erro de API em vez de retornar [].
+            Distinguir "posições realmente vazias" de "API falhou" é crítico —
+            no passado, erro transitório (ex: -1021 timestamp) retornava []
+            e fazia o monitor interpretar todas as posições como fechadas
+            externamente ("phantom closes"), corrompendo stats, state e
+            notificações Telegram.
+
+            Callers que querem lista vazia em erro devem fazer try/except
+            explícito e decidir o comportamento seguro pro seu caso.
         """
-        try:
-            positions = self._api_call(
-                "futures_position_information",
-                self.client.futures_position_information
-            )
-            
-            # Filtra apenas posições com quantidade > 0
-            open_positions = []
-            for p in positions:
-                qty = float(p.get('positionAmt', 0))
-                if qty != 0:
-                    open_positions.append({
-                        'symbol': p.get('symbol', ''),
-                        'side': 'LONG' if qty > 0 else 'SHORT',
-                        'quantity': abs(qty),
-                        'entry_price': float(p.get('entryPrice', 0)),
-                        'mark_price': float(p.get('markPrice', 0)),
-                        'unrealized_pnl': float(p.get('unRealizedProfit', 0)),
-                        'leverage': int(p.get('leverage', self.config.LEVERAGE)),
-                    })
-            
-            return open_positions
-            
-        except Exception as e:
-            logger.error(f"Erro ao obter posições: {e}")
-            return []
+        now = time.monotonic()
+        with self._cache_lock:
+            cached = self._positions_cache
+            if (not force_refresh) and cached and (now - cached["ts"]) < self._positions_cache_ttl:
+                metrics.record_cache_hit("positions")
+                return [dict(p) for p in cached["data"]]
+
+        metrics.record_cache_miss("positions")
+        positions = self._api_call(
+            "futures_position_information",
+            self.client.futures_position_information,
+        )
+
+        # Filtra apenas posições com quantidade > 0
+        open_positions = []
+        for p in positions:
+            qty = float(p.get('positionAmt', 0))
+            if qty != 0:
+                open_positions.append({
+                    'symbol': p.get('symbol', ''),
+                    'side': 'LONG' if qty > 0 else 'SHORT',
+                    'quantity': abs(qty),
+                    'entry_price': float(p.get('entryPrice', 0)),
+                    'mark_price': float(p.get('markPrice', 0)),
+                    'unrealized_pnl': float(p.get('unRealizedProfit', 0)),
+                    'leverage': int(p.get('leverage', self.config.LEVERAGE)),
+                })
+
+        with self._cache_lock:
+            self._positions_cache = {"data": [dict(p) for p in open_positions], "ts": now}
+
+        return open_positions
+
+    def invalidate_positions_cache(self) -> None:
+        """
+        Marca o cache de posições como stale. Próxima leitura força fetch.
+        Chame após qualquer ação que mude posições (abertura, fechamento) ou
+        quando receber evento ACCOUNT_UPDATE via user stream.
+        """
+        with self._cache_lock:
+            self._positions_cache = None
     
     def place_market_order(
         self, 
@@ -1120,6 +1388,10 @@ class BinanceConnection:
             
             logger.info(f"📈 Ordem executada: {side} {position_side} {formatted_qty} {symbol}")
             self._record_order_stat(symbol, successes=1)
+            # Saldo mudou: invalida cache pra próxima leitura buscar valor fresco
+            self.invalidate_balance_cache()
+            # Posições mudaram: invalida cache para próximo monitor/close ver o estado real
+            self.invalidate_positions_cache()
             return order
             
         except Exception as e:
@@ -1192,8 +1464,8 @@ class BinanceConnection:
         Fecha uma posição inteira a mercado.
         """
         try:
-            # Primeiro, encontra a posição
-            positions = self.get_open_positions()
+            # force_refresh: evitar agir sobre snapshot stale do cache
+            positions = self.get_open_positions(force_refresh=True)
             
             for pos in positions:
                 if pos['symbol'] == symbol and pos['side'] == position_side:

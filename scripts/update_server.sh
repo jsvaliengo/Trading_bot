@@ -19,12 +19,6 @@ DEPLOY_SHA="${DEPLOY_SHA:-local}"
 DEPLOY_REF="${DEPLOY_REF:-manual}"
 DEPLOY_ACTOR="${DEPLOY_ACTOR:-manual}"
 
-# Dashboard web (opcional) - reinício automático no deploy
-DASHBOARD_ENABLED="${DASHBOARD_ENABLED:-1}"
-DASHBOARD_SCREEN_NAME="${DASHBOARD_SCREEN_NAME:-dashboard}"
-DASHBOARD_MODULE="${DASHBOARD_MODULE:-trading_bot.web.dashboard}"
-DASHBOARD_PROCESS_PATTERN="${DASHBOARD_PROCESS_PATTERN:-python.*-m[[:space:]]+${DASHBOARD_MODULE//./\\.}}"
-
 log() {
   printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
 }
@@ -92,36 +86,6 @@ else
   exit 1
 fi
 
-if [[ "$DASHBOARD_ENABLED" == "1" || "$DASHBOARD_ENABLED" == "true" ]]; then
-  log "Reiniciando dashboard..."
-
-  # Tenta parada graciosa via screen.
-  if screen -list | grep -q "[[:space:]]${DASHBOARD_SCREEN_NAME}[[:space:]]"; then
-    screen -S "$DASHBOARD_SCREEN_NAME" -X stuff $'\003'
-    sleep 2
-  fi
-
-  # Garante que não ficou processo antigo.
-  if pgrep -af "$DASHBOARD_PROCESS_PATTERN" >/dev/null; then
-    pkill -f "$DASHBOARD_PROCESS_PATTERN" || true
-    sleep 1
-  fi
-
-  # Fecha sessão antiga (se existir) e sobe nova.
-  screen -S "$DASHBOARD_SCREEN_NAME" -X quit >/dev/null 2>&1 || true
-  screen -dmS "$DASHBOARD_SCREEN_NAME" bash -lc "cd '$PROJECT_DIR' && '$PYTHON_BIN' -m '$DASHBOARD_MODULE'"
-
-  sleep 1
-  if pgrep -af "$DASHBOARD_PROCESS_PATTERN" >/dev/null; then
-    log "Dashboard iniciado com sucesso."
-  else
-    log "Falha ao iniciar dashboard."
-    exit 1
-  fi
-else
-  log "DASHBOARD_ENABLED desativado. Pulando restart do dashboard."
-fi
-
 mkdir -p "$RUNTIME_DIR"
 DEPLOY_INFO_FILE="$RUNTIME_DIR/deploy_info.json"
 cat > "$DEPLOY_INFO_FILE" <<EOF
@@ -130,8 +94,7 @@ cat > "$DEPLOY_INFO_FILE" <<EOF
   "deploy_sha": "$DEPLOY_SHA",
   "deploy_ref": "$DEPLOY_REF",
   "deploy_actor": "$DEPLOY_ACTOR",
-  "host": "$(hostname)",
-  "dashboard_enabled": "$DASHBOARD_ENABLED"
+  "host": "$(hostname)"
 }
 EOF
 log "Metadados de deploy salvos em $DEPLOY_INFO_FILE"

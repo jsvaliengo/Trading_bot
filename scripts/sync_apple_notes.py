@@ -92,7 +92,6 @@ def build_notes() -> list[tuple[str, str]]:
 <li>Stop Loss Global - {config.GLOBAL_STOP_LOSS_PERCENT:.2f}%</li>
 <li>Deteccao de deposito/saque - CAPITAL_TRANSFER_DETECTION_ENABLED={config.CAPITAL_TRANSFER_DETECTION_ENABLED}</li>
 <li>Relatorio diario Telegram - {on_off(config.DAILY_PERFORMANCE_REPORT_ENABLED)} ({int(config.DAILY_PERFORMANCE_REPORT_HOUR_BRT):02d}:{int(config.DAILY_PERFORMANCE_REPORT_MINUTE_BRT):02d} BRT / janela {int(config.DAILY_PERFORMANCE_REPORT_LOOKBACK_HOURS)}h)</li>
-<li>Dashboard web - {on_off(True)} ({config.DASHBOARD_HOST}:{config.DASHBOARD_PORT}, refresh {config.DASHBOARD_REFRESH_SECONDS}s)</li>
 </ul>
 
 <h2>Desativadas agora</h2>
@@ -126,12 +125,11 @@ def build_notes() -> list[tuple[str, str]]:
 <li><b>Sentimento:</b> {on_off(config.USE_MARKET_SENTIMENT_FILTER)}</li>
 <li><b>Double First:</b> LONG {on_off(config.DOUBLE_FIRST_LONG_ENABLED)} | SHORT {on_off(config.DOUBLE_FIRST_SHORT_ENABLED)}</li>
 <li><b>Relatorio diario:</b> {on_off(config.DAILY_PERFORMANCE_REPORT_ENABLED)}</li>
-<li><b>Dashboard:</b> ON</li>
 </ul>
 
 <h2>Checklist diario</h2>
 <ul>
-<li>[ ] Confirmar bot e dashboard ativos</li>
+<li>[ ] Confirmar bot ativo</li>
 <li>[ ] Validar modo (Mainnet/Testnet)</li>
 <li>[ ] Conferir /status e posicoes abertas</li>
 <li>[ ] Conferir /apihealth e retries/falhas</li>

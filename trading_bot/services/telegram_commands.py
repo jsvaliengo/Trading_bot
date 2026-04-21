@@ -15,7 +15,7 @@ import threading
 import time
 from difflib import get_close_matches
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List
+from typing import Any, List
 import requests
 from requests.exceptions import RequestException
 
@@ -50,9 +50,6 @@ class TelegramCommandHandler:
         self._poll_timeout_seconds = 8
         self._poll_request_timeout_seconds = 10
 
-        # Callbacks para ações
-        self.callbacks: Dict[str, Callable] = {}
-
         # Referência ao bot principal (será setada depois)
         self.bot = None
         self.config = None
@@ -82,6 +79,7 @@ class TelegramCommandHandler:
             '/drawdown': self.cmd_drawdown,
             '/trailing': self.cmd_trailing,
             '/closeall': self.cmd_close_all,
+            '/env': self.cmd_env,
             '/help': self.cmd_help,
             '/strategy': self.cmd_strategy,
             '/rescore': self.cmd_rescore,
@@ -158,6 +156,7 @@ class TelegramCommandHandler:
         """
         now_utc = datetime.now(timezone.utc)
 
+        # Cache hit — pula fetch (inclusive após falha recente, pra não spamar DNS)
         if self.last_rate_update:
             elapsed = (now_utc - self.last_rate_update).total_seconds()
             if elapsed < 600:
@@ -176,9 +175,13 @@ class TelegramCommandHandler:
                 bid = float(data.get("USDBRL", {}).get("bid", 0))
                 if bid > 0:
                     self.usd_brl_rate = bid
-                    self.last_rate_update = now_utc
+            # Sempre marca última tentativa — protege cache mesmo em falha lógica
+            self.last_rate_update = now_utc
         except Exception as e:
+            # Falha de rede: log uma vez por ciclo (next retry só em 10min),
+            # e marca timestamp pra evitar tempestade de warnings.
             logger.warning(f"⚠️ Não foi possível atualizar cotação USD/BRL: {e}")
+            self.last_rate_update = now_utc
 
         return self.usd_brl_rate
 
@@ -561,9 +564,16 @@ class TelegramCommandHandler:
         # Pergunta se quer fechar posições
         if args and args[0].lower() == 'force':
             self.send_message("🛑 <b>PARANDO BOT...</b>\n\n⚠️ Fechando todas as posições...")
-            
-            # Fecha posições
-            positions = self.bot.exchange.get_open_positions()
+
+            # Fecha posições (force_refresh: fechamento em massa, snapshot tem que ser fresco)
+            try:
+                positions = self.bot.exchange.get_open_positions(force_refresh=True)
+            except Exception as exc:
+                self.send_message(
+                    f"❌ API indisponível ao listar posições: {exc}\n"
+                    "Abortando /stop force — tente novamente."
+                )
+                return
             total_positions = len(positions)
             closed_count = 0
             failures = []
@@ -690,9 +700,13 @@ class TelegramCommandHandler:
             # Win rate
             total_trades = self.bot.trades_win_count + self.bot.trades_loss_count
             win_rate = (self.bot.trades_win_count / total_trades * 100) if total_trades > 0 else 0
-            
-            # Posições abertas
-            positions = self.bot.exchange.get_open_positions()
+
+            # Posições abertas — se API falhar, mostra lista vazia em vez de quebrar /status
+            try:
+                positions = self.bot.exchange.get_open_positions()
+            except Exception as exc:
+                logger.warning(f"⚠️ /status: API indisponível ao listar posições: {exc}")
+                positions = []
             
             # P&L acumulado (realizado total desde o início da sessão)
             pnl_emoji = "🟢" if self.bot.total_pnl >= 0 else "🔴"
@@ -1643,6 +1657,71 @@ class TelegramCommandHandler:
     # COMANDOS DE AÇÃO
     # ============================================
     
+    def cmd_env(self, args: list):
+        """
+        Mostra/troca a rede Binance ativa (mainnet/testnet).
+
+        Uso:
+          /env                         — mostra status atual
+          /env testnet                 — troca para testnet
+          /env mainnet                 — exige confirmação adicional
+          /env mainnet confirmar       — efetiva a troca para mainnet
+        """
+        if self.bot is None or self.config is None:
+            self.send_message("❌ Bot não configurado")
+            return
+
+        current = str(getattr(self.config, "ENVIRONMENT", "") or "").lower()
+        current_label = current.upper() if current else "?"
+
+        # Sem args → status
+        if not args:
+            has_mainnet = self.config.has_credentials_for("mainnet")
+            has_testnet = self.config.has_credentials_for("testnet")
+            with self.bot._positions_lock:
+                open_count = sum(1 for p in self.bot.positions.values() if p)
+
+            state_file = getattr(self.config, "STATE_FILE_NAME", "?")
+            self.send_message(
+                f"🌐 <b>REDE BINANCE</b>\n\n"
+                f"• Ativa: <b>{current_label}</b>{' 💰' if current == 'mainnet' else ' 🧪'}\n"
+                f"• State: <code>{state_file}</code>\n"
+                f"• Posições abertas: <code>{open_count}</code>\n\n"
+                f"<b>Credenciais configuradas:</b>\n"
+                f"• Mainnet: {'✅' if has_mainnet else '❌'}\n"
+                f"• Testnet: {'✅' if has_testnet else '❌'}\n\n"
+                f"<b>Uso:</b>\n"
+                f"<code>/env testnet</code>\n"
+                f"<code>/env mainnet confirmar</code>\n\n"
+                f"<i>Troca é bloqueada se houver posições abertas.</i>"
+            )
+            return
+
+        target = str(args[0] or "").strip().lower()
+        if target not in {"mainnet", "testnet"}:
+            self.send_message(
+                f"❌ Rede inválida: <code>{target}</code>\n"
+                f"Use <code>/env mainnet</code> ou <code>/env testnet</code>."
+            )
+            return
+
+        # Mainnet exige confirmação explícita
+        if target == "mainnet":
+            confirm = args[1].strip().lower() if len(args) > 1 and args[1] else ""
+            if confirm != "confirmar":
+                self.send_message(
+                    f"⚠️ <b>ATENÇÃO — TROCA PARA MAINNET</b>\n\n"
+                    f"Mainnet opera com <b>DINHEIRO REAL</b>.\n"
+                    f"Rede atual: <b>{current_label}</b>\n\n"
+                    f"Para confirmar, envie:\n"
+                    f"<code>/env mainnet confirmar</code>"
+                )
+                return
+
+        success, message = self.bot.switch_environment(target)
+        prefix = "" if success else ""
+        self.send_message(f"{prefix}{message}")
+
     def cmd_close_all(self, args: list):
         """Fecha todas as posições."""
         if self.bot is None:
@@ -1650,7 +1729,8 @@ class TelegramCommandHandler:
             return
 
         try:
-            positions = self.bot.exchange.get_open_positions()
+            # force_refresh: /closeall é ação destrutiva; snapshot tem que ser fresco
+            positions = self.bot.exchange.get_open_positions(force_refresh=True)
 
             if not positions:
                 self.send_message("📍 Nenhuma posição aberta para fechar.")
@@ -1827,6 +1907,11 @@ class TelegramCommandHandler:
 /closeall - Fechar todas posições
 /closeall confirm - Confirmar
 /rescore - Forçar rescore de pares agora
+
+<b>🌐 REDE BINANCE:</b>
+/env - Ver rede ativa e credenciais
+/env testnet - Trocar para testnet
+/env mainnet confirmar - Trocar para mainnet
 
 ━━━━━━━━━━━━━━━━━━━━━
 <i>Exemplos:</i>

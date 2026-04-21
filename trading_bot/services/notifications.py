@@ -57,10 +57,13 @@ class TelegramNotifier:
     def _get_usd_brl_rate(self) -> float:
         """
         Retorna a cotação USD->BRL com cache de 10 minutos.
-        Usa a última cotação conhecida em caso de falha.
+        Em caso de falha, marca o timestamp do último tentativa pra não spamar
+        retries (e logs) em chamadas sequenciais. Devolve sempre a última
+        cotação válida conhecida (ou default).
         """
         now_utc = datetime.now(timezone.utc)
 
+        # Cache hit — pula fetch (inclusive após falha recente, pra não spamar DNS)
         if self.last_rate_update:
             elapsed = (now_utc - self.last_rate_update).total_seconds()
             if elapsed < 600:
@@ -76,9 +79,13 @@ class TelegramNotifier:
                 bid = float(data.get("USDBRL", {}).get("bid", 0))
                 if bid > 0:
                     self.usd_brl_rate = bid
-                    self.last_rate_update = now_utc
+            # Sempre marca última tentativa — protege cache mesmo em falha lógica
+            self.last_rate_update = now_utc
         except Exception as e:
+            # Falha de rede: log uma vez por ciclo (next retry só em 10min),
+            # e marca timestamp pra evitar tempestade de warnings.
             logger.warning(f"⚠️ Não foi possível atualizar cotação USD/BRL: {e}")
+            self.last_rate_update = now_utc
 
         return self.usd_brl_rate
 

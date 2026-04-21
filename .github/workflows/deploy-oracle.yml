@@ -320,9 +320,6 @@ jobs:
           echo "=== BOT PROCESSOS ==="
           pgrep -af "python.*-m[[:space:]]+trading_bot\\.core\\.bot" || true
           echo
-          echo "=== DASHBOARD PROCESSOS ==="
-          pgrep -af "python.*-m[[:space:]]+trading_bot\\.web\\.dashboard" || true
-          echo
           echo "=== DEPLOY INFO ==="
           if [[ -f runtime/deploy_info.json ]]; then
             cat runtime/deploy_info.json

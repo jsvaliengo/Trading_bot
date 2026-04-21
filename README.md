@@ -49,29 +49,17 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-Preencha o `.env` com seus dados:
+Preencha o `.env` com seus dados. As credenciais da Binance são separadas por rede —
+a rede ativa é controlada por `TRADING_BOT_ENVIRONMENT` (ou pelo comando `/env` no Telegram):
 
 ```bash
-BINANCE_API_KEY="sua_api_key_aqui"
-BINANCE_API_SECRET="sua_api_secret_aqui"
+BINANCE_MAINNET_API_KEY="sua_api_key_mainnet"
+BINANCE_MAINNET_API_SECRET="sua_api_secret_mainnet"
+BINANCE_TESTNET_API_KEY="sua_api_key_testnet"
+BINANCE_TESTNET_API_SECRET="sua_api_secret_testnet"
+TRADING_BOT_ENVIRONMENT=testnet
 TELEGRAM_TOKEN="seu_token_aqui"
 TELEGRAM_CHAT_ID="seu_chat_id_aqui"
-```
-
-**Opção B - variáveis de ambiente no shell:**
-
-```bash
-# Linux/Mac
-export BINANCE_API_KEY="sua_api_key_aqui"
-export BINANCE_API_SECRET="sua_api_secret_aqui"
-export TELEGRAM_TOKEN="seu_token_aqui"
-export TELEGRAM_CHAT_ID="seu_chat_id_aqui"
-
-# Windows (PowerShell)
-$env:BINANCE_API_KEY="sua_api_key_aqui"
-$env:BINANCE_API_SECRET="sua_api_secret_aqui"
-$env:TELEGRAM_TOKEN="seu_token_aqui"
-$env:TELEGRAM_CHAT_ID="seu_chat_id_aqui"
 ```
 
 ---
@@ -85,7 +73,7 @@ Os valores abaixo são os defaults atuais em `trading_bot/core/config.py`.
 
 | Parâmetro | Padrão | Descrição |
 |-----------|--------|-----------|
-| `USE_TESTNET` | `False` | `True` para Testnet, `False` para Mainnet |
+| `TRADING_BOT_ENVIRONMENT` | `testnet` | Rede ativa (`mainnet` ou `testnet`). Trocável via `/env` no Telegram. |
 | `TOTAL_CAPITAL` | `100.0` | Referência de capital (não é o saldo real da conta) |
 | `LEVERAGE` | `20` | Alavancagem por posição |
 | `MAX_POSITION_PERCENT` | `0.08` | % do capital por trade (8%) |
@@ -132,17 +120,23 @@ export TRADING_BOT_SENTIMENT_LOOKBACK_CANDLES=120
 export TRADING_BOT_SENTIMENT_MIN_SCORE=2
 export TRADING_BOT_SENTIMENT_MIN_MOMENTUM_PERCENT=0.20
 export TRADING_BOT_SENTIMENT_CACHE_SECONDS=300
-export TRADING_BOT_DASHBOARD_HOST=127.0.0.1
-export TRADING_BOT_DASHBOARD_PORT=8080
-export TRADING_BOT_DASHBOARD_REFRESH_SECONDS=5
-export TRADING_BOT_DASHBOARD_AUTH_TOKEN=
 export TRADING_BOT_MAINNET_CONFIRM=eu_sei_o_risco
+
+# Observabilidade (Prometheus/Grafana)
+export TRADING_BOT_METRICS_ENABLED=true
+export TRADING_BOT_METRICS_HOST=127.0.0.1
+export TRADING_BOT_METRICS_PORT=9090
+
+# WebSocket kline streams (kill switch = false para forçar REST puro)
+export TRADING_BOT_WEBSOCKET_ENABLED=true
+export TRADING_BOT_WEBSOCKET_STALENESS_SECONDS=30
 ```
 
-Arquivos de runtime ficam em `runtime/` por ambiente:
-- `bot_state.<env>.json`
-- `trading_bot.<env>.lock`
-- `trading_bot.<env>.log`
+Arquivos de runtime ficam em `runtime/` por ambiente e rede:
+- `bot_state.<env>.<network>.json` — estado persistido
+- `trading_bot.<env>.<network>.lock` — instância única
+- `trading_bot.<env>.<network>.log` — log rotativo
+- `active_environment.txt` — rede ativa (atualizado por `/env`)
 
 O bot carrega automaticamente `.env` (e `.env.local`, se existir).
 Para usar outro arquivo, defina:
@@ -155,20 +149,21 @@ export TRADING_BOT_ENV_FILE=/caminho/para/seu.env
 
 ## ▶️ Executando
 
-### Modo Testnet (Recomendado para começar)
+### Modo Testnet (recomendado para começar)
 
-1. Certifique-se que `USE_TESTNET = True` no `trading_bot/core/config.py`
-2. Obtenha API keys da Testnet: https://testnet.binancefuture.com/
-3. Execute:
+1. Configure `BINANCE_TESTNET_API_KEY` e `BINANCE_TESTNET_API_SECRET` no `.env`
+2. Defina `TRADING_BOT_ENVIRONMENT=testnet` (default se omitido)
+3. Obtenha API keys da Testnet: https://testnet.binancefuture.com/
+4. Execute:
 
 ```bash
 python -m trading_bot.core.bot
 ```
 
-### Modo Real (CUIDADO!)
+### Modo Mainnet (CUIDADO — dinheiro real)
 
-1. Mude `USE_TESTNET = False` no `trading_bot/core/config.py`
-2. Use suas API keys reais da Binance
+1. Configure `BINANCE_MAINNET_API_KEY` e `BINANCE_MAINNET_API_SECRET` no `.env`
+2. Defina `TRADING_BOT_ENVIRONMENT=mainnet` (ou troque em runtime via `/env mainnet confirmar`)
 3. **IMPORTANTE**: Crie API keys apenas com permissão de Trade, SEM permissão de Withdraw
 4. Execute:
 
@@ -176,53 +171,108 @@ python -m trading_bot.core.bot
 python -m trading_bot.core.bot
 ```
 
+### Trocar de rede em runtime (sem restart)
+
+Pelo Telegram:
+- `/env` — mostra rede ativa e credenciais configuradas
+- `/env testnet` — troca para testnet
+- `/env mainnet confirmar` — troca para mainnet (exige confirmação explícita)
+
+State files são separados por rede (`bot_state.{app_env}.{mainnet|testnet}.json`), evitando mistura de métricas.
+
 Em MAINNET sem terminal interativo (server/CI), defina antes:
 
 ```bash
 TRADING_BOT_MAINNET_CONFIRM=eu_sei_o_risco
 ```
 
-### Dashboard Web (monitoramento em tempo real)
+### Monitoramento
 
-Você pode subir uma página web read-only para acompanhar posições, P&L e saúde do bot:
+Controle e status rápido: comandos do Telegram (`/status`, `/portfolio`, `/positions`, `/balance`, `/config`, `/apihealth` — use `/help`).
 
-```bash
-python -m trading_bot.web.dashboard
+Métricas em tempo real e histórico: Prometheus + Grafana (ver seção abaixo).
+
+### 📈 Métricas Prometheus + Grafana
+
+O bot sobe um exporter HTTP embutido em `http://METRICS_HOST:METRICS_PORT/metrics` quando `TRADING_BOT_METRICS_ENABLED=true` (padrão).
+
+Métricas expostas (prefixo `trading_bot_`):
+- **Estado**: `running`, `paused`, `daily_target_reached`, `positions_open_count`
+- **Financeiro**: `account_balance_usd`, `pnl_realized_total_usd`, `pnl_realized_daily_usd`, `peak_equity_usd`, `drawdown_from_peak_percent`, `fees_paid_total_usd`
+- **Por posição**: `position_pnl_unrealized_usd{symbol,side}`, `position_notional_usd{symbol,side}`
+- **Eventos** (counters): `trades_closed_total{result,strategy,symbol,close_reason}`, `trades_pnl_usd_total{result,close_reason}`, `orders_placed_total{side,result}`, `binance_api_errors_total{endpoint,code}`
+- **Cache** (counters): `cache_hits_total{method}`, `cache_misses_total{method}` — método: `balance`, `funding_rate`, `daily_pnl`, `klines_ws`
+- **WebSocket**: `ws_subscriptions_active`, `ws_stream_age_seconds{symbol,interval}`, `ws_stream_messages_total{symbol,interval}`, `ws_stream_buffer_size{symbol,interval}`
+- **Info**: `trading_bot_info{environment,app_env}` — labels da rede ativa
+
+Exemplo de `prometheus.yml`:
+
+```yaml
+scrape_configs:
+  - job_name: trading_bot
+    scrape_interval: 15s
+    static_configs:
+      - targets: ['127.0.0.1:9090']
 ```
 
-Parâmetros úteis:
+**Stack completa em Docker** (pronta pra subir): [`trading_bot/observability/docker-compose.yml`](trading_bot/observability/docker-compose.yml) sobe Prometheus (porta 9091) + Grafana (porta 3000) com datasource auto-provisionado e 2 dashboards prontos:
+
+- **Trading Bot** ([`grafana_dashboard.json`](trading_bot/observability/grafana_dashboard.json)) — visão geral: status, P&L realizado/hoje/acumulado, equity vs pico, drawdown, P&L não realizado por posição, trades por motivo, win rate, ordens, erros API, WebSocket streams
+- **Trading Bot — Diagnóstico** ([`grafana_dashboard_diagnostico.json`](trading_bot/observability/grafana_dashboard_diagnostico.json)) — operacional: saúde geral, streams WS stale, cache hit rates (4 gauges), cache ops rate, tabela de streams, P&L por motivo de fechamento (SL/TP/Trailing/Outros), net por estratégia
 
 ```bash
-python -m trading_bot.web.dashboard --host 127.0.0.1 --port 8080 --refresh-seconds 5
+cd trading_bot/observability
+docker compose up -d
+open http://127.0.0.1:3000   # admin / admin
 ```
 
-Para proteger com token:
+Ver [`PROMETHEUS_QUERIES.md`](PROMETHEUS_QUERIES.md) para cheatsheet de queries úteis.
 
-```bash
-python -m trading_bot.web.dashboard --token "SEU_TOKEN_FORTE"
-```
+### ⚡ Performance — WebSocket + Caches
 
-Depois acesse:
-- sem token: `http://127.0.0.1:8080`
-- com token: `http://127.0.0.1:8080/?token=SEU_TOKEN_FORTE`
+A camada de integração com Binance usa dois mecanismos pra reduzir latência e volume de REST calls:
 
-### Dashboard em modo seguro (rápido + análise sob demanda)
+**WebSocket Kline Streams** ([`trading_bot/infra/binance_streams.py`](trading_bot/infra/binance_streams.py))
+- Stream em tempo real de velas Futures via `ThreadedWebsocketManager`
+- Padrão **seed + increment**: fetch REST inicial (400 velas) + atualização incremental via WS
+- Só aceita velas fechadas (preserva comportamento da estratégia)
+- **Fallback REST automático** se WS stale (>30s sem msg), buffer insuficiente ou store desligado
+- Sincronização automática com `TRADING_PAIRS` em toda mudança de pares
+- Kill switch: `TRADING_BOT_WEBSOCKET_ENABLED=false`
 
-O dashboard usa dois níveis de atualização:
-- **refresh rápido** (`/api/dashboard`): dados operacionais de conta, posições e risco
-- **análise sob demanda** (`/api/dashboard/analytics`): calendário, cumulativo e métricas históricas
+**TTL Caches** ([`trading_bot/infra/binance_client.py`](trading_bot/infra/binance_client.py))
 
-Na interface, use o botão **Atualizar análise** quando quiser recalcular analytics pesado para o período selecionado.
+| Endpoint | TTL | Invalidação |
+|---|---|---|
+| `get_account_balance` / `get_available_balance` | 2s | Automática após `place_market_order` |
+| `get_daily_pnl_from_binance` | 30s | Automática após `place_market_order` |
+| `get_funding_rate` | 300s (5min) | Manual via `force_refresh=True` |
+| `klines_ws` (via WebSocket) | efêmero | — |
+| `get_symbol_info` / `get_exchange_info` | 6h | Manual |
 
-Na tabela de pares:
-- coluna **Distância** com barra visual por posição
-- selo de severidade (`CRÍTICO`, `ALERTA`, `ATENÇÃO`, `NORMAL`, `CONFORTÁVEL`)
-- coluna **Status / Stop** com badges separados
+Todo cache tem fallback **stale-on-failure** — se a API da Binance falhar, retorna a última leitura boa em vez de zerar valores críticos (balance, P&L).
 
-Recomendação para Oracle:
-- mantenha bind em `127.0.0.1`
-- exponha via Nginx/Cloudflare Tunnel com autenticação
-- evite publicar porta aberta sem token
+**Impacto medido na prática** (comparação 16h vs 18min pós-fix, em rate/hora):
+
+| Endpoint | Antes | Depois | Redução |
+|---|---|---|---|
+| `futures_klines` | 938/h | 93/h | **-90%** |
+| `futures_funding_rate` | 244/h | ~0/h | **~100%** |
+| `futures_income_history_daily` | 760/h | ~0/h | **~100%** |
+
+**Latência de análise por símbolo**: avg 1.46s → 0.12s, max 14.99s → 0.88s.
+
+### 🎯 Threshold do Health Report
+
+O status em `/apihealth` é classificado em **CRÍTICO / ATENÇÃO / ESTÁVEL** via [`TradingBot._classify_api_health_status`](trading_bot/core/bot.py):
+
+| Status | Condições |
+|---|---|
+| **CRÍTICO** | `failures > 10` **OU** `failure_rate >= 1%` **OU** `order_failures > 5` **OU** `order_rejection_rate >= 5%` **OU** `loop_errors > 0` |
+| **ATENÇÃO** | Qualquer instabilidade abaixo dos thresholds de CRÍTICO (retries, overruns, falhas pontuais) |
+| **ESTÁVEL** | Zero indicadores de problema |
+
+Ajustado pra não disparar alarme falso com 1-2 falhas pontuais em dezenas de milhares de chamadas.
 
 ---
 
@@ -239,7 +289,6 @@ O script faz:
 2. instala/atualiza dependências da `.venv`
 3. roda `pytest -q`
 4. reinicia o bot na sessão `screen` somente se os testes passarem
-5. reinicia o dashboard (sessão `screen`) por padrão
 
 Variáveis opcionais:
 
@@ -247,15 +296,10 @@ Variáveis opcionais:
 SCREEN_NAME=bot PROJECT_DIR=/home/ubuntu/trading_bot TRADING_BOT_ENV=prod BOT_MODULE=trading_bot.core.bot ./scripts/update_server.sh
 ```
 
-Para controlar restart do dashboard no deploy:
+Se rodar em mainnet no servidor, garanta no `.env`:
 
 ```bash
-DASHBOARD_ENABLED=0 ./scripts/update_server.sh
-```
-
-Se `USE_TESTNET=False`, garanta no `.env` do servidor:
-
-```bash
+TRADING_BOT_ENVIRONMENT=mainnet
 TRADING_BOT_MAINNET_CONFIRM=eu_sei_o_risco
 ```
 
@@ -350,32 +394,50 @@ Se o preço vai contra a posição principal:
 
 ```
 trading_bot/
-├── runtime/                  # Arquivos de runtime (state/lock/log)
-├── trading_bot/              # Código principal organizado
+├── runtime/                  # State/lock/log por ambiente e rede
+├── trading_bot/              # Código principal
 │   ├── __init__.py
 │   ├── core/
-│   │   ├── bot.py
-│   │   ├── config.py
-│   │   └── strategy.py
+│   │   ├── bot.py            # Orquestrador: lifecycle, monitor, analysis loop
+│   │   ├── config.py         # Centralização de configurações
+│   │   ├── strategy.py       # Indicadores, sinais, geração de setups
+│   │   ├── state_manager.py  # Persistência atômica + backup + migração
+│   │   └── scheduler.py      # LoopScheduler + timing profile do loop
+│   ├── execution/
+│   │   └── engine.py         # Fechamento de posições + Global Stop Loss
 │   ├── infra/
-│   │   └── binance_client.py
-│   ├── web/
-│   │   ├── __init__.py
-│   │   └── dashboard.py
+│   │   ├── binance_client.py # API REST + caches TTL
+│   │   └── binance_streams.py# WebSocket kline streams
+│   ├── ai/
+│   │   └── consultive_engine.py
+│   ├── observability/
+│   │   ├── metrics.py                       # Métricas Prometheus
+│   │   ├── docker-compose.yml               # Stack Prom + Grafana
+│   │   ├── prometheus.yml                   # Scrape config
+│   │   ├── grafana_dashboard.json           # Dashboard principal
+│   │   ├── grafana_dashboard_diagnostico.json # Diagnóstico operacional
+│   │   └── grafana_provisioning/            # Datasources + dashboards auto-load
 │   └── services/
-│       ├── notifications.py
-│       ├── pair_selector.py
-│       └── telegram_commands.py
+│       ├── notifications.py  # Telegram push (envio)
+│       ├── pair_selector.py  # Scoring de pares
+│       └── telegram_commands.py  # Comandos /status, /env, /trades, etc
 ├── tests/
 │   ├── test_bot_regressions.py
-│   ├── test_dashboard_regressions.py
-│   └── test_services_regressions.py
+│   ├── test_services_regressions.py
+│   ├── test_metrics.py
+│   ├── test_state_manager.py
+│   ├── test_scheduler.py
+│   ├── test_binance_client_cache.py
+│   ├── test_binance_client_ws_integration.py
+│   ├── test_binance_streams.py
+│   └── test_risk_manager.py
 ├── scripts/
 │   ├── test_connection.py
 │   ├── test_config.py
 │   ├── test_funding.py
 │   ├── rollback_server.sh
 │   └── update_server.sh
+├── PROMETHEUS_QUERIES.md     # Cheatsheet de queries PromQL
 ├── pytest.ini
 ├── .github/workflows/ci.yml
 ├── .github/workflows/deploy-oracle.yml
@@ -383,6 +445,105 @@ trading_bot/
 ├── requirements.txt
 └── README.md
 ```
+
+---
+
+## 🏗️ Arquitetura
+
+O código é organizado por **responsabilidade** em camadas. `TradingBot` (em `core/bot.py`) é o orquestrador — ele instancia e coordena os outros módulos. Essa separação permite testar cada peça isoladamente e evoluir sem tocar no fluxo principal.
+
+### Camada `core/`
+
+| Módulo | Responsabilidade | Exposto por |
+|---|---|---|
+| **`bot.py`** | Orquestrador: lifecycle, monitor loop, analysis loop, integração com Telegram/risk/estratégia | `TradingBot` |
+| **`config.py`** | Singleton de configuração (credenciais, timings, thresholds, estratégias) | `config` |
+| **`strategy.py`** | Indicadores técnicos (EMA, RSI, Bollinger), geração de sinais, `RiskManager` | `HedgeStrategy`, `RangeScalpingStrategy`, `RiskManager` |
+| **`state_manager.py`** | I/O atômico de state: escrita tmp+rename, backup `.bak`, leitura com fallback, migração legacy | `StateManager` |
+| **`scheduler.py`** | `LoopScheduler` (agenda tarefas periódicas do loop principal) + timing profile dinâmico por faixa de pares | `LoopScheduler`, `get_loop_timing_profile`, `timing_profile_changed` |
+
+### Camada `execution/`
+
+| Módulo | Responsabilidade | Exposto por |
+|---|---|---|
+| **`engine.py`** | Abertura direcional de trade (com checagens de risco: exposição, concentração, idade do sinal, minNotional, double_first), fechamento de posições com cálculo de P&L, bulk close para meta diária, checagem e execução de Global Stop Loss | `ExecutionEngine` |
+
+O `ExecutionEngine` mantém referência ao `TradingBot` — o acoplamento de DADOS (stats, known_positions, trade_history, telegram) permanece ali, mas o CÓDIGO está separado para isolamento.
+
+### Camada `infra/`
+
+| Módulo | Responsabilidade | Exposto por |
+|---|---|---|
+| **`binance_client.py`** | Cliente REST da Binance Futures + TTL caches (balance 2s, funding 5min, daily_pnl 30s) + delegação pra WebSocket | `BinanceConnection` |
+| **`binance_streams.py`** | WebSocket kline store com seed REST + incremento WS, buffer thread-safe por `(symbol, interval)` | `WebSocketKlineStore` |
+
+### Camada `services/`
+
+| Módulo | Responsabilidade |
+|---|---|
+| **`notifications.py`** | `TelegramNotifier` — envio de mensagens push (startup, position opened/closed, alerts) |
+| **`telegram_commands.py`** | `TelegramCommandHandler` — polling e handlers dos comandos `/status`, `/env`, `/trades`, `/apihealth`, `/sl`, `/tp`, `/leverage`, `/closeall`, etc |
+| **`pair_selector.py`** | `PairSelector` — scoring de pares por volume/volatilidade/spread/trend/funding |
+
+### Camada `observability/`
+
+Métricas Prometheus + stack Docker pronta (Prometheus + Grafana com 2 dashboards auto-provisionados). Ver seção [📈 Métricas Prometheus + Grafana](#-métricas-prometheus--grafana).
+
+### Camada `ai/`
+
+`consultive_engine.py` — engine de consulta à LLM (modo off/consultive/gated) para segunda opinião em sinais antes da execução.
+
+### Fluxo típico de um tick
+
+```
+ TradingBot.run()
+       │
+       ├─── LoopScheduler.due("terminal_status") ──► print_status()
+       │                            ("state_save") ──► StateManager.save()
+       │                            ("commission")  ──► update_commission_rates()
+       │                            ("deposit_check")── check_for_deposit()
+       │                            ("strategy_check") check_and_update_binance_strategy()
+       │
+       ├─── monitor_positions()  ──► exchange.get_open_positions() ──► WS cache
+       │                              │
+       │                              └► ExecutionEngine.close_position_with_notification()
+       │                                  ├─► exchange.close_position()
+       │                                  ├─► telegram.send_position_closed()
+       │                                  └─► metrics.record_trade_closed()
+       │
+       └─── analyze_and_trade(symbol)  ──► strategy.generate_trade_setup()
+                                            └─► ExecutionEngine.open_signal_trade()
+                                                 ├─► checagens de risco (exposição, concentração, idade)
+                                                 ├─► exchange.place_market_order()
+                                                 ├─► exchange.set_stop_loss_take_profit()
+                                                 └─► telegram.send_trade_alert() + metrics.record_order()
+```
+
+### Histórico de refatorações
+
+O código foi evoluído em fases, cada uma entregando valor sem quebrar comportamento (todas as extrações preservaram 100% dos testes de regressão existentes).
+
+**Fase 1 — Limpeza + Observabilidade**
+- Removido dashboard web (2.952 linhas), substituído por Prometheus + Grafana
+- Toggle `testnet` ↔ `mainnet` via comando `/env` no Telegram
+- Dead code removal (vulture + ruff): ~15% do código Python eliminado
+
+**Fase 3.1/3.2 — Performance (reduziu latência de análise em ~12×)**
+- TTL caches em endpoints REST de alta frequência (balance, funding_rate, daily_pnl)
+- WebSocket kline streams com fallback REST transparente
+- Resultado: `futures_klines` calls caíram de 938/h → 93/h; latência avg de análise 1.46s → 0.12s
+
+**Fase 2 — Refatoração do god class `bot.py`**
+- `bot.py`: 5.551 → 5.133 linhas
+- Extraído `StateManager` (I/O de state — 160 linhas, 11 testes novos)
+- Extraído `LoopScheduler` (timing do loop — 146 linhas, 20 testes novos)
+- Extraído `ExecutionEngine` (close logic — 329 linhas)
+
+**Fase 2.5 — Abertura de trade no `ExecutionEngine`**
+- `bot.py`: 5.133 → 4.688 linhas (**-863 linhas desde início da Fase 2**, -15.5%)
+- `execute_signal_trade` (450+ linhas) migrado pra `ExecutionEngine.open_signal_trade`
+- Engine agora cobre open + close + bulk close + Global SL
+- Delegador preservado em `bot.execute_signal_trade()` → zero quebra externa
 
 ---
 
@@ -456,6 +617,20 @@ Filtro de sentimento (direção de entrada):
 - `/sentiment on` ativa filtro direcional por viés
 - `/sentiment off` (ou `/sentiment normal`) volta ao modo normal
 - `/sentiment SOL` consulta viés do par (`SOLUSDT`)
+
+Rede Binance (mainnet / testnet):
+- `/env` mostra rede ativa + credenciais configuradas
+- `/env testnet` troca pra testnet (sem confirmação)
+- `/env mainnet confirmar` troca pra mainnet (exige confirmação explícita)
+
+Ajustes de risco em runtime:
+- `/leverage [N]` altera alavancagem
+- `/sl [pct]` / `/sl on` / `/sl off` controla Stop Loss individual
+- `/tp [pct]` altera Take Profit
+- `/trailing [ativ] [dist]` configura trailing stop
+- `/drawdown [pct]` / `/drawdown reset` limite de drawdown desde pico
+- `/ordersize [usd]` tamanho fixo de ordem
+- `/closeall confirm` fecha todas as posições (irreversível)
 
 ---
 
