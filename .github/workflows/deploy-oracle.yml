@@ -248,7 +248,10 @@ jobs:
           SKIP_GIT_PULL=1 "./$SCRIPT_PATH"
           EOF
 
-      - name: Ensure observability stack (Prometheus + Grafana)
+      - name: Ensure observability stack is DOWN on OCI
+        # O stack Prometheus + Grafana roda apenas no Mac local; a VM OCI não
+        # tem CPU/RAM sobrando para isso. Este step garante que os containers
+        # sejam removidos em todo deploy, mesmo se alguém subir manualmente.
         env:
           OCI_HOST: ${{ secrets.OCI_HOST }}
           OCI_USER: ${{ secrets.OCI_USER }}
@@ -265,14 +268,9 @@ jobs:
           ssh -p "$PORT" "$OCI_USER@$OCI_HOST" "REMOTE_PATH='$REMOTE_PATH' bash -s" <<'EOF'
           set -uo pipefail
           OBS_DIR="$REMOTE_PATH/trading_bot/observability"
-          if [[ ! -f "$OBS_DIR/docker-compose.yml" ]]; then
-            echo "ℹ️ docker-compose.yml não encontrado em $OBS_DIR. Pulando observability."
-            exit 0
-          fi
 
-          # Detecta Docker + Docker Compose (v2 plugin ou v1 standalone)
           if ! command -v docker >/dev/null 2>&1; then
-            echo "⚠️ Docker não instalado. Observability não será iniciada."
+            echo "ℹ️ Docker não instalado. Nada a fazer."
             exit 0
           fi
           if docker compose version >/dev/null 2>&1; then
@@ -280,18 +278,23 @@ jobs:
           elif command -v docker-compose >/dev/null 2>&1; then
             DC="docker-compose"
           else
-            echo "⚠️ Docker Compose não encontrado. Observability não será iniciada."
-            exit 0
+            DC=""
           fi
 
-          cd "$OBS_DIR"
-          echo "🚀 Subindo/atualizando stack de observability via '$DC up -d'..."
-          if ! $DC up -d; then
-            echo "⚠️ $DC up -d falhou. Deploy do bot segue normalmente."
-            exit 0
+          if [[ -n "$DC" && -f "$OBS_DIR/docker-compose.yml" ]]; then
+            cd "$OBS_DIR"
+            echo "🧹 Garantindo que o stack de observability esteja down..."
+            $DC down --remove-orphans || true
           fi
-          echo "📊 Containers:"
-          $DC ps || true
+
+          # Remove containers residuais (caso tenham sido criados fora do compose)
+          for c in trading-bot-grafana trading-bot-prometheus; do
+            if docker ps -a --format '{{.Names}}' | grep -qx "$c"; then
+              echo "🧹 Removendo container residual: $c"
+              docker rm -f "$c" || true
+            fi
+          done
+          echo "✅ Observability desativada na VM."
           EOF
 
       - name: Rollback on failure
