@@ -101,12 +101,17 @@ class TradingConfig:
     # ============================================
     # CREDENCIAIS DA BINANCE (usar variáveis de ambiente é mais seguro)
     # ============================================
-    API_KEY: str = os.getenv("BINANCE_API_KEY", "")
-    API_SECRET: str = os.getenv("BINANCE_API_SECRET", "")
-    
-    # True = Testnet (dinheiro fake para testes)
-    # False = Mainnet (dinheiro real - CUIDADO!)
-    USE_TESTNET: bool = False
+    # Par de credenciais por rede — a rede ativa é controlada por ENVIRONMENT.
+    MAINNET_API_KEY: str = os.getenv("BINANCE_MAINNET_API_KEY", "")
+    MAINNET_API_SECRET: str = os.getenv("BINANCE_MAINNET_API_SECRET", "")
+    TESTNET_API_KEY: str = os.getenv("BINANCE_TESTNET_API_KEY", "")
+    TESTNET_API_SECRET: str = os.getenv("BINANCE_TESTNET_API_SECRET", "")
+
+    # Rede ativa: "testnet" ou "mainnet". Resolvida em __post_init__ com prioridade:
+    # 1) env var TRADING_BOT_ENVIRONMENT
+    # 2) runtime/active_environment.txt (persistência do comando /env no Telegram)
+    # 3) default "testnet"
+    ENVIRONMENT: str = ""
 
     # ============================================
     # AMBIENTE / RUNTIME / LOGGING
@@ -132,6 +137,7 @@ class TradingConfig:
     STATE_FILE_PATH: str = ""
     LOCK_FILE_PATH: str = ""
     LOG_FILE_PATH: str = ""
+    ACTIVE_ENV_FILE_PATH: str = ""
     
     # ============================================
     # NOTIFICAÇÕES TELEGRAM
@@ -151,11 +157,6 @@ class TradingConfig:
     # ID do usuário autorizado a enviar comandos (None = qualquer um)
     # Para descobrir seu ID, envie /start para @userinfobot no Telegram
     TELEGRAM_USER_ID: int | None = _env_optional_int("TELEGRAM_USER_ID")
-    
-    # Frequência das notificações de status (em iterações)
-    # 60 = envia status a cada 60 iterações (10 minutos com intervalo de 10s)
-    # Use /status no Telegram para ver status a qualquer momento
-    TELEGRAM_STATUS_INTERVAL: int = 180  # A cada 30 minutos (use /status para ver a qualquer momento)
     
     # ============================================
     # GESTÃO DE CAPITAL
@@ -198,7 +199,17 @@ class TradingConfig:
     
     # Alavancagem (1x a 20x) - MAIOR ALAVANCAGEM = MAIOR RISCO
     # Recomendo começar com 3x-5x para testes
-    LEVERAGE: int = 20
+    LEVERAGE: int = 10
+
+    # ============================================
+    # SIMULATED BALANCE (APENAS TESTNET)
+    # ============================================
+    # Override do saldo reportado por get_account_balance/get_available_balance.
+    # Quando > 0 em testnet, o bot se comporta como se só tivesse este valor
+    # na carteira — útil pra simular começar com capital pequeno sem precisar
+    # fazer transfer na testnet. Margem de posições abertas é subtraída.
+    # Em mainnet é ignorado por segurança.
+    SIMULATED_BALANCE_USD: float = _env_float("TRADING_BOT_SIMULATED_BALANCE_USD", 0.0)
     
     # ============================================
     # MOEDAS PARA OPERAR (Hedge em múltiplas moedas)
@@ -303,11 +314,7 @@ class TradingConfig:
     RANGE_SCALP_MIN_RISK_REWARD: float = 1.20
     RANGE_SCALP_EARLY_EXIT_ENABLED: bool = False
     RANGE_SCALP_EARLY_EXIT_TIMEFRAME: str = "3m"
-    
-    # Diferença de preço para abrir posição oposta (em %)
-    # Se o preço mover 1%, abre a posição de hedge
-    HEDGE_TRIGGER_PERCENT: float = 1.0
-    
+
     # ============================================
     # DCA (Dollar Cost Averaging) - Média de Preço
     # ============================================
@@ -330,13 +337,13 @@ class TradingConfig:
     
     # Stop Loss Individual (por posição)
     # Se False, as posições não têm SL individual - só fecham por TP ou Trailing Stop
-    USE_INDIVIDUAL_STOP_LOSS: bool = False  # Desativado - usa apenas Trailing Stop
-    STOP_LOSS_PERCENT: float = 3.0  # Não usado quando desativado
+    USE_INDIVIDUAL_STOP_LOSS: bool = True
+    STOP_LOSS_PERCENT: float = 1.2  # SL apertado pro caminho A (entradas tardias)
     
     # Stop Loss Global (baseado no capital total)
     # Se o prejuízo total atingir esse % do capital inicial, fecha TUDO e para o bot
     # Exemplo: 90% com capital de $50 = para quando perder $45 (restar $5)
-    GLOBAL_STOP_LOSS_PERCENT: float = 90.0
+    GLOBAL_STOP_LOSS_PERCENT: float = 15.0  # Circuit breaker agressivo pra conta inteira
 
     # Drawdown máximo a partir do pico de equity (Improvement 1)
     # Se o saldo cair X% desde o pico histórico, bloqueia novas entradas
@@ -370,17 +377,19 @@ class TradingConfig:
     # METAS DIÁRIAS (Para de operar quando atingir)
     # ============================================
     # Ativa o controle de metas diárias
-    USE_DAILY_TARGETS: bool = False  # Desativado - bot roda 24h
-    
+    USE_DAILY_TARGETS: bool = True  # Circuit breaker diário: para quando atinge target
+
     # Meta de LUCRO diário em USD - Para de abrir novas posições quando atingir
-    DAILY_PROFIT_TARGET: float = 20.0
-    
+    # ~3% do saldo testnet (~$4.8k)
+    DAILY_PROFIT_TARGET: float = 150.0
+
     # Meta de PERDA diária em USD - Para de abrir novas posições quando atingir
-    DAILY_LOSS_LIMIT: float = 10.0
+    # ~2% do saldo testnet (~$4.8k)
+    DAILY_LOSS_LIMIT: float = 100.0
     
     # Take Profit em percentual (continua ativo por posição)
     # Com trades de $6.25, 50% = $3.12 de lucro por trade
-    TAKE_PROFIT_PERCENT: float = 8.0
+    TAKE_PROFIT_PERCENT: float = 1.5  # Scalp real: sai rápido com lucro modesto
     
     # ============================================
     # TRAILING STOP (Stop Móvel)
@@ -409,8 +418,8 @@ class TradingConfig:
     # NOTA: Breakeven = 0.10% (taxa taker 0.05% × 2 ordens)
     
     USE_TRAILING_STOP: bool = True
-    TRAILING_ACTIVATION_PERCENT: float = 0.60   # Ativa quando lucro >= 0.60%
-    TRAILING_DISTANCE_PERCENT: float = 0.25     # Stop fica 0.25% abaixo do pico
+    TRAILING_ACTIVATION_PERCENT: float = 0.40   # Ativa mais cedo pra proteger ganhos pequenos
+    TRAILING_DISTANCE_PERCENT: float = 0.50     # Distância maior pra não stopar por ruído
     # TRAILING_MIN_PROFIT_USD removido — gate em USD bloqueava fechamento em posições pequenas
     # (order=$3 × 10x = $30 notional → profit_usd < $0.20 na ativação)
     
@@ -429,7 +438,6 @@ class TradingConfig:
     # - Funding +0.05% e posição SHORT → vai receber → mantém mínimo normal
     
     CHECK_FUNDING_RATE: bool = True
-    FUNDING_RATE_THRESHOLD: float = 0.02        # Acima de 0.02% considera "alto"
     
     # Perda máxima diária permitida (em % do capital)
     # Se perder 10% do capital no dia, para de operar
@@ -537,9 +545,6 @@ class TradingConfig:
     # Se True, só envia no Telegram quando houver retries/falhas na janela
     API_HEALTH_TELEGRAM_ONLY_ON_ISSUES: bool = True
 
-    # Habilita alerta crítico imediato (fora da janela periódica)
-    API_HEALTH_CRITICAL_ALERTS_ENABLED: bool = True
-
     # Cooldown entre alertas críticos imediatos
     API_HEALTH_CRITICAL_COOLDOWN_SECONDS: int = 300
 
@@ -549,11 +554,25 @@ class TradingConfig:
     DAILY_PERFORMANCE_REPORT_MINUTE_BRT: int = _env_int("TRADING_BOT_DAILY_REPORT_MINUTE_BRT", 55)
     DAILY_PERFORMANCE_REPORT_LOOKBACK_HOURS: int = _env_int("TRADING_BOT_DAILY_REPORT_LOOKBACK_HOURS", 24)
 
-    # Dashboard web de monitoramento (somente leitura)
-    DASHBOARD_HOST: str = os.getenv("TRADING_BOT_DASHBOARD_HOST", "127.0.0.1").strip() or "127.0.0.1"
-    DASHBOARD_PORT: int = _env_int("TRADING_BOT_DASHBOARD_PORT", 8080)
-    DASHBOARD_REFRESH_SECONDS: int = _env_int("TRADING_BOT_DASHBOARD_REFRESH_SECONDS", 1)
-    DASHBOARD_AUTH_TOKEN: str = os.getenv("TRADING_BOT_DASHBOARD_AUTH_TOKEN", "").strip()
+    # ============================================
+    # WEBSOCKET KLINE STREAMS (substitui polling REST de klines)
+    # ============================================
+    # Stream em tempo real de velas Futures via python-binance ThreadedWebsocketManager.
+    # Reduz drasticamente latência de análise e volume de REST calls.
+    # Kill switch: desligue em runtime via TRADING_BOT_WEBSOCKET_ENABLED=false.
+    WEBSOCKET_ENABLED: bool = _env_bool("TRADING_BOT_WEBSOCKET_ENABLED", True)
+    # Acima dessa idade (segundos sem msg), is_fresh() retorna False e get_klines
+    # cai em fallback REST automaticamente.
+    WEBSOCKET_STALENESS_SECONDS: float = _env_float("TRADING_BOT_WEBSOCKET_STALENESS_SECONDS", 30.0)
+
+    # ============================================
+    # MÉTRICAS PROMETHEUS (exporter HTTP embutido)
+    # ============================================
+    # Sobe um servidor HTTP separado expondo /metrics no formato Prometheus.
+    # Grafana/Prometheus fazem scrape nessa URL.
+    METRICS_ENABLED: bool = _env_bool("TRADING_BOT_METRICS_ENABLED", True)
+    METRICS_HOST: str = os.getenv("TRADING_BOT_METRICS_HOST", "127.0.0.1").strip() or "127.0.0.1"
+    METRICS_PORT: int = _env_int("TRADING_BOT_METRICS_PORT", 9090)
 
     # ============================================
     # AJUSTE AUTOMÁTICO DE CAPITAL (DEPÓSITO/SAQUE)
@@ -609,7 +628,24 @@ class TradingConfig:
             runtime_dir = project_root / runtime_dir
         runtime_dir.mkdir(parents=True, exist_ok=True)
 
-        env_suffix = self.APP_ENV or "prod"
+        # Resolve rede ativa: env var > arquivo persistido > default testnet
+        active_env_file = runtime_dir / "active_environment.txt"
+        env_override = os.getenv("TRADING_BOT_ENVIRONMENT", "").strip().lower()
+        persisted_env = ""
+        if active_env_file.exists():
+            try:
+                persisted_env = active_env_file.read_text(encoding="utf-8").strip().lower()
+            except OSError:
+                persisted_env = ""
+
+        if env_override in {"mainnet", "testnet"}:
+            self.ENVIRONMENT = env_override
+        elif persisted_env in {"mainnet", "testnet"}:
+            self.ENVIRONMENT = persisted_env
+        else:
+            self.ENVIRONMENT = "testnet"
+
+        env_suffix = f"{self.APP_ENV or 'prod'}.{self.ENVIRONMENT}"
         if not self.STATE_FILE_NAME:
             self.STATE_FILE_NAME = f"bot_state.{env_suffix}.json"
         if not self.LOCK_FILE_NAME:
@@ -622,6 +658,7 @@ class TradingConfig:
         self.STATE_FILE_PATH = str(runtime_dir / self.STATE_FILE_NAME)
         self.LOCK_FILE_PATH = str(runtime_dir / self.LOCK_FILE_NAME)
         self.LOG_FILE_PATH = str(runtime_dir / self.LOG_FILE_NAME)
+        self.ACTIVE_ENV_FILE_PATH = str(active_env_file)
 
         # Pares FIXOS - VAZIO = todos serão dinâmicos
         if self.FIXED_PAIRS is None:
@@ -726,6 +763,50 @@ class TradingConfig:
                 'funding': 5,        # 5%  - Funding (quase irrelevante no scalp)
             }
     
+    # ============================================
+    # Credenciais ativas (derivadas de ENVIRONMENT)
+    # ============================================
+    @property
+    def API_KEY(self) -> str:
+        """Retorna a API key da rede ativa (mainnet ou testnet)."""
+        if self.ENVIRONMENT == "mainnet":
+            return self.MAINNET_API_KEY
+        return self.TESTNET_API_KEY
+
+    @property
+    def API_SECRET(self) -> str:
+        """Retorna o secret da rede ativa (mainnet ou testnet)."""
+        if self.ENVIRONMENT == "mainnet":
+            return self.MAINNET_API_SECRET
+        return self.TESTNET_API_SECRET
+
+    @property
+    def USE_TESTNET(self) -> bool:
+        """True se a rede ativa for testnet (derivado de ENVIRONMENT)."""
+        return self.ENVIRONMENT != "mainnet"
+
+    def has_credentials_for(self, environment: str) -> bool:
+        """Verifica se há credenciais configuradas para a rede dada."""
+        env = str(environment or "").strip().lower()
+        if env == "mainnet":
+            return bool(self.MAINNET_API_KEY and self.MAINNET_API_SECRET)
+        if env == "testnet":
+            return bool(self.TESTNET_API_KEY and self.TESTNET_API_SECRET)
+        return False
+
+    def persist_active_environment(self) -> None:
+        """Grava a rede ativa em disco para sobreviver a restart."""
+        if not self.ACTIVE_ENV_FILE_PATH:
+            return
+        try:
+            Path(self.ACTIVE_ENV_FILE_PATH).write_text(
+                self.ENVIRONMENT, encoding="utf-8"
+            )
+        except OSError as exc:
+            logger.warning(
+                f"⚠️ Falha ao persistir ambiente ativo em {self.ACTIVE_ENV_FILE_PATH}: {exc}"
+            )
+
     def get_binance_strategy_for_capital(self, capital: float) -> dict:
         """
         Retorna a configuração da estratégia Binance para o capital atual.
@@ -995,9 +1076,16 @@ class TradingConfig:
         if not self.RUNTIME_DIR:
             errors.append("⚠️  ALERTA: RUNTIME_DIR não pode ser vazio!")
 
-        if not self.API_KEY or not self.API_SECRET:
+        if self.ENVIRONMENT not in {"mainnet", "testnet"}:
             errors.append(
-                "⚠️  ALERTA: BINANCE_API_KEY/BINANCE_API_SECRET não configuradas nas variáveis de ambiente."
+                f"⚠️  ALERTA: ENVIRONMENT inválido ({self.ENVIRONMENT!r}). Use 'mainnet' ou 'testnet'."
+            )
+
+        if not self.API_KEY or not self.API_SECRET:
+            prefix = (self.ENVIRONMENT or "testnet").upper()
+            errors.append(
+                f"⚠️  ALERTA: Credenciais da Binance não configuradas para {prefix}. "
+                f"Defina BINANCE_{prefix}_API_KEY e BINANCE_{prefix}_API_SECRET no .env."
             )
 
         if self.TELEGRAM_ENABLED and (not self.TELEGRAM_TOKEN or not self.TELEGRAM_CHAT_ID):
@@ -1134,11 +1222,8 @@ class TradingConfig:
                 "⚠️  ALERTA: RANGE_SCALP_MAX_POSITION_MULTIPLIER deve ser >= RANGE_SCALP_MIN_POSITION_MULTIPLIER!"
             )
 
-        if self.DASHBOARD_PORT < 1 or self.DASHBOARD_PORT > 65535:
-            errors.append("⚠️  ALERTA: DASHBOARD_PORT deve estar entre 1 e 65535!")
-
-        if self.DASHBOARD_REFRESH_SECONDS < 1 or self.DASHBOARD_REFRESH_SECONDS > 300:
-            errors.append("⚠️  ALERTA: DASHBOARD_REFRESH_SECONDS deve estar entre 1 e 300!")
+        if self.METRICS_ENABLED and (self.METRICS_PORT < 1 or self.METRICS_PORT > 65535):
+            errors.append("⚠️  ALERTA: METRICS_PORT deve estar entre 1 e 65535!")
 
         if self.CAPITAL_TRANSFER_MIN_ABS_USDT < 0:
             errors.append("⚠️  ALERTA: CAPITAL_TRANSFER_MIN_ABS_USDT deve ser >= 0!")

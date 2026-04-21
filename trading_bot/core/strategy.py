@@ -264,7 +264,7 @@ class HedgeStrategy:
         ema_fast = self.ta.calculate_ema(closes, 9)
         ema_slow = self.ta.calculate_ema(closes, 21)
         rsi = self.ta.calculate_rsi(closes, 14)
-        bb_lower, bb_mid, bb_upper = self.ta.calculate_bollinger_bands(closes, 20)
+        bb_lower, _bb_mid, bb_upper = self.ta.calculate_bollinger_bands(closes, 20)
         
         # Sistema de pontuação
         score = 0

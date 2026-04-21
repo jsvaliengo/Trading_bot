@@ -32,7 +32,7 @@ def _build_handler_with_full_stubs():
                 "margin_balance": 1012.5,
             }
 
-        def get_open_positions(self):
+        def get_open_positions(self, force_refresh=False):
             return [
                 {
                     "symbol": "ETHUSDT",
@@ -459,7 +459,7 @@ def test_stop_force_reports_partial_close_failures():
     handler = TelegramCommandHandler(token="token", chat_id="123")
 
     class ExchangeStub:
-        def get_open_positions(self):
+        def get_open_positions(self, force_refresh=False):
             return [
                 {"symbol": "ETHUSDT", "side": "LONG", "quantity": 0.1},
                 {"symbol": "BNBUSDT", "side": "SHORT", "quantity": 0.2},
@@ -570,7 +570,7 @@ def test_closeall_reports_partial_failures():
     handler = TelegramCommandHandler(token="token", chat_id="123")
 
     class ExchangeStub:
-        def get_open_positions(self):
+        def get_open_positions(self, force_refresh=False):
             return [
                 {"symbol": "ETHUSDT", "side": "LONG", "quantity": 0.1},
                 {"symbol": "XRPUSDT", "side": "SHORT", "quantity": 5.0},

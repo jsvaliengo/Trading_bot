@@ -16,5 +16,8 @@ python-dotenv>=1.0.0
 # Para notificações Telegram
 requests>=2.28.0
 
+# Métricas Prometheus (exporter HTTP embutido)
+prometheus-client>=0.20.0
+
 # Para testes (opcional)
 pytest>=7.0.0

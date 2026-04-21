@@ -1,7 +1,9 @@
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock
+
+import pytest
 
 from trading_bot.core.bot import TradingBot
 from trading_bot.core.config import config
@@ -61,7 +63,7 @@ def test_stop_keeps_open_positions_and_does_not_close_them(monkeypatch):
         def flush_retry_stats(self):
             self.flush_called = True
 
-        def get_open_positions(self):
+        def get_open_positions(self, force_refresh=False):
             return list(open_positions)
 
         def close_position(self, *_args, **_kwargs):
@@ -160,7 +162,7 @@ def test_load_state_uses_backup_when_primary_is_corrupted(tmp_path):
     backup_file.write_text(
         json.dumps(
             {
-                "daily_date": datetime.utcnow().strftime("%Y-%m-%d"),
+                "daily_date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
                 "closed_trades_count": 9,
                 "total_pnl": 12.34,
                 "strategy_profiles": list(getattr(config, "STRATEGY_PROFILES", []) or []),
@@ -183,7 +185,7 @@ def test_load_state_restores_runtime_drawdown_limit(tmp_path, monkeypatch):
     state_file.write_text(
         json.dumps(
             {
-                "daily_date": datetime.utcnow().strftime("%Y-%m-%d"),
+                "daily_date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
                 "max_drawdown_from_peak_percent": 55.0,
             }
         ),
@@ -204,7 +206,7 @@ def test_load_state_ignores_backup_when_primary_is_empty(tmp_path):
     backup_file.write_text(
         json.dumps(
             {
-                "daily_date": datetime.utcnow().strftime("%Y-%m-%d"),
+                "daily_date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
                 "closed_trades_count": 9,
                 "total_pnl": 12.34,
             }
@@ -391,7 +393,7 @@ def test_monitor_positions_ignores_custom_stop_loss_when_individual_sl_disabled(
     }
 
     bot.exchange = SimpleNamespace(
-        get_open_positions=lambda: [dict(position)],
+        get_open_positions=lambda *a, **kw: [dict(position)],
     )
     bot._close_position_with_notification = MagicMock(return_value=True)
     bot._process_binance_closed_position = MagicMock()
@@ -434,7 +436,6 @@ def test_trailing_stop_activates_and_closes_long_on_retrace(monkeypatch):
     monkeypatch.setattr(config, "CHECK_FUNDING_RATE", True)
     monkeypatch.setattr(config, "TRAILING_ACTIVATION_PERCENT", 0.20)
     monkeypatch.setattr(config, "TRAILING_DISTANCE_PERCENT", 0.12)
-    monkeypatch.setattr(config, "FUNDING_RATE_THRESHOLD", 0.02)
 
     key = "ETHUSDT_LONG"
     # Ativa trailing
@@ -474,7 +475,6 @@ def test_trailing_stop_activates_and_closes_short_on_retrace(monkeypatch):
     monkeypatch.setattr(config, "CHECK_FUNDING_RATE", True)
     monkeypatch.setattr(config, "TRAILING_ACTIVATION_PERCENT", 0.20)
     monkeypatch.setattr(config, "TRAILING_DISTANCE_PERCENT", 0.12)
-    monkeypatch.setattr(config, "FUNDING_RATE_THRESHOLD", 0.02)
 
     key = "ETHUSDT_SHORT"
     # Ativa trailing no SHORT
@@ -544,6 +544,51 @@ def test_trailing_stop_always_closes_when_hit_regardless_of_profit_usd(monkeypat
     assert "Trailing Stop" in reason
 
 
+def test_trailing_stop_breakeven_floor_prevents_loss_from_fees(monkeypatch):
+    """Regressão BNBUSDT 2026-04-20: activation 0.40% + distance 0.50% deixava
+    o stop ~0.06% abaixo da entrada, permitindo saída em breakeven bruto que
+    fees transformavam em prejuízo.
+
+    Com breakeven-lock, o stop nunca fica abaixo de entry × (1 + fees_roundtrip),
+    então saídas por trailing sempre cobrem as fees.
+    """
+    bot = _make_light_bot()
+    bot.peak_prices = {}
+    bot.trailing_activated = {}
+    bot.commission_rates = {"taker_rate": 0.0004, "maker_rate": 0.0002}
+    bot.exchange = SimpleNamespace(
+        get_funding_rate=lambda _symbol: {"rate_percent": 0.0}
+    )
+    bot.telegram = SimpleNamespace(
+        send_trailing_stop_activated=lambda **_kwargs: True
+    )
+
+    monkeypatch.setattr(config, "CHECK_FUNDING_RATE", False)
+    monkeypatch.setattr(config, "TRAILING_ACTIVATION_PERCENT", 0.40)
+    monkeypatch.setattr(config, "TRAILING_DISTANCE_PERCENT", 0.50)
+
+    entry_price = 628.68
+    # Piso esperado: entry × (1 + 2×0.0004 + 0.0005) = entry × 1.0013 = 629.497
+    expected_floor = entry_price * (1 + 2 * 0.0004 + 0.0005)
+
+    # Pico apenas 0.44% acima — raw trail seria 0.06% abaixo da entrada
+    peak = entry_price * 1.0044
+    stop = bot._trailing_stop_price("LONG", entry_price, peak)
+    assert stop == pytest.approx(expected_floor)
+    assert stop > entry_price, "Stop nunca pode ficar abaixo da entrada após ativar trailing"
+
+    # Pico alto o suficiente: raw trail domina o piso
+    high_peak = entry_price * 1.02  # +2%
+    stop_high = bot._trailing_stop_price("LONG", entry_price, high_peak)
+    raw_expected = high_peak * (1 - 0.005)
+    assert stop_high == pytest.approx(raw_expected)
+
+    # SHORT espelhado
+    stop_short = bot._trailing_stop_price("SHORT", entry_price, entry_price * 0.9956)
+    expected_ceiling = entry_price * (1 - 2 * 0.0004 - 0.0005)
+    assert stop_short == pytest.approx(expected_ceiling)
+
+
 def test_analyze_and_trade_skips_reentry_when_long_is_already_open(monkeypatch):
     bot = _make_light_bot()
 
@@ -566,7 +611,7 @@ def test_analyze_and_trade_skips_reentry_when_long_is_already_open(monkeypatch):
         get_klines=lambda **_kwargs: [{"close": 100.0}],
         get_available_balance=lambda: 1000.0,
         get_symbol_info=lambda _symbol: {"minNotional": 5.0},
-        get_open_positions=lambda: [
+        get_open_positions=lambda *a, **kw: [
             {
                 "symbol": "ETHUSDT",
                 "side": "LONG",
@@ -610,7 +655,7 @@ def test_analyze_and_trade_ignores_weak_buy_signal(monkeypatch):
         get_klines=lambda **_kwargs: [{"close": 100.0}],
         get_available_balance=lambda: 1000.0,
         get_symbol_info=lambda _symbol: {"minNotional": 5.0},
-        get_open_positions=lambda: [],
+        get_open_positions=lambda *a, **kw: [],
     )
     bot.strategy = SimpleNamespace(generate_trade_setup=lambda **_kwargs: setup)
     bot.risk_manager = SimpleNamespace(can_open_position=lambda _total: True)
@@ -645,7 +690,7 @@ def test_analyze_and_trade_skips_reentry_when_short_is_already_open(monkeypatch)
         get_klines=lambda **_kwargs: [{"close": 100.0}],
         get_available_balance=lambda: 1000.0,
         get_symbol_info=lambda _symbol: {"minNotional": 5.0},
-        get_open_positions=lambda: [
+        get_open_positions=lambda *a, **kw: [
             {
                 "symbol": "ETHUSDT",
                 "side": "SHORT",
@@ -689,7 +734,7 @@ def test_analyze_and_trade_ignores_weak_sell_signal(monkeypatch):
         get_klines=lambda **_kwargs: [{"close": 100.0}],
         get_available_balance=lambda: 1000.0,
         get_symbol_info=lambda _symbol: {"minNotional": 5.0},
-        get_open_positions=lambda: [],
+        get_open_positions=lambda *a, **kw: [],
     )
     bot.strategy = SimpleNamespace(generate_trade_setup=lambda **_kwargs: setup)
     bot.risk_manager = SimpleNamespace(can_open_position=lambda _total: True)
@@ -734,7 +779,7 @@ def test_analyze_and_trade_accepts_buy_signal_for_standard_profile(monkeypatch):
         get_klines=lambda **_kwargs: [{"close": 100.0}],
         get_available_balance=lambda: 1000.0,
         get_symbol_info=lambda _symbol: {"minNotional": 5.0},
-        get_open_positions=lambda: [],
+        get_open_positions=lambda *a, **kw: [],
     )
     bot.risk_manager = SimpleNamespace(can_open_position=lambda _total: True)
     bot.sentiment_mode_enabled = False
@@ -797,7 +842,7 @@ def test_analyze_and_trade_passes_risk_profile_for_trend_strategy(monkeypatch):
         get_klines=lambda **_kwargs: [{"close": 100.0}],
         get_available_balance=lambda: 1000.0,
         get_symbol_info=lambda _symbol: {"minNotional": 5.0},
-        get_open_positions=lambda: [],
+        get_open_positions=lambda *a, **kw: [],
     )
     bot.risk_manager = SimpleNamespace(can_open_position=lambda _total: True)
     bot.sentiment_mode_enabled = False
@@ -832,7 +877,7 @@ def test_analyze_and_trade_runs_ai_consultive_review_without_blocking_execution(
         get_klines=lambda **_kwargs: [{"open": 99.0, "high": 101.0, "low": 98.5, "close": 100.0, "volume": 10.0}],
         get_available_balance=lambda: 1000.0,
         get_symbol_info=lambda _symbol: {"minNotional": 5.0},
-        get_open_positions=lambda: [],
+        get_open_positions=lambda *a, **kw: [],
     )
     bot.strategy = SimpleNamespace(generate_trade_setup=lambda **_kwargs: setup)
     bot.risk_manager = SimpleNamespace(can_open_position=lambda _total: True)
@@ -954,7 +999,7 @@ def test_analyze_and_trade_blocks_execution_when_ai_gated_review_is_not_positive
         get_klines=lambda **_kwargs: [{"open": 99.0, "high": 101.0, "low": 98.5, "close": 100.0, "volume": 10.0}],
         get_available_balance=lambda: 1000.0,
         get_symbol_info=lambda _symbol: {"minNotional": 5.0},
-        get_open_positions=lambda: [],
+        get_open_positions=lambda *a, **kw: [],
     )
     bot.strategy = SimpleNamespace(generate_trade_setup=lambda **_kwargs: setup)
     bot.risk_manager = SimpleNamespace(can_open_position=lambda _total: True)
@@ -1030,7 +1075,7 @@ def test_analyze_and_trade_allows_execution_when_ai_gated_review_is_positive(mon
         get_klines=lambda **_kwargs: [{"open": 99.0, "high": 101.0, "low": 98.5, "close": 100.0, "volume": 10.0}],
         get_available_balance=lambda: 1000.0,
         get_symbol_info=lambda _symbol: {"minNotional": 5.0},
-        get_open_positions=lambda: [],
+        get_open_positions=lambda *a, **kw: [],
     )
     bot.strategy = SimpleNamespace(generate_trade_setup=lambda **_kwargs: setup)
     bot.risk_manager = SimpleNamespace(can_open_position=lambda _total: True)
@@ -1144,7 +1189,7 @@ def test_analyze_and_trade_allows_gated_ai_override_when_trend_strong_setup_is_n
         get_klines=lambda **_kwargs: klines,
         get_available_balance=lambda: 1000.0,
         get_symbol_info=lambda _symbol: {"minNotional": 5.0},
-        get_open_positions=lambda: [],
+        get_open_positions=lambda *a, **kw: [],
     )
     bot.risk_manager = SimpleNamespace(can_open_position=lambda _total: True)
     bot.sentiment_mode_enabled = False
@@ -1620,11 +1665,10 @@ def test_setup_exchange_restores_open_positions_for_reentry_tracking(monkeypatch
         set_leverage=lambda _symbol, _lev: True,
         get_account_balance=lambda: 100.0,
         get_daily_pnl_from_binance=lambda: {"total": 0.0},
-        get_open_positions=lambda: list(open_positions),
+        get_open_positions=lambda *a, **kw: list(open_positions),
     )
     bot.telegram = SimpleNamespace(send_message=lambda *_args, **_kwargs: True)
     bot.update_commission_rates = lambda: None
-    bot.cache_pairs_min_notional = lambda: None
     bot.pnl_by_symbol = {}
     bot.known_positions = {}
     bot.initial_capital = None
@@ -1823,7 +1867,7 @@ def test_execute_global_stop_loss_handles_invalid_initial_capital():
     bot = _make_light_bot()
 
     bot.exchange = SimpleNamespace(
-        get_open_positions=lambda: [],
+        get_open_positions=lambda *a, **kw: [],
         get_account_info=lambda: {"wallet_balance": 120.0, "unrealized_pnl": -8.0},
         get_daily_pnl_from_binance=lambda: {"total": -12.0},
     )
@@ -1943,7 +1987,7 @@ def test_analyze_and_trade_blocks_signal_when_sentiment_conflicts(monkeypatch):
         get_klines=lambda **_kwargs: [{"close": 100.0}],
         get_available_balance=lambda: 1000.0,
         get_symbol_info=lambda _symbol: {"minNotional": 5.0},
-        get_open_positions=lambda: [],
+        get_open_positions=lambda *a, **kw: [],
     )
     bot.strategy = SimpleNamespace(generate_trade_setup=lambda **_kwargs: setup)
     bot.risk_manager = SimpleNamespace(can_open_position=lambda _total: True)
@@ -1960,3 +2004,163 @@ def test_analyze_and_trade_blocks_signal_when_sentiment_conflicts(monkeypatch):
 
     assert result is False
     bot.execute_signal_trade.assert_not_called()
+
+
+# ----------------------------------------------------------------------------
+# Environment switch (mainnet/testnet) — guards
+# ----------------------------------------------------------------------------
+
+def test_switch_environment_rejects_invalid_target(monkeypatch):
+    bot = _make_light_bot()
+    monkeypatch.setattr(config, "ENVIRONMENT", "testnet")
+
+    ok, message = bot.switch_environment("prod")
+
+    assert ok is False
+    assert "inválida" in message.lower()
+
+
+def test_switch_environment_rejects_when_already_on_target(monkeypatch):
+    bot = _make_light_bot()
+    monkeypatch.setattr(config, "ENVIRONMENT", "testnet")
+
+    ok, message = bot.switch_environment("testnet")
+
+    assert ok is False
+    assert "já está" in message.lower()
+
+
+def test_switch_environment_rejects_when_credentials_missing(monkeypatch):
+    bot = _make_light_bot()
+    monkeypatch.setattr(config, "ENVIRONMENT", "testnet")
+    monkeypatch.setattr(config, "MAINNET_API_KEY", "")
+    monkeypatch.setattr(config, "MAINNET_API_SECRET", "")
+
+    ok, message = bot.switch_environment("mainnet")
+
+    assert ok is False
+    assert "credenciais" in message.lower()
+    assert "MAINNET" in message
+
+
+def test_switch_environment_rejects_when_positions_are_open(monkeypatch):
+    bot = _make_light_bot()
+    monkeypatch.setattr(config, "ENVIRONMENT", "testnet")
+    monkeypatch.setattr(config, "MAINNET_API_KEY", "abc")
+    monkeypatch.setattr(config, "MAINNET_API_SECRET", "xyz")
+
+    bot.positions = {"ETHUSDT": {"side": "LONG", "quantity": 1.0}}
+
+    ok, message = bot.switch_environment("mainnet")
+
+    assert ok is False
+    assert "bloqueada" in message.lower()
+    assert "ETHUSDT" in message
+
+
+def test_has_credentials_for_returns_correctly(monkeypatch):
+    monkeypatch.setattr(config, "MAINNET_API_KEY", "key-m")
+    monkeypatch.setattr(config, "MAINNET_API_SECRET", "sec-m")
+    monkeypatch.setattr(config, "TESTNET_API_KEY", "")
+    monkeypatch.setattr(config, "TESTNET_API_SECRET", "")
+
+    assert config.has_credentials_for("mainnet") is True
+    assert config.has_credentials_for("testnet") is False
+    assert config.has_credentials_for("invalid") is False
+
+
+def test_active_api_key_follows_environment(monkeypatch):
+    monkeypatch.setattr(config, "MAINNET_API_KEY", "mainnet-key")
+    monkeypatch.setattr(config, "MAINNET_API_SECRET", "mainnet-secret")
+    monkeypatch.setattr(config, "TESTNET_API_KEY", "testnet-key")
+    monkeypatch.setattr(config, "TESTNET_API_SECRET", "testnet-secret")
+
+    monkeypatch.setattr(config, "ENVIRONMENT", "testnet")
+    assert config.API_KEY == "testnet-key"
+    assert config.API_SECRET == "testnet-secret"
+    assert config.USE_TESTNET is True
+
+    monkeypatch.setattr(config, "ENVIRONMENT", "mainnet")
+    assert config.API_KEY == "mainnet-key"
+    assert config.API_SECRET == "mainnet-secret"
+    assert config.USE_TESTNET is False
+
+
+def test_persist_active_environment_writes_file(monkeypatch, tmp_path):
+    target_file = tmp_path / "active_environment.txt"
+    monkeypatch.setattr(config, "ACTIVE_ENV_FILE_PATH", str(target_file))
+    monkeypatch.setattr(config, "ENVIRONMENT", "mainnet")
+
+    config.persist_active_environment()
+
+    assert target_file.read_text(encoding="utf-8") == "mainnet"
+
+
+# ----------------------------------------------------------------------------
+# API Health classification (threshold CRÍTICO / ATENÇÃO / ESTÁVEL)
+# ----------------------------------------------------------------------------
+
+def test_health_classification_two_failures_in_many_calls_is_not_critical():
+    """Regressão: 2 falhas em 82k calls (0.0024%) não deve disparar CRÍTICO."""
+    status = TradingBot._classify_api_health_status(
+        failures=2, failure_rate=0.0024,
+        order_failures=0, order_rejection_rate=0.0,
+        loop_errors=0, has_issues=True,
+    )
+    assert status == "ATENÇÃO"
+
+
+def test_health_classification_many_failures_is_critical():
+    status = TradingBot._classify_api_health_status(
+        failures=15, failure_rate=0.5,
+        order_failures=0, order_rejection_rate=0.0,
+        loop_errors=0, has_issues=True,
+    )
+    assert status == "CRÍTICO"
+
+
+def test_health_classification_high_failure_rate_is_critical():
+    status = TradingBot._classify_api_health_status(
+        failures=5, failure_rate=2.5,  # > 1% → crítico
+        order_failures=0, order_rejection_rate=0.0,
+        loop_errors=0, has_issues=True,
+    )
+    assert status == "CRÍTICO"
+
+
+def test_health_classification_loop_error_is_always_critical():
+    """Erro de loop indica bug — sempre crítico, independente de outros sinais."""
+    status = TradingBot._classify_api_health_status(
+        failures=0, failure_rate=0.0,
+        order_failures=0, order_rejection_rate=0.0,
+        loop_errors=1, has_issues=True,
+    )
+    assert status == "CRÍTICO"
+
+
+def test_health_classification_order_rejections_over_threshold_is_critical():
+    status = TradingBot._classify_api_health_status(
+        failures=0, failure_rate=0.0,
+        order_failures=0, order_rejection_rate=8.0,  # > 5% → crítico
+        loop_errors=0, has_issues=True,
+    )
+    assert status == "CRÍTICO"
+
+
+def test_health_classification_all_clean_is_stable():
+    status = TradingBot._classify_api_health_status(
+        failures=0, failure_rate=0.0,
+        order_failures=0, order_rejection_rate=0.0,
+        loop_errors=0, has_issues=False,
+    )
+    assert status == "ESTÁVEL"
+
+
+def test_health_classification_minor_issues_is_atencao():
+    """Retries sem falhas → ATENÇÃO, não CRÍTICO."""
+    status = TradingBot._classify_api_health_status(
+        failures=0, failure_rate=0.0,
+        order_failures=0, order_rejection_rate=0.0,
+        loop_errors=0, has_issues=True,  # só retries/overruns
+    )
+    assert status == "ATENÇÃO"
