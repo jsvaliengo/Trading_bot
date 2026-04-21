@@ -1,12 +1,20 @@
-# Stack local de observabilidade: Prometheus + Grafana com dashboard auto-provisionado.
+# Stack LOCAL de observabilidade (roda só no Mac do dev, NÃO na VM OCI).
+#
+# A VM OCI não tem CPU/RAM sobrando para Prometheus + Grafana; por isso o
+# scrape é feito aqui, usando um SSH tunnel que expõe o /metrics do bot
+# remoto em 127.0.0.1:9090 do Mac. O deploy-oracle.yml garante que o stack
+# fique down na VM.
 #
 # Uso:
+#   # 1) abrir o tunnel (ver ~/.ssh/config host "oci-bot"):
+#   ssh oci-bot
+#   # 2) em outro terminal:
 #   cd trading_bot/observability
 #   docker compose up -d
 #   open http://127.0.0.1:3000   # login: admin / admin
 #
-# Prometheus faz scrape no exporter do bot (host.docker.internal:9090).
-# Grafana já vem com datasource + dashboard "Trading Bot" carregados.
+# Prometheus scrapa host.docker.internal:9090 → Mac 127.0.0.1:9090 →
+# (SSH tunnel) → OCI 127.0.0.1:9090 (exporter do bot).
 
 services:
   prometheus:
