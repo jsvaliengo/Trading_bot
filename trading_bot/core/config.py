@@ -200,6 +200,16 @@ class TradingConfig:
     # Alavancagem (1x a 20x) - MAIOR ALAVANCAGEM = MAIOR RISCO
     # Recomendo começar com 3x-5x para testes
     LEVERAGE: int = 10
+
+    # ============================================
+    # SIMULATED BALANCE (APENAS TESTNET)
+    # ============================================
+    # Override do saldo reportado por get_account_balance/get_available_balance.
+    # Quando > 0 em testnet, o bot se comporta como se só tivesse este valor
+    # na carteira — útil pra simular começar com capital pequeno sem precisar
+    # fazer transfer na testnet. Margem de posições abertas é subtraída.
+    # Em mainnet é ignorado por segurança.
+    SIMULATED_BALANCE_USD: float = _env_float("TRADING_BOT_SIMULATED_BALANCE_USD", 0.0)
     
     # ============================================
     # MOEDAS PARA OPERAR (Hedge em múltiplas moedas)

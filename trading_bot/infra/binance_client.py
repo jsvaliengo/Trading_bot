@@ -575,10 +575,30 @@ class BinanceConnection:
                 available = float(asset.get('availableBalance', 0) or 0)
                 break
 
+        wallet, available = self._apply_simulated_cap(wallet, available)
+
         snapshot = {"wallet": wallet, "available": available, "ts": time.monotonic()}
         with self._cache_lock:
             self._balance_cache = snapshot
         return snapshot
+
+    def _apply_simulated_cap(self, wallet: float, available: float) -> tuple[float, float]:
+        """
+        Aplica cap do SIMULATED_BALANCE_USD em testnet. No-op em mainnet
+        ou quando a config é <= 0. Permite simular começar com capital pequeno
+        sem precisar fazer transfer na testnet.
+
+        Preserva a margem usada em posições reais: available simulado =
+        max(0, cap - margem_usada_real).
+        """
+        cap = float(getattr(self.config, "SIMULATED_BALANCE_USD", 0.0) or 0.0)
+        if cap <= 0:
+            return wallet, available
+        if not bool(getattr(self.config, "USE_TESTNET", False)):
+            return wallet, available  # Segurança: nunca capa mainnet
+        margin_used = max(0.0, wallet - available)
+        simulated_available = max(0.0, cap - margin_used)
+        return cap, simulated_available
 
     def get_account_balance(self, force_refresh: bool = False) -> float:
         """
@@ -702,10 +722,14 @@ class BinanceConnection:
         """
         try:
             account = self._api_call("futures_account", self.client.futures_account)
-            
+
+            wallet = float(account.get('totalWalletBalance', 0))
+            available = float(account.get('availableBalance', 0))
+            wallet, available = self._apply_simulated_cap(wallet, available)
+
             return {
-                'wallet_balance': float(account.get('totalWalletBalance', 0)),
-                'available_balance': float(account.get('availableBalance', 0)),
+                'wallet_balance': wallet,
+                'available_balance': available,
                 'unrealized_pnl': float(account.get('totalUnrealizedProfit', 0)),
                 'margin_balance': float(account.get('totalMarginBalance', 0)),
                 'total_initial_margin': float(account.get('totalInitialMargin', 0)),

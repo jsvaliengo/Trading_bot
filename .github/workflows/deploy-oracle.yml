@@ -248,6 +248,52 @@ jobs:
           SKIP_GIT_PULL=1 "./$SCRIPT_PATH"
           EOF
 
+      - name: Ensure observability stack (Prometheus + Grafana)
+        env:
+          OCI_HOST: ${{ secrets.OCI_HOST }}
+          OCI_USER: ${{ secrets.OCI_USER }}
+          OCI_PORT: ${{ secrets.OCI_PORT }}
+          OCI_PATH: ${{ secrets.OCI_PATH }}
+        run: |
+          set -euo pipefail
+          PORT="${OCI_PORT:-22}"
+          REMOTE_PATH="${OCI_PATH:-/home/ubuntu/trading_bot}"
+          if [[ "$REMOTE_PATH" == "~/"* ]]; then
+            REMOTE_PATH="/home/${OCI_USER}/${REMOTE_PATH#~/}"
+          fi
+
+          ssh -p "$PORT" "$OCI_USER@$OCI_HOST" "REMOTE_PATH='$REMOTE_PATH' bash -s" <<'EOF'
+          set -uo pipefail
+          OBS_DIR="$REMOTE_PATH/trading_bot/observability"
+          if [[ ! -f "$OBS_DIR/docker-compose.yml" ]]; then
+            echo "ℹ️ docker-compose.yml não encontrado em $OBS_DIR. Pulando observability."
+            exit 0
+          fi
+
+          # Detecta Docker + Docker Compose (v2 plugin ou v1 standalone)
+          if ! command -v docker >/dev/null 2>&1; then
+            echo "⚠️ Docker não instalado. Observability não será iniciada."
+            exit 0
+          fi
+          if docker compose version >/dev/null 2>&1; then
+            DC="docker compose"
+          elif command -v docker-compose >/dev/null 2>&1; then
+            DC="docker-compose"
+          else
+            echo "⚠️ Docker Compose não encontrado. Observability não será iniciada."
+            exit 0
+          fi
+
+          cd "$OBS_DIR"
+          echo "🚀 Subindo/atualizando stack de observability via '$DC up -d'..."
+          if ! $DC up -d; then
+            echo "⚠️ $DC up -d falhou. Deploy do bot segue normalmente."
+            exit 0
+          fi
+          echo "📊 Containers:"
+          $DC ps || true
+          EOF
+
       - name: Rollback on failure
         if: failure()
         env:

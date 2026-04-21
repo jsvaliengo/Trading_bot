@@ -15,6 +15,9 @@ def _make_client():
     import threading
 
     conn.config = MagicMock()
+    # MagicMock.__float__ retorna 1.0 — explicitar desligado evita cap acidental
+    conn.config.SIMULATED_BALANCE_USD = 0.0
+    conn.config.USE_TESTNET = False
     conn.client = MagicMock()
     conn._cache_lock = threading.Lock()
     conn._balance_cache = None
@@ -331,6 +334,65 @@ def test_get_open_positions_returns_empty_only_when_truly_empty():
 
     result = client.get_open_positions()
     assert result == []
+
+
+def test_simulated_balance_cap_testnet_applies_override():
+    """Em testnet com SIMULATED_BALANCE_USD > 0, wallet e available são cappados."""
+    client = _make_client()
+    client.config.SIMULATED_BALANCE_USD = 173.49
+    client.config.USE_TESTNET = True
+    client._api_call = MagicMock(return_value={
+        "totalWalletBalance": "4750.0",
+        "assets": [{"asset": "USDT", "availableBalance": "4204.0"}],
+    })
+
+    # Wallet vira exatamente o cap
+    assert client.get_account_balance() == 173.49
+    # Available = cap − margem_usada (4750-4204=546) → 0 (cap < margem)
+    assert client.get_available_balance(force_refresh=True) == 0.0
+
+
+def test_simulated_balance_cap_preserves_margin_when_cap_exceeds_usage():
+    """Quando cap > margem, available = cap − margem."""
+    client = _make_client()
+    client.config.SIMULATED_BALANCE_USD = 1000.0
+    client.config.USE_TESTNET = True
+    client._api_call = MagicMock(return_value={
+        "totalWalletBalance": "4750.0",
+        "assets": [{"asset": "USDT", "availableBalance": "4204.0"}],
+    })
+
+    assert client.get_account_balance() == 1000.0
+    # Margem real = 546; available simulado = 1000 - 546 = 454
+    assert client.get_available_balance(force_refresh=True) == 454.0
+
+
+def test_simulated_balance_cap_ignored_on_mainnet():
+    """Por segurança, cap é ignorado em mainnet."""
+    client = _make_client()
+    client.config.SIMULATED_BALANCE_USD = 173.49
+    client.config.USE_TESTNET = False
+    client._api_call = MagicMock(return_value={
+        "totalWalletBalance": "4750.0",
+        "assets": [{"asset": "USDT", "availableBalance": "4204.0"}],
+    })
+
+    assert client.get_account_balance() == 4750.0
+    assert client.get_available_balance(force_refresh=True) == 4204.0
+
+
+def test_simulated_balance_cap_disabled_when_zero():
+    """SIMULATED_BALANCE_USD = 0 é no-op."""
+    client = _make_client()
+    client.config.SIMULATED_BALANCE_USD = 0.0
+    client.config.USE_TESTNET = True
+    client._api_call = MagicMock(return_value={
+        "totalWalletBalance": "4750.0",
+        "assets": [{"asset": "USDT", "availableBalance": "4204.0"}],
+    })
+
+    assert client.get_account_balance() == 4750.0
+    assert client.get_available_balance(force_refresh=True) == 4204.0
 
 
 def test_get_open_positions_filters_zero_quantity():
