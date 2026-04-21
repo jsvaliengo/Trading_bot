@@ -78,6 +78,7 @@ class TelegramCommandHandler:
             '/sl': self.cmd_stop_loss,
             '/drawdown': self.cmd_drawdown,
             '/trailing': self.cmd_trailing,
+            '/double': self.cmd_double,
             '/closeall': self.cmd_close_all,
             '/env': self.cmd_env,
             '/help': self.cmd_help,
@@ -1652,7 +1653,120 @@ class TelegramCommandHandler:
             
         except ValueError:
             self.send_message("❌ Valores inválidos.\n\nExemplo: <code>/trailing 0.5 0.25</code>")
-    
+
+    def cmd_double(self, args: list):
+        """
+        Controle do Double First (dobra a primeira entrada por escopo).
+
+        /double                  — status
+        /double on               — liga LONG e SHORT
+        /double off              — desliga LONG e SHORT
+        /double long on|off      — toggle só LONG
+        /double short on|off     — toggle só SHORT
+        /double mult <n>         — define multiplicador (1 < n <= 10)
+        /double reset            — limpa o registro de "já usado"
+        """
+        if self.config is None:
+            self.send_message("❌ Config não disponível")
+            return
+
+        def _status_msg() -> str:
+            used = {}
+            if self.bot is not None:
+                raw_used = getattr(self.bot, "double_first_used", {}) or {}
+                used = {k: v for k, v in raw_used.items() if v}
+            used_line = ", ".join(sorted(used.keys())) if used else "(nenhum)"
+            cap = self.config.DOUBLE_FIRST_MAX_MARGIN_USDT
+            cap_str = f"${cap:.2f}" if cap > 0 else "sem limite"
+            return (
+                f"🚀 <b>DOUBLE FIRST</b>\n\n"
+                f"   LONG:  <code>{'ON' if self.config.DOUBLE_FIRST_LONG_ENABLED else 'OFF'}</code>\n"
+                f"   SHORT: <code>{'ON' if self.config.DOUBLE_FIRST_SHORT_ENABLED else 'OFF'}</code>\n"
+                f"   Multiplicador: <code>{self.config.DOUBLE_FIRST_MULTIPLIER:.2f}x</code>\n"
+                f"   Cap de margem: <code>{cap_str}</code>\n"
+                f"   Escopo: <code>{self.config.DOUBLE_FIRST_SCOPE}</code>\n"
+                f"   Já usado: <code>{used_line}</code>\n\n"
+                f"<b>Uso:</b>\n"
+                f"<code>/double on</code> | <code>/double off</code>\n"
+                f"<code>/double long on</code> | <code>/double short off</code>\n"
+                f"<code>/double mult 2</code>\n"
+                f"<code>/double reset</code>"
+            )
+
+        if not args:
+            self.send_message(_status_msg())
+            return
+
+        sub = args[0].lower()
+
+        if sub in ("on", "off"):
+            turn_on = sub == "on"
+            self.config.DOUBLE_FIRST_LONG_ENABLED = turn_on
+            self.config.DOUBLE_FIRST_SHORT_ENABLED = turn_on
+            self.send_message(
+                f"✅ <b>DOUBLE FIRST {'LIGADO' if turn_on else 'DESLIGADO'}</b> (LONG e SHORT)\n\n"
+                + _status_msg()
+            )
+            return
+
+        if sub in ("long", "short"):
+            if len(args) < 2 or args[1].lower() not in ("on", "off"):
+                self.send_message(
+                    f"❌ Informe <code>on</code> ou <code>off</code>.\n"
+                    f"Exemplo: <code>/double {sub} on</code>"
+                )
+                return
+            turn_on = args[1].lower() == "on"
+            attr = "DOUBLE_FIRST_LONG_ENABLED" if sub == "long" else "DOUBLE_FIRST_SHORT_ENABLED"
+            setattr(self.config, attr, turn_on)
+            self.send_message(
+                f"✅ <b>DOUBLE FIRST {sub.upper()} {'ON' if turn_on else 'OFF'}</b>\n\n"
+                + _status_msg()
+            )
+            return
+
+        if sub == "mult":
+            if len(args) < 2:
+                self.send_message("❌ Informe o multiplicador.\n\nExemplo: <code>/double mult 2</code>")
+                return
+            try:
+                new_mult = float(args[1])
+            except ValueError:
+                self.send_message("❌ Multiplicador inválido.\n\nExemplo: <code>/double mult 2</code>")
+                return
+            if not (1.0 < new_mult <= 10.0):
+                self.send_message("❌ Multiplicador deve ser > 1 e <= 10")
+                return
+            old_mult = self.config.DOUBLE_FIRST_MULTIPLIER
+            self.config.DOUBLE_FIRST_MULTIPLIER = new_mult
+            self.send_message(
+                f"✅ <b>DOUBLE FIRST multiplicador alterado</b>\n\n"
+                f"   Anterior: <code>{old_mult:.2f}x</code>\n"
+                f"   Novo: <code>{new_mult:.2f}x</code>"
+            )
+            return
+
+        if sub == "reset":
+            if self.bot is None:
+                self.send_message("❌ Bot não configurado")
+                return
+            before = len({k: v for k, v in (getattr(self.bot, "double_first_used", {}) or {}).items() if v})
+            self.bot.double_first_used = {}
+            try:
+                self.bot.save_state()
+            except Exception as e:
+                logger.warning(f"/double reset: falha ao salvar state: {e}")
+            self.send_message(
+                f"♻️ <b>DOUBLE FIRST reset</b>\n\n"
+                f"Registro de {before} escopo(s) 'já usado' foi limpo.\n"
+                f"A próxima entrada elegível será dobrada novamente."
+            )
+            return
+
+        self.send_message(
+            f"❓ Subcomando desconhecido: <code>{sub}</code>\n\n" + _status_msg()
+        )
+
     # ============================================
     # COMANDOS DE AÇÃO
     # ============================================
@@ -1897,6 +2011,7 @@ class TelegramCommandHandler:
 /sl [valor/on/off] - Stop Loss %
 /drawdown [valor/off/reset] - Limite e reset
 /trailing [ativ] [dist] - Trailing
+/double [on|off|long|short|mult|reset] - Double First
 
 <b>🧠 ESTRATÉGIAS:</b>
 /strategy - Listar estratégias
@@ -1923,6 +2038,8 @@ class TelegramCommandHandler:
 • <code>/sl off</code>
 • <code>/drawdown reset</code>
 • <code>/trailing 0.5 0.25</code>
+• <code>/double on</code>
+• <code>/double mult 2</code>
 • <code>/coins disable ETH SOL ADA</code>
 """
         self.send_message(message)
