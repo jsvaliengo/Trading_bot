@@ -151,7 +151,6 @@ class TradingBot:
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
         
-        # Carrega estado salvo anteriormente (se existir)
         self.load_state()
 
         # Inicia exporter Prometheus (opcional, idempotente)
@@ -644,7 +643,6 @@ class TradingBot:
                 self._loaded_initial_capital = saved_initial_capital
                 logger.info(f"💰 Capital inicial carregado: ${saved_initial_capital:.2f}")
             
-            # Carrega portfolio_history e converte timestamps
             portfolio_history_raw = state.get('portfolio_history', [])
             self.portfolio_history = []
             for snap in portfolio_history_raw:
@@ -1569,7 +1567,6 @@ class TradingBot:
             logger.error("❌ Não foi possível ativar Hedge Mode!")
             return False
 
-        # Recarrega perfis para garantir TRADING_PAIRS consistente antes do setup.
         self._reload_strategy_profiles(reason="setup-start")
         
         # Define alavancagem para cada par
@@ -1579,7 +1576,6 @@ class TradingBot:
         # Nota: sync WS é chamado automaticamente em _sync_strategy_profiles_with_trading_pairs,
         # que roda após cada mutação de TRADING_PAIRS (inclusive seleção Binance abaixo).
 
-        # Busca taxas de comissão atuais da API
         self.update_commission_rates()
         
         # Define o capital inicial
@@ -1605,7 +1601,6 @@ class TradingBot:
         if self.last_transfer_check_ts_ms <= 0:
             self.last_transfer_check_ts_ms = int(time.time() * 1000)
         
-        # Mostra configuração de capital por trade (baseado no saldo ATUAL)
         trade_value = current_balance * config.MAX_POSITION_PERCENT
         logger.info("📊 Sistema de capital flexível:")
         logger.info(f"   • Saldo atual: ${current_balance:.2f}")
@@ -1615,9 +1610,7 @@ class TradingBot:
         if config.USE_BINANCE_STRATEGY or config.AUTO_SELECT_PAIRS:
             self._refresh_binance_coin_universe(trigger_reason="setup")
         
-        # ============================================
         # ESTRATÉGIA BINANCE PADRÃO (por faixa de capital)
-        # ============================================
         if config.USE_BINANCE_STRATEGY:
             logger.info("📊 Usando ESTRATÉGIA BINANCE PADRÃO...")
             strategy = config.get_binance_strategy_for_capital(current_balance)
@@ -1680,9 +1673,7 @@ class TradingBot:
                 f"<i>Atualização a cada 6 horas</i>"
             )
         
-        # ============================================
         # SELEÇÃO INTELIGENTE DE PARES (só se não usar estratégia Binance)
-        # ============================================
         elif config.AUTO_SELECT_PAIRS:
             logger.info("🤖 Iniciando seleção inteligente de pares...")
             self.pair_selector = PairSelector(self.exchange, config)
@@ -1692,14 +1683,12 @@ class TradingBot:
                 available_capital=current_balance
             )
             
-            # Atualiza a configuração
             config.TRADING_PAIRS = self._filter_disabled_pairs(selected_pairs)
             self._sync_strategy_profiles_with_trading_pairs(
                 reason="setup-auto-select",
                 primary_pairs=config.TRADING_PAIRS,
             )
             
-            # Atualiza pnl_by_symbol para incluir novos pares
             for symbol in config.TRADING_PAIRS:
                 if symbol not in self.pnl_by_symbol:
                     self.pnl_by_symbol[symbol] = 0.0
@@ -1720,16 +1709,13 @@ class TradingBot:
         if not config.USE_BINANCE_STRATEGY and not config.AUTO_SELECT_PAIRS:
             self._sync_strategy_profiles_with_trading_pairs(reason="setup-static")
 
-        # ============================================
         logger.info(f"📋 Pares finais configurados: {len(config.TRADING_PAIRS)}")
         for symbol in config.TRADING_PAIRS:
             logger.info(f"   • {symbol}")
         
         logger.info("✅ Exchange configurada!")
         
-        # ============================================
         # RECONCILIAÇÃO DE POSIÇÕES (state ↔ exchange)
-        # ============================================
         # Preserva metadata do state (custom_tp/sl, strategy, range) ao cruzar
         # com posições abertas na Binance. Drop entries do state sem contraparte
         # (foram fechadas enquanto bot estava off); cria entries novas com
@@ -1872,11 +1858,9 @@ class TradingBot:
                 "<i>Bot pronto para operar!</i>"
             )
         
-        # Se já atingiu a meta, retorna True
         if self.daily_target_reached:
             return True
         
-        # Verifica meta de LUCRO
         if self.daily_realized_pnl >= config.DAILY_PROFIT_TARGET:
             self.daily_target_reached = True
             logger.info(f"🎯 META DE LUCRO ATINGIDA! P&L: ${self.daily_realized_pnl:.2f}")
@@ -1893,7 +1877,6 @@ class TradingBot:
             )
             return True
         
-        # Verifica meta de PERDA
         if self.daily_realized_pnl <= -config.DAILY_LOSS_LIMIT:
             self.daily_target_reached = True
             logger.info(f"🛑 LIMITE DE PERDA ATINGIDO! P&L: ${self.daily_realized_pnl:.2f}")
@@ -2098,18 +2081,15 @@ class TradingBot:
             return
         
         try:
-            # Busca saldo atual
             account_info = self.exchange.get_account_info()
             current_balance = account_info['wallet_balance']
             
             # Pega a estratégia atual para o capital
             new_strategy = config.get_binance_strategy_for_capital(current_balance)
             
-            # Verifica se mudou de faixa
             old_strategy = getattr(self, 'binance_strategy', None)
             
             if old_strategy is None or old_strategy['capital_range'] != new_strategy['capital_range']:
-                # Mudou de faixa! Atualiza
                 logger.info("📊 MUDANÇA DE FAIXA DETECTADA!")
                 if old_strategy:
                     logger.info(f"   Anterior: {old_strategy['capital_range']} ({old_strategy['num_coins']} moedas)")
@@ -2139,7 +2119,6 @@ class TradingBot:
                     self.binance_strategy = new_strategy
                     self._sync_strategy_profiles_with_trading_pairs(reason="binance-tier-change")
                 
-                # Atualiza pnl_by_symbol para incluir novos pares
                 for symbol in config.TRADING_PAIRS:
                     if symbol not in self.pnl_by_symbol:
                         self.pnl_by_symbol[symbol] = 0.0
@@ -2171,7 +2150,6 @@ class TradingBot:
         if not config.AUTO_SELECT_PAIRS or not self.pair_selector:
             return
         
-        # Verifica se está na hora de atualizar
         if not self.pair_selector.should_update():
             return
         
@@ -2182,7 +2160,6 @@ class TradingBot:
 
         self._refresh_binance_coin_universe(trigger_reason="auto-update")
         
-        # Busca capital disponível atual
         available_capital = self.exchange.get_available_balance()
         
         # Seleciona novos pares baseado no capital disponível
@@ -2224,7 +2201,6 @@ class TradingBot:
                             f"⚠️ Falha ao fechar posição de {pos['symbol']} durante remoção de par."
                         )
         
-        # Atualiza configuração
         config.TRADING_PAIRS = self._filter_disabled_pairs(selected_pairs)
         self._sync_strategy_profiles_with_trading_pairs(
             reason="auto-select-update",
@@ -2232,7 +2208,6 @@ class TradingBot:
         )
         self._sync_ws_subscriptions(reason="update-trading-pairs")
         
-        # Atualiza pnl_by_symbol para incluir novos pares
         for symbol in config.TRADING_PAIRS:
             if symbol not in self.pnl_by_symbol:
                 self.pnl_by_symbol[symbol] = 0.0
@@ -2260,21 +2235,8 @@ class TradingBot:
     
     def sort_binance_coins_by_score(self, num_coins: int, exclude: set | None = None) -> list:
         """
-        Ordena os pares tradáveis da Binance pelo score e retorna os melhores.
-
-        Usa os critérios de seleção:
-        - spread: 35% (menor = melhor)
-        - volume: 30% (maior = melhor)
-        - volatility: 20% (maior = melhor)
-        - trend: 10% (mais forte = melhor)
-        - funding: 5% (menor = melhor)
-
-        Args:
-            num_coins: Quantidade de moedas para retornar
-            exclude: Conjunto de símbolos a excluir da seleção (ex.: pares fixos de outras estratégias)
-
-        Returns:
-            Lista das melhores moedas ordenadas por score
+        Ordena pares por score composto: spread 35%, volume 30%, volatility 20%,
+        trend 10%, funding 5%. Menor spread/funding é melhor; maior volume/vol/trend.
         """
         if num_coins <= 0:
             return []
@@ -2407,12 +2369,10 @@ class TradingBot:
             exclude=self._get_reserved_pairs(enabled_profiles),
         )
 
-        # Verifica se mudou
         if new_coins == old_coins:
             logger.info("✅ Seleção de pares não mudou")
             return
 
-        # Atualiza
         config.TRADING_PAIRS = self._filter_disabled_pairs(new_coins)
         self.binance_strategy['coins'] = new_coins
         self._sync_strategy_profiles_with_trading_pairs(
@@ -2420,12 +2380,10 @@ class TradingBot:
             primary_pairs=config.TRADING_PAIRS,
         )
         
-        # Atualiza pnl_by_symbol
         for symbol in new_coins:
             if symbol not in self.pnl_by_symbol:
                 self.pnl_by_symbol[symbol] = 0.0
         
-        # Define alavancagem para novos pares
         for symbol in new_coins:
             if symbol not in old_coins:
                 self.exchange.set_leverage(symbol, config.LEVERAGE)
@@ -2479,7 +2437,6 @@ class TradingBot:
             
             self.commission_rates = rates
 
-            # Calcula o breakeven (taxa de abrir + fechar)
             breakeven = (rates['taker_rate'] * 2) * 100  # Em percentual
             
             logger.info("💰 Taxas de comissão atualizadas:")
@@ -2866,9 +2823,7 @@ class TradingBot:
         - strong_only: entra só com STRONG_BUY/STRONG_SELL
         - standard: entra com BUY/SELL e sinais fortes
         """
-        # ============================================
         # VERIFICA META DIÁRIA
-        # ============================================
         if self.check_daily_targets():
             logger.info("⏸️  Meta diária atingida - não abrindo novas posições")
             return False
@@ -2972,9 +2927,7 @@ class TradingBot:
                 logger.info(f"⏸️  Sem setup válido para {symbol}")
                 return False
         
-        # ============================================
         # VERIFICA O SINAL
-        # ============================================
         signal = setup.signal
         signal_name = signal.name if hasattr(signal, 'name') else str(signal)
         
@@ -3006,7 +2959,6 @@ class TradingBot:
                 logger.info(f"⏸️  Sinal {signal_name} em {symbol} - aguardando sinal de entrada")
             return False
         
-        # Verifica posições abertas neste símbolo.
         # Se API falhar, pula este símbolo — abrir sem saber o estado pode duplicar posição.
         try:
             open_positions = self.exchange.get_open_positions()
@@ -3017,7 +2969,6 @@ class TradingBot:
             )
             return False
 
-        # Verifica qual lado já está aberto
         has_long = False
         has_short = False
         
@@ -3028,27 +2979,22 @@ class TradingBot:
                 elif pos['side'] == 'SHORT':
                     has_short = True
         
-        # ============================================
         # DECIDE O QUE FAZER BASEADO NO SINAL
-        # ============================================
         
         # Se sinal forte de compra, mas já tem LONG, não faz nada.
         if should_open_long and has_long:
             logger.info(f"⏸️  Sinal {signal_name} em {symbol} mas LONG já está aberto")
             return False
         
-        # Se sinal forte de venda, mas já tem SHORT, não faz nada.
         if should_open_short and has_short:
             logger.info(f"⏸️  Sinal {signal_name} em {symbol} mas SHORT já está aberto")
             return False
         
-        # Verifica limite de posições
         total_positions = len(open_positions)
         if total_positions >= config.MAX_OPEN_POSITIONS:
             logger.info("⏸️  Limite de posições atingido")
             return False
         
-        # Verifica gestão de risco
         if not self.risk_manager.can_open_position(total_positions):
             logger.info("⏸️  Limite de risco atingido")
             return False
@@ -3098,7 +3044,6 @@ class TradingBot:
                 logger.info(f"⏸️  Entrada bloqueada por IA em {symbol} - lado inválido")
                 return False
         
-        # Executa o trade baseado no sinal
         return self.execute_signal_trade(
             setup=setup,
             open_long=should_open_long,
@@ -3182,9 +3127,7 @@ class TradingBot:
             )
             return
 
-        # ============================================
         # DETECTA POSIÇÕES FECHADAS PELA BINANCE
-        # ============================================
         # Cria set de posições atuais e atualiza known_positions sob lock
         current_position_keys = set()
         with self._positions_lock:
@@ -3193,7 +3136,6 @@ class TradingBot:
                 current_position_keys.add(position_key)
                 previous = self.known_positions.get(position_key, {})
 
-                # Atualiza known_positions com info atual
                 self.known_positions[position_key] = {
                     'symbol': pos['symbol'],
                     'side': pos['side'],
@@ -3222,7 +3164,6 @@ class TradingBot:
             # Busca o P&L real da Binance
             self._process_binance_closed_position(pos_info)
 
-            # Remove do tracking
             self._remove_known_position(position_key)
             self._clear_trailing_data(position_key)
         
@@ -3267,7 +3208,6 @@ class TradingBot:
             # Chave única para esta posição
             position_key = f"{symbol}_{side}"
             
-            # Calcula o lucro percentual
             if side == "LONG":
                 profit_pct = ((current_price - entry_price) / entry_price) * 100
             else:  # SHORT
@@ -3281,9 +3221,7 @@ class TradingBot:
             strategy_type = self._normalize_strategy_type(known_meta.get('strategy_type', 'trend_signal'))
             range_mid_price = known_meta.get('range_mid_price')
 
-            # ============================================
             # 0. TAKE PROFIT / STOP LOSS CUSTOM (por estratégia)
-            # ============================================
             custom_tp_hit = bool(
                 custom_take_profit is not None and (
                     (side == "LONG" and current_price >= float(custom_take_profit)) or
@@ -3347,9 +3285,7 @@ class TradingBot:
                     )
                 continue
             
-            # ============================================
             # 1. VERIFICA TAKE PROFIT (SEMPRE ATIVO)
-            # ============================================
             if profit_pct >= config.TAKE_PROFIT_PERCENT:
                 logger.info(f"🎯 Take Profit atingido! {profit_pct:.2f}% >= {config.TAKE_PROFIT_PERCENT}%")
                 pos['current_price'] = current_price
@@ -3367,9 +3303,7 @@ class TradingBot:
                     )
                 continue
             
-            # ============================================
             # 2. VERIFICA TRAILING STOP (se ativado)
-            # ============================================
             if config.USE_TRAILING_STOP:
                 should_close, reason = self._check_trailing_stop(
                     position_key=position_key,
@@ -3393,11 +3327,8 @@ class TradingBot:
                         )
                     continue
             
-            # ============================================
             # 3. VERIFICA STOP LOSS INDIVIDUAL (se ativado)
-            # ============================================
             if config.USE_INDIVIDUAL_STOP_LOSS:
-                # Verifica se o prejuízo excede o limite
                 if profit_pct <= -config.STOP_LOSS_PERCENT:
                     pos['current_price'] = current_price
                     closed = self._close_position_with_notification(
@@ -3472,16 +3403,13 @@ class TradingBot:
         logger.info(f"   Taxas: ${total_fees:.4f}")
         logger.info(f"   P&L Líquido: ${pnl_net:.4f}")
 
-        # ============================================
         # ATUALIZA CONTADORES (protegido por lock — múltiplas threads)
-        # ============================================
         with self._runtime_stats_lock:
             self.closed_trades_count += 1
             self.daily_realized_pnl += pnl_net
             self.total_pnl += pnl_net
             self.risk_manager.update_pnl(pnl_net)
 
-            # Atualiza estatísticas de trades
             if pnl_net > 0:
                 self.trades_win_count += 1
                 self.trades_win_total += pnl_net
@@ -3491,7 +3419,6 @@ class TradingBot:
                 self.trades_loss_total += pnl_net
                 result = "PREJUÍZO 🔴"
 
-            # Atualiza total de taxas pagas
             self.total_fees_paid += total_fees
 
             # Atualiza trades por símbolo (para relatório detalhado)
@@ -3505,10 +3432,8 @@ class TradingBot:
                 self.trades_by_symbol[symbol]['losses'] += 1
                 self.trades_by_symbol[symbol]['loss_value'] += pnl_net
 
-            # Atualiza taxas por símbolo
             self.trades_by_symbol[symbol]['fees'] = self.trades_by_symbol[symbol].get('fees', 0.0) + total_fees
 
-            # Atualiza trades por estratégia
             pos_meta = self._get_known_position(f"{symbol}_{side}")
             strat_key = pos_meta.get('strategy_name')
             if not strat_key:
@@ -3536,7 +3461,6 @@ class TradingBot:
                 close_reason=_reason_for_metric,
             )
 
-            # Atualiza P&L por símbolo
             if symbol in self.pnl_by_symbol:
                 self.pnl_by_symbol[symbol] += pnl_net
             else:
@@ -3551,7 +3475,6 @@ class TradingBot:
         # Log
         logger.info(f"💰 {result}: ${pnl_net:.4f} | Motivo: {reason}")
         
-        # Envia notificação no Telegram
         self.telegram.send_message(
             f"⚠️ <b>POSIÇÃO FECHADA PELA BINANCE</b>\n\n"
             f"📍 <b>Par:</b> {symbol.replace('USDT', '')}/USDT\n"
@@ -3594,22 +3517,8 @@ class TradingBot:
         current_price: float,
         symbol: str,
         position_amt: float = 0.0
-    ) -> tuple:
-        """
-        Verifica e gerencia o Trailing Stop para uma posição.
-        
-        Args:
-            position_key: Identificador único da posição (ex: "ETHUSDT_LONG")
-            side: "LONG" ou "SHORT"
-            entry_price: Preço de entrada da posição
-            current_price: Preço atual do mercado
-            symbol: Par de trading
-            position_amt: Quantidade da posição (para calcular lucro em USD)
-        
-        Returns:
-            (should_close, reason): Se deve fechar e o motivo
-        """
-        # Calcula o lucro percentual atual
+    ) -> tuple[bool, str]:
+        """Retorna (should_close, reason) e atualiza peak_prices/trailing_activated."""
         if side == "LONG":
             profit_pct = ((current_price - entry_price) / entry_price) * 100
             profit_usd = (current_price - entry_price) * abs(position_amt)
@@ -3622,7 +3531,6 @@ class TradingBot:
             self.peak_prices[position_key] = current_price
             self.trailing_activated[position_key] = False
         
-        # Atualiza o preço de pico
         if side == "LONG":
             # Para LONG, queremos o preço máximo
             if current_price > self.peak_prices[position_key]:
@@ -3634,7 +3542,6 @@ class TradingBot:
         
         peak_price = self.peak_prices[position_key]
         
-        # Verifica se deve ativar o trailing
         if not self.trailing_activated[position_key]:
             if profit_pct >= config.TRAILING_ACTIVATION_PERCENT:
                 self.trailing_activated[position_key] = True
@@ -3644,7 +3551,6 @@ class TradingBot:
                 logger.info(f"🔔 Trailing Stop ATIVADO para {position_key}!")
                 logger.info(f"   Pico: ${peak_price:.4f} | Stop em: ${trailing_stop_price:.4f}")
                 
-                # Envia notificação
                 trailing_pos_meta = self._get_known_position(position_key)
                 trailing_strategy_name = trailing_pos_meta.get('strategy_name')
                 if not trailing_strategy_name:
@@ -3660,7 +3566,6 @@ class TradingBot:
                     strategy_name=trailing_strategy_name
                 )
         
-        # Se o trailing está ativado, verifica se foi atingido
         if self.trailing_activated[position_key]:
             trailing_stop_price = self._trailing_stop_price(side, entry_price, peak_price)
             if side == "LONG":
@@ -3668,7 +3573,6 @@ class TradingBot:
             else:  # SHORT
                 price_hit = current_price >= trailing_stop_price
             
-            # Verifica se o preço atingiu o trailing stop
             if price_hit:
                 # Fecha sempre que o stop for atingido. A activation_threshold já garante
                 # que a posição estava lucrativa quando o trailing foi ativado.
@@ -3821,7 +3725,6 @@ class TradingBot:
             unrealized = unrealized_by_symbol.get(symbol, 0)
             total = realized + unrealized
             
-            # Busca funding rate atual
             funding_info = self.exchange.get_funding_rate(symbol)
             funding_rate = funding_info['rate_percent']
             funding_side = "L paga" if funding_rate > 0 else "S paga" if funding_rate < 0 else "neutro"
@@ -4096,7 +3999,6 @@ class TradingBot:
         
         now = datetime.now(timezone.utc)  # Usa UTC como a Binance
         
-        # Verifica se já passou o intervalo desde o último snapshot
         if self.last_snapshot_time:
             # Garante que last_snapshot_time também tem timezone
             last_time = self.last_snapshot_time
@@ -4158,7 +4060,6 @@ class TradingBot:
         # P&L total = P&L realizado do DIA (Binance) + não realizado
         total_pnl = daily_pnl_real + total_unrealized
         
-        # Calcula variação percentual baseado no capital inicial
         pct_change = (total_pnl / self.initial_capital) * 100 if self.initial_capital > 0 else 0
         
         # Prepara dados do histórico para o Telegram (converte para horário do Brasil)
@@ -4523,14 +4424,12 @@ class TradingBot:
         logger.info("🏁 Bot iniciado! Pressione CTRL+C para parar.")
         logger.info("📱 Use /help no Telegram para ver comandos disponíveis.")
         
-        # Envia mensagem de início no Telegram
         self.telegram.send_startup_message(
             pairs=config.TRADING_PAIRS,
             capital=self.initial_capital,
             leverage=config.LEVERAGE
         )
         
-        # Envia mensagem sobre comandos disponíveis
         self.telegram.send_message(
             "🎮 <b>COMANDOS TELEGRAM ATIVOS</b>\n\n"
             "Use /help para ver todos os comandos.\n"
@@ -4549,7 +4448,6 @@ class TradingBot:
             try:
                 now = time.monotonic()
 
-                # Atualiza timing automaticamente se a faixa/pares mudou
                 new_timing_profile = get_loop_timing_profile(config, len(config.TRADING_PAIRS))
                 if timing_profile_changed(timing_profile, new_timing_profile):
                     old_timing_profile = timing_profile
@@ -4572,16 +4470,13 @@ class TradingBot:
                     else:
                         next_analysis_cycle_time = min(next_analysis_cycle_time, now + analysis_cycle_interval)
 
-                # ============================================
                 # CICLO RÁPIDO: MONITORAMENTO DE POSIÇÕES
-                # ============================================
                 if now >= next_monitor_time:
                     monitor_started_at = time.monotonic()
 
                     if self.paused:
                         logger.info("⏸️  Bot PAUSADO - Apenas monitorando posições")
 
-                    # Monitora posições e risco
                     self.monitor_positions()
                     self.check_daily_targets()
 
@@ -4661,9 +4556,7 @@ class TradingBot:
                         target_interval_seconds=monitor_interval
                     )
 
-                # ============================================
                 # CICLO LENTO: ANÁLISE DE ENTRADAS
-                # ============================================
                 if self.paused:
                     # Cancela ciclo em andamento quando pausa
                     if analysis_cycle_active:
@@ -4709,7 +4602,6 @@ class TradingBot:
                             )
                             next_analysis_step_time = now + analysis_symbol_delay
 
-                        # Finaliza ciclo quando todos os pares forem processados
                         if analysis_index >= len(analysis_tasks):
                             analysis_cycle_active = False
                             next_analysis_cycle_time = now + analysis_cycle_interval
@@ -4794,7 +4686,6 @@ class TradingBot:
         logger.info(f"   • P&L Total (Real + Não Real): ${self.total_pnl + total_unrealized:.2f}")
         logger.info("-" * 60)
         
-        # P&L por Par de Moeda
         logger.info("📈 P&L FINAL POR PAR DE MOEDA:")
         for symbol in config.TRADING_PAIRS:
             realized = self.pnl_by_symbol.get(symbol, 0)
@@ -4821,11 +4712,9 @@ class TradingBot:
         logger.info("=" * 60)
         logger.info("👋 Bot finalizado!")
         
-        # Salva o estado antes de encerrar
         logger.info("💾 Salvando estado...")
         self.save_state()
         
-        # Envia mensagem de encerramento no Telegram
         self.telegram.send_shutdown_message(
             total_pnl=self.total_pnl + total_unrealized,
             total_trades=self.closed_trades_count
@@ -4882,7 +4771,6 @@ def main():
             )
             return
     
-    # Cria e executa o bot
     bot = TradingBot()
     bot.run()
 
