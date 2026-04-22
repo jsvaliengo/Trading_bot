@@ -494,7 +494,7 @@ class ConsultiveEngine:
         # Alcance acumulado das últimas 5 velas como % do preço atual —
         # se for muito grande, o movimento já "anda" (chasing).
         recent_highs = [h for h in highs[-5:] if h > 0]
-        recent_lows = [l for l in lows[-5:] if l > 0]
+        recent_lows = [low for low in lows[-5:] if low > 0]
         recent_range_pct = (
             ((max(recent_highs) - min(recent_lows)) / current_price * 100.0)
             if recent_highs and recent_lows and current_price > 0 else 0.0
