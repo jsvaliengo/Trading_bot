@@ -43,6 +43,17 @@ from ..services.telegram_commands import TelegramCommandHandler
 logger = logging.getLogger(__name__)
 
 
+def _format_pair_interval(minutes: int) -> str:
+    """Formata minutos como '1h', '6h', '30min' pra uso em mensagens."""
+    try:
+        m = max(1, int(minutes))
+    except (TypeError, ValueError):
+        return "?"
+    if m >= 60 and m % 60 == 0:
+        return f"{m // 60}h"
+    return f"{m}min"
+
+
 def _configure_logging():
     """
     Configura logging com arquivo em runtime/ e nível por ambiente.
@@ -1677,7 +1688,7 @@ class TradingBot:
                 f"📈 <b>Faixa:</b> {strategy['capital_range']}\n"
                 f"💵 <b>Order Size:</b> ${strategy['order_size']}\n"
                 f"🪙 <b>Moedas ({len(config.TRADING_PAIRS)}):</b>\n{coins_display}\n\n"
-                f"<i>Atualização a cada 6 horas</i>"
+                f"<i>Atualização a cada {_format_pair_interval(config.PAIR_UPDATE_INTERVAL_MINUTES)}</i>"
             )
         
         # SELEÇÃO INTELIGENTE DE PARES (só se não usar estratégia Binance)
@@ -1710,7 +1721,7 @@ class TradingBot:
                 f"🤖 <b>SELEÇÃO DE PARES</b>\n\n"
                 f"📌 <b>Fixos:</b> {', '.join(active_fixed_pairs)}\n"
                 f"🔄 <b>Dinâmicos:</b> {', '.join([p for p in config.TRADING_PAIRS if p not in active_fixed_pairs])}\n\n"
-                f"<i>Próxima atualização em {config.PAIR_UPDATE_INTERVAL_MINUTES // 60}h</i>"
+                f"<i>Próxima atualização em {_format_pair_interval(config.PAIR_UPDATE_INTERVAL_MINUTES)}</i>"
             )
         
         if not config.USE_BINANCE_STRATEGY and not config.AUTO_SELECT_PAIRS:
@@ -2243,7 +2254,7 @@ class TradingBot:
         if added_pairs:
             msg += f"📥 <b>Adicionados:</b> {', '.join(added_pairs)}\n"
         
-        msg += f"\n<i>Próxima atualização em {config.PAIR_UPDATE_INTERVAL_MINUTES // 60}h</i>"
+        msg += f"\n<i>Próxima atualização em {_format_pair_interval(config.PAIR_UPDATE_INTERVAL_MINUTES)}</i>"
         
         self.telegram.send_message(msg)
         
@@ -2278,17 +2289,32 @@ class TradingBot:
 
         # ── 2. PRÉ-FILTRO POR VOLUME (evita chamadas desnecessárias) ─────────
         min_volume = getattr(config, "MIN_VOLUME_24H_USD", 0)
-        pre_filtered = []
+        pre_filtered_with_vol: List[Tuple[str, float]] = []
         for symbol in candidate_coins:
             ticker = all_tickers.get(symbol)
             if not ticker:
                 continue
             try:
-                if float(ticker.get("quoteVolume", 0)) >= min_volume:
-                    pre_filtered.append(symbol)
+                vol = float(ticker.get("quoteVolume", 0))
+                if vol >= min_volume:
+                    pre_filtered_with_vol.append((symbol, vol))
             except (TypeError, ValueError):
                 continue
 
+        # Se PAIR_SCORING_MAX_CANDIDATES > 0, corta no top-N por volume 24h antes
+        # do scoring custoso. Útil pra viabilizar intervalos curtos de rescore
+        # sem saturar a VM.
+        max_candidates = int(getattr(config, "PAIR_SCORING_MAX_CANDIDATES", 0) or 0)
+        before_cap = len(pre_filtered_with_vol)
+        if max_candidates > 0 and before_cap > max_candidates:
+            pre_filtered_with_vol.sort(key=lambda x: x[1], reverse=True)
+            pre_filtered_with_vol = pre_filtered_with_vol[:max_candidates]
+            logger.info(
+                f"🎯 Limitado a top {max_candidates} por volume "
+                f"(de {before_cap} após filtro mínimo)"
+            )
+
+        pre_filtered = [symbol for symbol, _ in pre_filtered_with_vol]
         total_candidates = len(pre_filtered)
         logger.info(
             f"📊 Calculando scores para {total_candidates} moedas "
@@ -2417,14 +2443,18 @@ class TradingBot:
     def trigger_pair_rescore(self) -> dict:
         """
         Executa o rescore de pares imediatamente (via comando Telegram /rescore)
-        e reprograma o próximo rescore automático para daqui a 6 horas.
+        e reprograma o próximo rescore automático conforme PAIR_UPDATE_INTERVAL_MINUTES.
         """
         if config.USE_BINANCE_STRATEGY:
             self.update_binance_strategy_coins()
         else:
             self.update_trading_pairs()
 
-        interval = getattr(self, "_pair_update_interval", 2160)
+        interval = getattr(
+            self,
+            "_pair_update_interval",
+            int(getattr(config, "PAIR_UPDATE_INTERVAL_MINUTES", 360) or 360) * 60,
+        )
         self.next_pair_update_time = time.monotonic() + interval
 
         # Sincroniza streams WS com a nova lista de pares
@@ -4409,7 +4439,12 @@ class TradingBot:
         # Mantém as mesmas cadências históricas de relatórios/manutenção
         # (baseadas no CHECK_INTERVAL configurado manualmente)
         base_interval = max(1, int(config.CHECK_INTERVAL))
-        self._pair_update_interval = base_interval * 2160
+        # Intervalo de rescore de pares respeita config.PAIR_UPDATE_INTERVAL_MINUTES,
+        # com piso de 60s pra evitar loop infinito em configs erradas.
+        self._pair_update_interval = max(
+            60,
+            int(getattr(config, "PAIR_UPDATE_INTERVAL_MINUTES", 360) or 360) * 60,
+        )
 
         # Tarefas periódicas simples vão pro LoopScheduler.
         # Monitor/analysis/pair_update ficam como state machine ou externos.

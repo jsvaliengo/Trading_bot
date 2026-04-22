@@ -42,6 +42,19 @@ def _make_range_klines(last_close: float) -> list[dict]:
     return rows
 
 
+def test_format_pair_interval_handles_hours_minutes_and_bad_input():
+    from trading_bot.core.bot import _format_pair_interval
+
+    assert _format_pair_interval(60) == "1h"
+    assert _format_pair_interval(360) == "6h"
+    assert _format_pair_interval(120) == "2h"
+    assert _format_pair_interval(30) == "30min"
+    assert _format_pair_interval(90) == "90min"  # não múltiplo de 60
+    assert _format_pair_interval(0) == "1min"  # piso
+    assert _format_pair_interval("abc") == "?"
+    assert _format_pair_interval(None) == "?"
+
+
 def test_stop_keeps_open_positions_and_does_not_close_them(monkeypatch):
     bot = _make_light_bot()
 
