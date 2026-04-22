@@ -439,6 +439,40 @@ class TradingBot:
         """Delega pra convenção do StateManager (mantido por compat interna)."""
         return StateManager.backup_file_path(self._state_file_path)
 
+    def _serialize_known_positions(self) -> Dict[str, Any]:
+        """
+        Converte known_positions para forma serializável em JSON.
+        O único campo não-JSON-nativo é last_seen (datetime) → ISO string.
+        """
+        out: Dict[str, Any] = {}
+        for key, payload in (self.known_positions or {}).items():
+            if not isinstance(payload, dict):
+                continue
+            entry = dict(payload)
+            last_seen = entry.get('last_seen')
+            if isinstance(last_seen, datetime):
+                entry['last_seen'] = last_seen.isoformat()
+            out[key] = entry
+        return out
+
+    def _deserialize_known_positions(self, raw: Any) -> Dict[str, Any]:
+        """Desserializa known_positions do state (last_seen ISO → datetime)."""
+        if not isinstance(raw, dict):
+            return {}
+        out: Dict[str, Any] = {}
+        for key, payload in raw.items():
+            if not isinstance(payload, dict):
+                continue
+            entry = dict(payload)
+            last_seen = entry.get('last_seen')
+            if isinstance(last_seen, str):
+                try:
+                    entry['last_seen'] = datetime.fromisoformat(last_seen)
+                except ValueError:
+                    entry['last_seen'] = datetime.now()
+            out[key] = entry
+        return out
+
     def _build_state_payload(self) -> Dict[str, Any]:
         """Monta payload serializável para persistência de estado."""
         portfolio_history_serializable = []
@@ -471,6 +505,10 @@ class TradingBot:
             'trade_history': self.trade_history[-500:],
             'peak_prices': self.peak_prices,
             'trailing_activated': self.trailing_activated,
+            # known_positions persistido pra não perder custom_tp/sl, strategy e
+            # range_mid_price no restart — antes, restart recriava entries só com
+            # campos básicos vindos da API, zerando a proteção customizada.
+            'known_positions': self._serialize_known_positions(),
             'double_first_used': self.double_first_used,
             'max_drawdown_from_peak_percent': float(
                 getattr(config, 'MAX_DRAWDOWN_FROM_PEAK_PERCENT', 0.0) or 0.0
@@ -550,6 +588,9 @@ class TradingBot:
             self.trade_history = state.get('trade_history', [])[-500:]  # Mantém apenas os últimos 500
             self.peak_prices = state.get('peak_prices', {})
             self.trailing_activated = state.get('trailing_activated', {})
+            self.known_positions = self._deserialize_known_positions(
+                state.get('known_positions', {})
+            )
             self.double_first_used = self._normalize_double_first_state(
                 state.get('double_first_used', {})
             )
@@ -1687,32 +1728,115 @@ class TradingBot:
         logger.info("✅ Exchange configurada!")
         
         # ============================================
-        # INICIALIZA RASTREAMENTO DE POSIÇÕES
+        # RECONCILIAÇÃO DE POSIÇÕES (state ↔ exchange)
         # ============================================
-        # Carrega posições já abertas para o tracking
-        # Isso evita perder rastreamento após reinício do bot
+        # Preserva metadata do state (custom_tp/sl, strategy, range) ao cruzar
+        # com posições abertas na Binance. Drop entries do state sem contraparte
+        # (foram fechadas enquanto bot estava off); cria entries novas com
+        # defaults + warn quando Binance tem posição sem metadata no state.
         try:
-            # force_refresh: primeira leitura pós-start; cache pode vir de sessão anterior
             existing_positions = self.exchange.get_open_positions(force_refresh=True)
         except Exception as exc:
             logger.warning(
                 f"⚠️ API falhou ao carregar posições existentes no setup: {exc}. "
-                "Iniciando com known_positions vazio — será repovoado no primeiro monitor tick."
+                "Mantendo known_positions do state; será reconciliado no primeiro monitor tick."
             )
             existing_positions = []
+            # Sem API, não tem como reconciliar com segurança; sai sem mexer.
+            self._sync_ws_subscriptions(reason="setup-exchange-final")
+            return True
+
+        api_keys: set = set()
+        positions_without_metadata: List[str] = []
         for pos in existing_positions:
             position_key = f"{pos['symbol']}_{pos['side']}"
+            api_keys.add(position_key)
+            state_entry = self.known_positions.get(position_key) or {}
+            had_metadata = bool(
+                state_entry.get('custom_take_profit') is not None
+                or state_entry.get('custom_stop_loss') is not None
+                or state_entry.get('range_mid_price') is not None
+            )
+            # Preserva metadata estratégica do state; só atualiza campos
+            # voláteis (qty, preço, last_seen).
             self.known_positions[position_key] = {
                 'symbol': pos['symbol'],
                 'side': pos['side'],
                 'entry_price': pos['entry_price'],
                 'quantity': pos['quantity'],
-                'last_seen': datetime.now()
+                'last_seen': datetime.now(),
+                'strategy_name': state_entry.get('strategy_name', 'primary'),
+                'strategy_type': state_entry.get('strategy_type', 'trend_signal'),
+                'custom_stop_loss': state_entry.get('custom_stop_loss'),
+                'custom_take_profit': state_entry.get('custom_take_profit'),
+                'range_mid_price': state_entry.get('range_mid_price'),
+                'range_entry_side': state_entry.get('range_entry_side'),
             }
-            logger.info(f"📍 Posição existente registrada: {position_key}")
-        
+            if state_entry:
+                logger.info(
+                    f"📍 Reconciliada: {position_key} "
+                    f"(metadata preservada: {had_metadata})"
+                )
+            else:
+                logger.warning(
+                    f"📍 Posição aberta sem metadata no state: {position_key} — "
+                    f"usando defaults (SL/TP custom não disponíveis)"
+                )
+                positions_without_metadata.append(position_key)
+
+        # Drop entries do state que não correspondem a posições abertas
+        stale_known_keys = [
+            k for k in list(self.known_positions.keys()) if k not in api_keys
+        ]
+        for key in stale_known_keys:
+            self.known_positions.pop(key, None)
+            logger.info(f"🧹 Removida entry obsoleta de known_positions: {key}")
+
+        # Limpa órfãos de trailing_activated / peak_prices
+        orphan_trailing = [
+            k for k in list(self.trailing_activated.keys()) if k not in api_keys
+        ]
+        for key in orphan_trailing:
+            self.trailing_activated.pop(key, None)
+            self.peak_prices.pop(key, None)
+            logger.info(f"🧹 Removido trailing/peak órfão: {key}")
+
+        # Notifica Telegram se houve divergência significativa
+        total_divergences = (
+            len(positions_without_metadata) + len(stale_known_keys) + len(orphan_trailing)
+        )
+        if total_divergences > 0:
+            try:
+                lines = ["⚠️ <b>RECONCILIAÇÃO DE STATE</b>", ""]
+                if positions_without_metadata:
+                    lines.append(
+                        f"📥 Posições ativas sem metadata ({len(positions_without_metadata)}):"
+                    )
+                    for k in positions_without_metadata:
+                        lines.append(f"   • <code>{k}</code>")
+                    lines.append("   <i>→ SL/TP custom indisponíveis até nova configuração.</i>")
+                if stale_known_keys:
+                    lines.append("")
+                    lines.append(
+                        f"🧹 Posições fechadas enquanto bot estava off ({len(stale_known_keys)}):"
+                    )
+                    for k in stale_known_keys:
+                        lines.append(f"   • <code>{k}</code>")
+                if orphan_trailing:
+                    lines.append("")
+                    lines.append(
+                        f"🗑️ Trailing órfão limpo ({len(orphan_trailing)}): "
+                        f"<code>{', '.join(orphan_trailing)}</code>"
+                    )
+                self.telegram.send_message("\n".join(lines))
+            except Exception as exc:
+                logger.warning(f"⚠️ Falha ao notificar divergência no Telegram: {exc}")
+
         if existing_positions:
-            logger.info(f"📊 {len(existing_positions)} posições existentes carregadas no tracking")
+            logger.info(
+                f"📊 {len(existing_positions)} posições reconciliadas "
+                f"(divergências: {total_divergences})"
+            )
 
         # Safety net: garante WS sync com TRADING_PAIRS final após TODAS as
         # mutações (Binance strategy, profiles, etc). Idempotente.

@@ -139,6 +139,140 @@ def test_save_state_writes_atomic_file_and_backup(tmp_path):
     assert (tmp_path / "bot_state.json.tmp").exists() is False
 
 
+def test_save_state_persists_known_positions_with_custom_metadata(tmp_path):
+    """Regression: known_positions era descartado no save → custom_tp/sl perdidos no restart."""
+    bot = _make_light_bot()
+    state_file = tmp_path / "bot_state.json"
+    bot._state_file_path = str(state_file)
+
+    bot.known_positions = {
+        "ETHUSDT_LONG": {
+            "symbol": "ETHUSDT",
+            "side": "LONG",
+            "entry_price": 2500.0,
+            "quantity": 0.1,
+            "last_seen": datetime(2026, 4, 22, 10, 30, 0, tzinfo=timezone.utc),
+            "strategy_name": "trend_strong",
+            "strategy_type": "trend_signal",
+            "custom_take_profit": 2537.5,
+            "custom_stop_loss": 2487.5,
+            "range_mid_price": None,
+            "range_entry_side": None,
+        },
+        "SOLUSDT_SHORT": {
+            "symbol": "SOLUSDT",
+            "side": "SHORT",
+            "entry_price": 85.0,
+            "quantity": 1.0,
+            "last_seen": datetime(2026, 4, 22, 10, 30, 0, tzinfo=timezone.utc),
+            "strategy_name": "range_scalping",
+            "strategy_type": "range_scalping",
+            "custom_take_profit": None,
+            "custom_stop_loss": None,
+            "range_mid_price": 85.5,
+            "range_entry_side": "resistance",
+        },
+    }
+
+    assert bot.save_state() is True
+
+    persisted = json.loads(state_file.read_text(encoding="utf-8"))
+    assert "known_positions" in persisted
+    assert set(persisted["known_positions"].keys()) == {"ETHUSDT_LONG", "SOLUSDT_SHORT"}
+    # datetime virou ISO string
+    assert isinstance(persisted["known_positions"]["ETHUSDT_LONG"]["last_seen"], str)
+    # custom_tp/sl preservados
+    assert persisted["known_positions"]["ETHUSDT_LONG"]["custom_take_profit"] == 2537.5
+    assert persisted["known_positions"]["SOLUSDT_SHORT"]["range_mid_price"] == 85.5
+
+
+def test_load_state_restores_known_positions_with_custom_metadata(tmp_path):
+    bot = _make_light_bot()
+    state_file = tmp_path / "bot_state.json"
+    bot._state_file_path = str(state_file)
+
+    state_file.write_text(
+        json.dumps(
+            {
+                "daily_date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+                "known_positions": {
+                    "ETHUSDT_LONG": {
+                        "symbol": "ETHUSDT",
+                        "side": "LONG",
+                        "entry_price": 2500.0,
+                        "quantity": 0.1,
+                        "last_seen": "2026-04-22T10:30:00+00:00",
+                        "strategy_name": "trend_strong",
+                        "strategy_type": "trend_signal",
+                        "custom_take_profit": 2537.5,
+                        "custom_stop_loss": 2487.5,
+                        "range_mid_price": None,
+                        "range_entry_side": None,
+                    }
+                },
+                "strategy_profiles": list(getattr(config, "STRATEGY_PROFILES", []) or []),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert bot.load_state() is True
+    assert "ETHUSDT_LONG" in bot.known_positions
+    entry = bot.known_positions["ETHUSDT_LONG"]
+    assert entry["custom_take_profit"] == 2537.5
+    assert entry["custom_stop_loss"] == 2487.5
+    assert isinstance(entry["last_seen"], datetime)
+
+
+def test_load_state_tolerates_missing_known_positions(tmp_path):
+    """State antigo sem o campo known_positions não pode quebrar o load."""
+    bot = _make_light_bot()
+    state_file = tmp_path / "bot_state.json"
+    bot._state_file_path = str(state_file)
+    state_file.write_text(
+        json.dumps(
+            {
+                "daily_date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+                "closed_trades_count": 3,
+                "strategy_profiles": list(getattr(config, "STRATEGY_PROFILES", []) or []),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert bot.load_state() is True
+    assert bot.known_positions == {}
+
+
+def test_deserialize_known_positions_handles_malformed_entries():
+    bot = _make_light_bot()
+    raw = {
+        "GOOD_LONG": {
+            "symbol": "GOOD",
+            "side": "LONG",
+            "entry_price": 10.0,
+            "quantity": 1.0,
+            "last_seen": "2026-04-22T10:30:00+00:00",
+        },
+        "BAD_LAST_SEEN": {
+            "symbol": "BAD",
+            "side": "LONG",
+            "last_seen": "not-a-date",  # ValueError no fromisoformat
+        },
+        "NOT_A_DICT": "oops",
+    }
+
+    result = bot._deserialize_known_positions(raw)
+
+    assert "GOOD_LONG" in result
+    assert isinstance(result["GOOD_LONG"]["last_seen"], datetime)
+    # Entry ruim ainda é carregada, mas last_seen vira datetime.now() (não quebra)
+    assert "BAD_LAST_SEEN" in result
+    assert isinstance(result["BAD_LAST_SEEN"]["last_seen"], datetime)
+    # Não-dict é ignorado
+    assert "NOT_A_DICT" not in result
+
+
 def test_save_state_persists_runtime_drawdown_limit(tmp_path, monkeypatch):
     bot = _make_light_bot()
     state_file = tmp_path / "bot_state.json"
