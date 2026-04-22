@@ -84,6 +84,21 @@ Se hedge_mode_enabled=true e opposite_side_entry_allowed=true, a existência de 
 Só trate posição aberta no mesmo símbolo como impeditiva quando same_side_entry_blocked=true e same_side_position_open=true.
 Se allowed_entry_sides contiver apenas um lado, use somente esse lado ou NONE.
 Se decision=ENTER_NOW, entry_side precisa ser LONG ou SHORT e respeitar allowed_entry_sides.
+
+Regras de timing (chase / pullback) — avalie ANTES de decidir ENTER_NOW:
+- dist_from_ema9_percent mede o quanto current_price está afastado da EMA9. Em LONG, valor positivo = acima; em SHORT, considere o módulo.
+- Se |dist_from_ema9_percent| > 1.5 × atr_percent, o preço está esticado e a entrada é tardia: prefira WAIT_PULLBACK.
+- Se recent_range_percent > 2 × atr_percent, as últimas velas já se moveram muito; prefira WAIT_PULLBACK.
+- |dist_from_vwap_percent| > 1.2 × atr_percent reforça a hipótese de entrada tardia.
+- Use timing_score para refletir esse risco: entradas frescas pontuam 7–10; esticadas pontuam 3–6; muito esticadas pontuam 0–3.
+
+Regras para entry_window_min e entry_window_max (janela ideal de entrada a limite):
+- Sempre retorne números próximos do current_price (±2 × atr_percent), ou null se não houver alvo claro.
+- NUNCA retorne 0, valores negativos, ou janelas amplas (max − min maior que 1.5 × atr_percent × current_price / 100).
+- Em WAIT_PULLBACK, posicione a janela em torno do EMA9 ou VWAP (o mais próximo do current_price no sentido do pullback), com amplitude ≈ 0.2 × atr_percent × current_price / 100.
+- Em ENTER_NOW, pode retornar null/null (entrada a mercado) ou uma janela estreita ao redor do current_price.
+- Em REJECT, sempre null/null.
+
 Retorne somente um JSON válido com:
 decision, entry_side, confidence, timing_score, risk_grade, entry_window_min, entry_window_max, wait_seconds, reasons, invalidators, telegram_summary.
 Sem markdown. Sem texto fora do JSON.
@@ -466,6 +481,25 @@ class ConsultiveEngine:
         current_volume = float(volumes[-1]) if volumes else 0.0
         volume_ratio = (current_volume / avg_volume) if avg_volume > 0 else 0.0
 
+        # Features de "quão esticada está a entrada" — chave para a IA decidir
+        # entre ENTER_NOW e WAIT_PULLBACK em sinais de tendência.
+        dist_from_ema9_pct = (
+            ((current_price - ema9) / ema9 * 100.0)
+            if ema9 > 0 and current_price > 0 else 0.0
+        )
+        dist_from_vwap_pct = (
+            ((current_price - vwap) / vwap * 100.0)
+            if vwap > 0 and current_price > 0 else 0.0
+        )
+        # Alcance acumulado das últimas 5 velas como % do preço atual —
+        # se for muito grande, o movimento já "anda" (chasing).
+        recent_highs = [h for h in highs[-5:] if h > 0]
+        recent_lows = [l for l in lows[-5:] if l > 0]
+        recent_range_pct = (
+            ((max(recent_highs) - min(recent_lows)) / current_price * 100.0)
+            if recent_highs and recent_lows and current_price > 0 else 0.0
+        )
+
         stop_loss = float(getattr(setup, "stop_loss", 0.0) or 0.0)
         take_profit = float(getattr(setup, "take_profit", 0.0) or 0.0)
         if side == "LONG":
@@ -515,6 +549,9 @@ class ConsultiveEngine:
             "rsi_14": round(rsi14, 4),
             "atr_percent": round(max(0.0, atr_percent), 6),
             "volume_ratio": round(max(0.0, volume_ratio), 6),
+            "dist_from_ema9_percent": round(dist_from_ema9_pct, 6),
+            "dist_from_vwap_percent": round(dist_from_vwap_pct, 6),
+            "recent_range_percent": round(max(0.0, recent_range_pct), 6),
             "execution_direction": execution_bias.get("direction", "NEUTRAL"),
             "confirmation_direction": confirmation_bias.get("direction", "NEUTRAL"),
             "open_positions_count": len(open_positions),
@@ -618,6 +655,8 @@ class ConsultiveEngine:
             cache_key=cache_key,
             allowed_entry_sides=snapshot.get("allowed_entry_sides"),
         )
+
+        self._sanitize_entry_window(final_review, snapshot)
 
         notify_rejected = bool(getattr(self.config, "AI_CONSULTIVE_NOTIFY_REJECTED", False))
         telegram_enabled = bool(getattr(self.config, "AI_CONSULTIVE_TELEGRAM_ENABLED", True))
@@ -981,6 +1020,68 @@ class ConsultiveEngine:
             telegram_summary=telegram_summary[:220],
             raw_text=raw_text[:1000],
         )
+
+    def _sanitize_entry_window(
+        self,
+        review: ConsultiveReview,
+        snapshot: Dict[str, Any],
+    ) -> None:
+        """
+        Anula entry_window_min/max quando a IA devolve lixo (placeholders
+        tipo 0-300, janelas largas demais, ou current_price fora da faixa).
+        Muta `review` in-place.
+
+        Regras:
+        - Se min ou max não forem números positivos finitos → anula.
+        - Se min >= max → anula.
+        - Em REJECT, a janela não faz sentido → anula.
+        - Se current_price estiver fora de [min, max] com folga de 0.2 × ATR,
+          é placeholder → anula.
+        - Se largura (max - min) > 2 × ATR × current_price / 100 → anula.
+        """
+        min_val = review.entry_window_min
+        max_val = review.entry_window_max
+        if min_val is None and max_val is None:
+            return
+
+        current_price = float(snapshot.get("current_price") or 0.0)
+        atr_pct = float(snapshot.get("atr_percent") or 0.0)
+
+        def _drop(reason: str) -> None:
+            logger.info(
+                "🩹 entry_window descartada (%s): min=%s max=%s price=%s atr%%=%s",
+                reason, min_val, max_val, current_price, atr_pct,
+            )
+            review.entry_window_min = None
+            review.entry_window_max = None
+
+        if not (isinstance(min_val, (int, float)) and isinstance(max_val, (int, float))):
+            _drop("valores não numéricos")
+            return
+        if min_val <= 0 or max_val <= 0:
+            _drop("valor não-positivo")
+            return
+        if min_val >= max_val:
+            _drop("min >= max")
+            return
+        if review.decision == "REJECT":
+            _drop("decisão é REJECT")
+            return
+
+        # Daqui pra frente, sanity depende do preço atual e do ATR.
+        if current_price <= 0 or atr_pct <= 0:
+            return  # sem como validar; deixa passar.
+
+        atr_abs = current_price * (atr_pct / 100.0)
+        tolerance = 0.2 * atr_abs
+        if current_price < (min_val - tolerance) or current_price > (max_val + tolerance):
+            _drop("current_price fora da janela")
+            return
+
+        width = max_val - min_val
+        if width > 2.0 * atr_abs:
+            _drop("janela larga demais")
+            return
 
     def _merge_provider_reviews(
         self,

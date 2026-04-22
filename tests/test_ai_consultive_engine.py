@@ -451,3 +451,146 @@ def test_build_market_snapshot_defaults_side_to_none_when_not_requested():
 
     assert snapshot["side"] == "NONE"
     assert snapshot["allowed_entry_sides"] == []
+
+
+def test_build_market_snapshot_includes_timing_features():
+    """Features de 'quão esticada está a entrada' devem vir no payload."""
+    engine = ConsultiveEngine(config_obj=_make_config())
+    setup = SimpleNamespace(
+        entry_price=100.0, stop_loss=99.0, take_profit=102.0, metadata={}
+    )
+    # Tendência de alta consistente — preço anda entre 98 e 105, última vela em 105.
+    klines = [
+        {"close": "98", "high": "99", "low": "97", "volume": "10"},
+        {"close": "100", "high": "101", "low": "99", "volume": "12"},
+        {"close": "102", "high": "103", "low": "101", "volume": "14"},
+    ] * 80 + [
+        {"close": "105", "high": "105.5", "low": "104.5", "volume": "20"},
+    ]
+
+    snapshot = engine.build_market_snapshot(
+        symbol="ETHUSDT",
+        strategy_name="trend_strong",
+        strategy_type="trend_signal",
+        entry_mode="strong_only",
+        signal_name="STRONG_BUY",
+        setup=setup,
+        klines=klines,
+        confirmation_klines=klines,
+        execution_timeframe="3m",
+        confirmation_timeframe="5m",
+        available_balance=100.0,
+        open_positions=[],
+        should_open_long=True,
+        should_open_short=False,
+        min_notional=5.0,
+        sentiment_snapshot=None,
+    )
+
+    # current_price = 105, EMAs giram em torno de 100 -> dist positiva.
+    assert "dist_from_ema9_percent" in snapshot
+    assert "dist_from_vwap_percent" in snapshot
+    assert "recent_range_percent" in snapshot
+    assert snapshot["dist_from_ema9_percent"] > 0
+    assert snapshot["recent_range_percent"] > 0
+
+
+def _make_review(**kwargs) -> ConsultiveReview:
+    base = dict(
+        status="ok",
+        decision="ENTER_NOW",
+        entry_side="LONG",
+        approval=True,
+        confidence=85,
+        timing_score=8,
+        risk_grade="B",
+        entry_window_min=None,
+        entry_window_max=None,
+        wait_seconds=0,
+        reasons=["ok"],
+        invalidators=["ok"],
+        telegram_summary="ok",
+        providers=[],
+        should_notify=False,
+        cache_key="k",
+        symbol="ETHUSDT",
+        strategy_name="trend_strong",
+        signal="STRONG_BUY",
+        side="LONG",
+        mode="consultive",
+    )
+    base.update(kwargs)
+    return ConsultiveReview(**base)
+
+
+def test_sanitize_entry_window_drops_nonpositive_placeholder():
+    """O caso da tela: IA devolve 0-300 pra SOL a $85 → deve virar null/null."""
+    engine = ConsultiveEngine(config_obj=_make_config())
+    review = _make_review(entry_window_min=0.0, entry_window_max=300.0)
+    snapshot = {"current_price": 85.57, "atr_percent": 0.5}
+
+    engine._sanitize_entry_window(review, snapshot)
+
+    assert review.entry_window_min is None
+    assert review.entry_window_max is None
+
+
+def test_sanitize_entry_window_drops_when_current_price_outside():
+    engine = ConsultiveEngine(config_obj=_make_config())
+    review = _make_review(entry_window_min=200.0, entry_window_max=210.0)
+    snapshot = {"current_price": 100.0, "atr_percent": 0.5}
+
+    engine._sanitize_entry_window(review, snapshot)
+
+    assert review.entry_window_min is None
+    assert review.entry_window_max is None
+
+
+def test_sanitize_entry_window_drops_when_width_too_large():
+    engine = ConsultiveEngine(config_obj=_make_config())
+    # ATR 0.5% de 100 = $0.50. 2 × ATR = $1. Largura $5 é grande demais.
+    review = _make_review(entry_window_min=98.0, entry_window_max=103.0)
+    snapshot = {"current_price": 100.0, "atr_percent": 0.5}
+
+    engine._sanitize_entry_window(review, snapshot)
+
+    assert review.entry_window_min is None
+    assert review.entry_window_max is None
+
+
+def test_sanitize_entry_window_keeps_valid_tight_window():
+    engine = ConsultiveEngine(config_obj=_make_config())
+    # Janela de $0.20 em cima de $100 com ATR 0.5% (~$0.50) — válida.
+    review = _make_review(entry_window_min=99.90, entry_window_max=100.10)
+    snapshot = {"current_price": 100.0, "atr_percent": 0.5}
+
+    engine._sanitize_entry_window(review, snapshot)
+
+    assert review.entry_window_min == 99.90
+    assert review.entry_window_max == 100.10
+
+
+def test_sanitize_entry_window_drops_on_reject_decision():
+    engine = ConsultiveEngine(config_obj=_make_config())
+    review = _make_review(
+        decision="REJECT",
+        entry_window_min=99.90,
+        entry_window_max=100.10,
+    )
+    snapshot = {"current_price": 100.0, "atr_percent": 0.5}
+
+    engine._sanitize_entry_window(review, snapshot)
+
+    assert review.entry_window_min is None
+    assert review.entry_window_max is None
+
+
+def test_sanitize_entry_window_noop_when_already_null():
+    engine = ConsultiveEngine(config_obj=_make_config())
+    review = _make_review(entry_window_min=None, entry_window_max=None)
+    snapshot = {"current_price": 100.0, "atr_percent": 0.5}
+
+    engine._sanitize_entry_window(review, snapshot)
+
+    assert review.entry_window_min is None
+    assert review.entry_window_max is None
