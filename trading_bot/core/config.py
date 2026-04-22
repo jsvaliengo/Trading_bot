@@ -753,13 +753,16 @@ class TradingConfig:
                     # pairs vazio = seleção automática pela Binance (top N por score)
                     "pairs": [],
                     "max_pairs": 10,
-                    # Perfil equilibrado: mais frequência com risco controlado (RR ~ 1:2).
+                    # Perfil defensivo: SL mais largo (0.4-0.6%) pra resistir
+                    # a whipsaw; TP modesto (1.0-1.8%) e R:R 1:2. Ajustado em
+                    # 2026-04-22 após o perfil 0.3-0.5/1.4-3.0 acumular losses
+                    # seguidos em regime de oscilação lateral.
                     "risk_profile": {
-                        "stop_loss_min_percent": 0.30,
-                        "stop_loss_max_percent": 0.50,
-                        "take_profit_min_percent": 1.4,
-                        "take_profit_max_percent": 3.0,
-                        "risk_reward_target": 2.8,
+                        "stop_loss_min_percent": 0.40,
+                        "stop_loss_max_percent": 0.60,
+                        "take_profit_min_percent": 1.0,
+                        "take_profit_max_percent": 1.8,
+                        "risk_reward_target": 2.0,
                     },
                 },
                 {
