@@ -30,32 +30,22 @@ class TelegramCommandHandler:
     """
     
     def __init__(self, token: str, chat_id: str):
-        """
-        Inicializa o handler de comandos.
-        
-        Args:
-            token: Token do bot do Telegram
-            chat_id: ID do chat autorizado
-        """
         self.token = token
         self.chat_id = str(chat_id)
         self.base_url = f"https://api.telegram.org/bot{token}"
         self.usd_brl_rate = 5.0
         self.last_rate_update: datetime | None = None
-        
-        # Controle do polling
+
         self.running = False
         self.poll_thread = None
         self.last_update_id = 0
         self._poll_timeout_seconds = 8
         self._poll_request_timeout_seconds = 10
 
-        # Referência ao bot principal (será setada depois)
         self.bot = None
         self.config = None
         self._http_session = requests.Session()
-        
-        # Comandos disponíveis
+
         self.commands = {
             '/start': self.cmd_start,
             '/stop': self.cmd_stop,
@@ -89,13 +79,6 @@ class TelegramCommandHandler:
         logger.info("📱 Telegram Command Handler inicializado")
     
     def set_bot_reference(self, bot, config):
-        """
-        Define a referência ao bot principal e config.
-        
-        Args:
-            bot: Instância do TradingBot
-            config: Instância do Config
-        """
         self.bot = bot
         self.config = config
     
@@ -480,29 +463,24 @@ class TelegramCommandHandler:
             chat_id = str(message.get("chat", {}).get("id", ""))
             user_id = message.get("from", {}).get("id")
             text = message.get("text", "").strip()
-            
-            # Verifica se é do chat autorizado
+
             if chat_id != self.chat_id:
                 logger.warning(f"⚠️ Comando de chat não autorizado: {chat_id}")
                 return
 
-            # Se configurado, valida também o usuário autorizado
             authorized_user_id = getattr(self.config, "TELEGRAM_USER_ID", None)
             if authorized_user_id is not None and user_id != authorized_user_id:
                 logger.warning(f"⚠️ Comando de usuário não autorizado: {user_id}")
                 return
-            
-            # Verifica se é um comando
+
             if not text.startswith("/"):
                 return
-            
-            # Extrai comando e argumentos
+
             parts = text.split()
             command_token = parts[0].lower()
             command = command_token.split("@", 1)[0]
             args = parts[1:] if len(parts) > 1 else []
-            
-            # Executa o comando
+
             if command in self.commands:
                 logger.info(f"📱 Comando recebido: {command} {' '.join(args)}")
                 self.commands[command](args)
@@ -518,11 +496,7 @@ class TelegramCommandHandler:
                 )
             except Exception:
                 logger.error("Falha ao enviar mensagem de erro para o Telegram.")
-    
-    # ============================================
-    # COMANDOS DE CONTROLE
-    # ============================================
-    
+
     def cmd_start(self, args: list):
         """Retoma o bot quando estiver pausado (processo já em execução)."""
         if self.bot is None:
@@ -543,7 +517,6 @@ class TelegramCommandHandler:
             )
             return
 
-        # Se chegou aqui, está em execução mas pausado -> retoma.
         self.bot.paused = False
         self.send_message(
             "▶️ <b>BOT RETOMADO</b>\n\n"
@@ -561,8 +534,7 @@ class TelegramCommandHandler:
         if not self.bot.running:
             self.send_message("⚠️ Bot já está parado!")
             return
-        
-        # Pergunta se quer fechar posições
+
         if args and args[0].lower() == 'force':
             self.send_message("🛑 <b>PARANDO BOT...</b>\n\n⚠️ Fechando todas as posições...")
 
@@ -674,10 +646,6 @@ class TelegramCommandHandler:
             "Bot operando normalmente! 🚀"
         )
     
-    # ============================================
-    # COMANDOS DE INFORMAÇÃO
-    # ============================================
-    
     def cmd_status(self, args: list):
         """Mostra status completo."""
         if self.bot is None:
@@ -685,31 +653,27 @@ class TelegramCommandHandler:
             return
         
         try:
-            # Busca dados
             account_info = self.bot.exchange.get_account_info()
             balance = account_info['wallet_balance']
             unrealized = account_info['unrealized_pnl']
-            
-            # Status do bot
+
             if not self.bot.running:
                 status = "🔴 PARADO"
             elif getattr(self.bot, 'paused', False):
                 status = "⏸️ PAUSADO"
             else:
                 status = "🟢 RODANDO"
-            
-            # Win rate
+
             total_trades = self.bot.trades_win_count + self.bot.trades_loss_count
             win_rate = (self.bot.trades_win_count / total_trades * 100) if total_trades > 0 else 0
 
-            # Posições abertas — se API falhar, mostra lista vazia em vez de quebrar /status
+            # Tolera API indisponível — /status ainda responde com demais métricas.
             try:
                 positions = self.bot.exchange.get_open_positions()
             except Exception as exc:
                 logger.warning(f"⚠️ /status: API indisponível ao listar posições: {exc}")
                 positions = []
-            
-            # P&L acumulado (realizado total desde o início da sessão)
+
             pnl_emoji = "🟢" if self.bot.total_pnl >= 0 else "🔴"
             
             message = f"""
@@ -759,8 +723,7 @@ class TelegramCommandHandler:
             else "n/d"
         )
         drawdown_display = f"{float(drawdown_pct):.2f}%" if drawdown_pct is not None else "n/d"
-        
-        # Estratégia Binance
+
         if self.config.USE_BINANCE_STRATEGY and hasattr(self.bot, 'binance_strategy') and self.bot.binance_strategy:
             strategy = self.bot.binance_strategy
             strategy_info = f"""
@@ -1043,8 +1006,7 @@ class TelegramCommandHandler:
                 entry = pos['entry_price']
                 current = self.bot.exchange.get_symbol_price(pos['symbol'])
                 qty = pos['quantity']
-                
-                # Calcula P&L
+
                 if side == 'LONG':
                     pnl = (current - entry) * qty
                     emoji = "📈"
@@ -1273,7 +1235,6 @@ class TelegramCommandHandler:
             unrealized = account_info['unrealized_pnl']
             margin = account_info['margin_balance']
             
-            # Busca P&L real da Binance
             daily_pnl = self.bot.exchange.get_daily_pnl_from_binance()
             
             message = f"""
@@ -1300,10 +1261,6 @@ class TelegramCommandHandler:
         except Exception as e:
             self.send_message(f"❌ Erro ao buscar saldo: {e}")
     
-    # ============================================
-    # COMANDOS DE CONFIGURAÇÃO
-    # ============================================
-    
     def cmd_leverage(self, args: list):
         """Altera a alavancagem."""
         if self.config is None or self.bot is None:
@@ -1329,7 +1286,6 @@ class TelegramCommandHandler:
             self.config.LEVERAGE = new_leverage
             self._persist_runtime_state()
 
-            # Atualiza na Binance para cada par
             for symbol in self.config.TRADING_PAIRS:
                 self.bot.exchange.set_leverage(symbol, new_leverage)
             
@@ -1348,8 +1304,7 @@ class TelegramCommandHandler:
         if self.config is None or self.bot is None:
             self.send_message("❌ Bot não configurado")
             return
-        
-        # Verifica se está usando estratégia Binance
+
         if self.config.USE_BINANCE_STRATEGY and hasattr(self.bot, 'binance_strategy') and self.bot.binance_strategy:
             current_size = self.bot.binance_strategy['order_size']
         else:
@@ -1767,10 +1722,6 @@ class TelegramCommandHandler:
             f"❓ Subcomando desconhecido: <code>{sub}</code>\n\n" + _status_msg()
         )
 
-    # ============================================
-    # COMANDOS DE AÇÃO
-    # ============================================
-    
     def cmd_env(self, args: list):
         """
         Mostra/troca a rede Binance ativa (mainnet/testnet).
@@ -1788,7 +1739,6 @@ class TelegramCommandHandler:
         current = str(getattr(self.config, "ENVIRONMENT", "") or "").lower()
         current_label = current.upper() if current else "?"
 
-        # Sem args → status
         if not args:
             has_mainnet = self.config.has_credentials_for("mainnet")
             has_testnet = self.config.has_credentials_for("testnet")
@@ -1850,7 +1800,6 @@ class TelegramCommandHandler:
                 self.send_message("📍 Nenhuma posição aberta para fechar.")
                 return
 
-            # Pede confirmação
             if not args or args[0].lower() != 'confirm':
                 self.send_message(
                     f"⚠️ <b>FECHAR {len(positions)} POSIÇÕES?</b>\n\n"
@@ -1869,7 +1818,6 @@ class TelegramCommandHandler:
                 side = pos.get('side', 'UNKNOWN')
                 qty = pos.get('quantity', 0)
                 try:
-                    # Fecha a posição
                     if side == 'LONG':
                         result = self.bot.exchange.place_market_order(
                             symbol=symbol,
