@@ -35,6 +35,7 @@ from ..execution import ExecutionEngine
 from ..infra.binance_client import BinanceConnection
 from ..observability import metrics
 from .strategy import HedgeStrategy, RangeScalpingStrategy, RiskManager
+from ..services.kill_switch import KillSwitchMonitor
 from ..services.notifications import TelegramNotifier
 from ..services.pair_selector import PairSelector
 from ..services.telegram_commands import TelegramCommandHandler
@@ -138,6 +139,8 @@ class TradingBot:
         logger.info("🤖 Inicializando IA consultiva...")
         self.ai_consultive_engine = ConsultiveEngine(config_obj=config)
 
+        self.kill_switch = KillSwitchMonitor(config_obj=config, telegram=self.telegram)
+
         # Preenche pnl_by_symbol com os pares configurados
         for symbol in config.TRADING_PAIRS:
             self.pnl_by_symbol[symbol] = 0.0
@@ -202,6 +205,7 @@ class TradingBot:
         self.trailing_activated = {}
         self.peak_equity: float = 0.0
         self.peak_equity_ts = None
+        self.last_known_balance: float | None = None
         self.known_positions = {}
         self.double_first_used = {}
         self.commission_rates = None
@@ -509,6 +513,7 @@ class TradingBot:
             # campos básicos vindos da API, zerando a proteção customizada.
             'known_positions': self._serialize_known_positions(),
             'double_first_used': self.double_first_used,
+            'kill_switch': self.kill_switch.to_state() if getattr(self, 'kill_switch', None) else {},
             'max_drawdown_from_peak_percent': float(
                 getattr(config, 'MAX_DRAWDOWN_FROM_PEAK_PERCENT', 0.0) or 0.0
             ),
@@ -593,6 +598,8 @@ class TradingBot:
             self.double_first_used = self._normalize_double_first_state(
                 state.get('double_first_used', {})
             )
+            if getattr(self, 'kill_switch', None) is not None:
+                self.kill_switch.load_from_state(state.get('kill_switch', {}))
             saved_max_drawdown = state.get('max_drawdown_from_peak_percent')
             if saved_max_drawdown is not None:
                 try:
@@ -1846,6 +1853,15 @@ class TradingBot:
         today = datetime.now(timezone.utc).date()
         if today > self.last_daily_reset:
             logger.info("🌅 Novo dia detectado! Resetando metas diárias...")
+            # Registra o P&L do dia que acabou no histórico para kill switches
+            # ANTES de zerar o contador.
+            if getattr(self, 'kill_switch', None) is not None:
+                self.kill_switch.record_daily_rollover(
+                    date=self.last_daily_reset.strftime('%Y-%m-%d'),
+                    net_pnl=float(self.daily_realized_pnl or 0.0),
+                    trades_win=0,
+                    trades_loss=0,
+                )
             self.daily_target_reached = False
             self.daily_realized_pnl = 0.0
             self.last_daily_reset = today
@@ -4484,6 +4500,7 @@ class TradingBot:
                     try:
                         _current_bal = self.exchange.get_account_balance()
                         if _current_bal > 0:
+                            self.last_known_balance = _current_bal
                             self._update_peak_equity(_current_bal)
                             metrics.update_account_balance(_current_bal)
                             if self.peak_equity > 0:
@@ -4492,6 +4509,13 @@ class TradingBot:
                                 )
                     except Exception:
                         pass
+
+                    # Kill switches de risco — alertas + pausa automática
+                    if getattr(self, 'kill_switch', None) is not None:
+                        try:
+                            self.kill_switch.check_all(bot=self)
+                        except Exception as _exc:
+                            logger.warning(f"⚠️ KillSwitch check falhou: {_exc}")
 
                     # Snapshot de métricas Prometheus (gauges read-only)
                     metrics.update_bot_state(self)

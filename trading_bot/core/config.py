@@ -348,6 +348,17 @@ class TradingConfig:
     # Drawdown máximo a partir do pico de equity (Improvement 1)
     # Se o saldo cair X% desde o pico histórico, bloqueia novas entradas
     MAX_DRAWDOWN_FROM_PEAK_PERCENT: float = float(os.getenv("TRADING_BOT_MAX_DRAWDOWN_PERCENT", "30.0"))
+
+    # Kill switches de risco operacional — alertas + pausa automática em regressão.
+    # Os 3 gatilhos ficam todos desligáveis individualmente zerando o threshold.
+    KILL_SWITCH_ENABLED: bool = _env_bool("TRADING_BOT_KILL_SWITCH_ENABLED", True)
+    # Pausa o bot quando há N dias consecutivos no vermelho.
+    KILL_SWITCH_LOSS_STREAK_DAYS: int = _env_int("TRADING_BOT_KILL_SWITCH_LOSS_STREAK_DAYS", 3)
+    # Pausa + alerta quando drawdown do pico atinge X% (MENOR que MAX_DRAWDOWN_FROM_PEAK_PERCENT).
+    KILL_SWITCH_DRAWDOWN_ALERT_PERCENT: float = _env_float("TRADING_BOT_KILL_SWITCH_DRAWDOWN_ALERT_PERCENT", 5.0)
+    # Alerta quando win rate cai abaixo de Y% com amostra ≥ Z trades (sem pausar).
+    KILL_SWITCH_WR_FLOOR_PERCENT: float = _env_float("TRADING_BOT_KILL_SWITCH_WR_FLOOR_PERCENT", 40.0)
+    KILL_SWITCH_WR_MIN_TRADES: int = _env_int("TRADING_BOT_KILL_SWITCH_WR_MIN_TRADES", 20)
     
     # ============================================
     # ESTRATÉGIA BINANCE PADRÃO (por faixa de capital)
