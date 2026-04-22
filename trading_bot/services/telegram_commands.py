@@ -74,6 +74,7 @@ class TelegramCommandHandler:
             '/help': self.cmd_help,
             '/strategy': self.cmd_strategy,
             '/rescore': self.cmd_rescore,
+            '/invert': self.cmd_invert,
         }
         
         logger.info("📱 Telegram Command Handler inicializado")
@@ -645,7 +646,63 @@ class TelegramCommandHandler:
             "• Abertura de posições: <b>liberada</b>\n\n"
             "Bot operando normalmente! 🚀"
         )
-    
+
+    def cmd_invert(self, args: list):
+        """
+        Inverte todos os sinais de entrada (BUY→SHORT, SELL→LONG).
+
+        /invert          — mostra status
+        /invert on       — liga inversão
+        /invert off      — desliga inversão
+        """
+        if self.bot is None:
+            self.send_message("❌ Bot não configurado")
+            return
+
+        current = bool(getattr(self.bot, 'invert_signals', False))
+
+        if not args:
+            self.send_message(
+                f"🔀 <b>INVERSÃO DE SINAIS</b>\n\n"
+                f"   Status: <code>{'ON' if current else 'OFF'}</code>\n\n"
+                f"Quando <b>ON</b>: sinal de COMPRA abre SHORT e sinal de VENDA abre LONG.\n"
+                f"SL/TP/trailing seguem automaticamente o novo lado.\n\n"
+                f"<b>Uso:</b>\n"
+                f"<code>/invert on</code>  |  <code>/invert off</code>"
+            )
+            return
+
+        sub = args[0].lower()
+        if sub not in ("on", "off"):
+            self.send_message("❌ Use <code>/invert on</code> ou <code>/invert off</code>")
+            return
+
+        new_val = sub == "on"
+        if new_val == current:
+            self.send_message(f"⚠️ Inversão já está <b>{'ON' if current else 'OFF'}</b>")
+            return
+
+        self.bot.invert_signals = new_val
+
+        try:
+            self.bot.save_state()
+        except Exception as exc:
+            logger.warning(f"⚠️ Falha ao persistir invert_signals: {exc}")
+
+        if new_val:
+            self.send_message(
+                "🔀 <b>INVERSÃO LIGADA</b>\n\n"
+                "• Sinais de COMPRA abrirão <b>SHORT</b>\n"
+                "• Sinais de VENDA abrirão <b>LONG</b>\n"
+                "• Posições já abertas: <b>não afetadas</b>\n\n"
+                "Use <code>/invert off</code> para voltar ao normal."
+            )
+        else:
+            self.send_message(
+                "✅ <b>INVERSÃO DESLIGADA</b>\n\n"
+                "Sinais voltam a operar no lado original."
+            )
+
     def cmd_status(self, args: list):
         """Mostra status completo."""
         if self.bot is None:
@@ -697,6 +754,7 @@ class TelegramCommandHandler:
    • Alavancagem: <code>{self.config.LEVERAGE}x</code>
    • Moedas: <code>{len(self.config.TRADING_PAIRS)}</code>
    • Sentimento: <code>{"ON" if getattr(self.bot, "sentiment_mode_enabled", False) else "OFF"}</code>
+   • Inversão: <code>{"ON" if getattr(self.bot, "invert_signals", False) else "OFF"}</code>
 ━━━━━━━━━━━━━━━━━━━━━
 """
             self.send_message(message)
@@ -1960,6 +2018,7 @@ class TelegramCommandHandler:
 /drawdown [valor/off/reset] - Limite e reset
 /trailing [ativ] [dist] - Trailing
 /double [on|off|long|short|mult|reset] - Double First
+/invert [on|off] - Inverter sinais (BUY↔SHORT)
 
 <b>🧠 ESTRATÉGIAS:</b>
 /strategy - Listar estratégias
