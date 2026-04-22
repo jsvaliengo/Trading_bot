@@ -515,7 +515,10 @@ class TradingConfig:
         os.getenv("TRADING_BOT_AI_PRIMARY_MODEL", "gpt-5-mini"),
     ).strip() or "gpt-5-mini"
     AI_CONSULTIVE_TIMEOUT_SECONDS: int = _env_int("TRADING_BOT_AI_TIMEOUT_SECONDS", 8)
-    AI_CONSULTIVE_MAX_OUTPUT_TOKENS: int = _env_int("TRADING_BOT_AI_MAX_OUTPUT_TOKENS", 700)
+    # gpt-5-mini em reasoning mode conta reasoning tokens dentro do max_output.
+    # 700 se mostrou insuficiente na prática (response truncada com
+    # incomplete_details=max_output_tokens). 1500 dá folga sem custar muito.
+    AI_CONSULTIVE_MAX_OUTPUT_TOKENS: int = _env_int("TRADING_BOT_AI_MAX_OUTPUT_TOKENS", 1500)
     AI_CONSULTIVE_REASONING_EFFORT: str = os.getenv("TRADING_BOT_AI_REASONING_EFFORT", "low").strip().lower() or "low"
     AI_CONSULTIVE_CACHE_SECONDS: int = _env_int("TRADING_BOT_AI_CACHE_SECONDS", 180)
     AI_CONSULTIVE_MIN_CONFIDENCE: int = _env_int("TRADING_BOT_AI_MIN_CONFIDENCE", 80)
