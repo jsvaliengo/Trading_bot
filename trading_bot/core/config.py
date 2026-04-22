@@ -236,9 +236,16 @@ class TradingConfig:
     # Ativar seleção automática de pares
     AUTO_SELECT_PAIRS: bool = False  # Desativado pois USE_BINANCE_STRATEGY = True
     
-    # Intervalo de atualização da lista de pares (em minutos)
-    # 6 horas = 360 minutos (analisar 500+ pares demora, não precisa fazer frequentemente)
-    PAIR_UPDATE_INTERVAL_MINUTES: int = 360  # 6 horas
+    # Intervalo de atualização da lista de pares (em minutos).
+    # Default 360 (6h). Baixar exige limitar o scoring via
+    # PAIR_SCORING_MAX_CANDIDATES senão fica caro na Micro OCI.
+    PAIR_UPDATE_INTERVAL_MINUTES: int = _env_int("TRADING_BOT_PAIR_UPDATE_INTERVAL_MINUTES", 360)
+
+    # Limite do universo que entra no cálculo de score completo após o
+    # pré-filtro de volume. 0 = sem limite (scorear tudo que passou). Ordenado
+    # por volume 24h desc; os top-N vão pro scoring. Útil quando se encurta
+    # PAIR_UPDATE_INTERVAL_MINUTES — reduz custo de CPU/API por ciclo.
+    PAIR_SCORING_MAX_CANDIDATES: int = _env_int("TRADING_BOT_PAIR_SCORING_MAX_CANDIDATES", 0)
     
     # Critérios de seleção (em ordem de prioridade - maior peso = mais importante)
     PAIR_SELECTION_WEIGHTS: dict = None  # Será definido no __post_init__
