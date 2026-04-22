@@ -14,6 +14,7 @@ BOT_MODULE="${BOT_MODULE:-trading_bot.core.bot}"
 BOT_PROCESS_PATTERN="${BOT_PROCESS_PATTERN:-python.*-m[[:space:]]+${BOT_MODULE//./\\.}}"
 PYTHON_BIN="${PYTHON_BIN:-$VENV_DIR/bin/python}"
 SKIP_GIT_PULL="${SKIP_GIT_PULL:-0}"
+SKIP_TESTS="${SKIP_TESTS:-0}"
 RUNTIME_DIR="${RUNTIME_DIR:-$PROJECT_DIR/runtime}"
 DEPLOY_SHA="${DEPLOY_SHA:-local}"
 DEPLOY_REF="${DEPLOY_REF:-manual}"
@@ -50,13 +51,17 @@ log "Atualizando pip e dependências..."
 "$PYTHON_BIN" -m pip install --upgrade pip
 "$PYTHON_BIN" -m pip install -r requirements.txt
 
-log "Executando testes (pytest) com ambiente isolado do .env de produção..."
-TRADING_BOT_ENV_FILE=/dev/null \
-TRADING_BOT_ENV=test \
-APP_ENV=test \
-"$PYTHON_BIN" -m pytest -q
+if [[ "$SKIP_TESTS" == "1" || "$SKIP_TESTS" == "true" ]]; then
+  log "SKIP_TESTS ativo. Pulando pytest (a CI do GitHub Actions já validou)."
+else
+  log "Executando testes (pytest) com ambiente isolado do .env de produção..."
+  TRADING_BOT_ENV_FILE=/dev/null \
+  TRADING_BOT_ENV=test \
+  APP_ENV=test \
+  "$PYTHON_BIN" -m pytest -q
+fi
 
-log "Testes passaram. Reiniciando bot..."
+log "Reiniciando bot..."
 
 # Tenta parada graciosa via screen (Ctrl+C), sem fechar posições no bot.
 if screen -list | grep -q "[[:space:]]${SCREEN_NAME}[[:space:]]"; then

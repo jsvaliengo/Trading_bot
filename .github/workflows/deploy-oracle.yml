@@ -245,7 +245,7 @@ jobs:
           DEPLOY_SHA="${DEPLOY_SHA:-local}" \
           DEPLOY_REF="${DEPLOY_REF:-manual}" \
           DEPLOY_ACTOR="${DEPLOY_ACTOR:-manual}" \
-          SKIP_GIT_PULL=1 "./$SCRIPT_PATH"
+          SKIP_GIT_PULL=1 SKIP_TESTS=1 "./$SCRIPT_PATH"
           EOF
 
       - name: Ensure observability stack is DOWN on OCI
@@ -341,7 +341,7 @@ jobs:
 
           if [[ -n "$SCRIPT_PATH" ]]; then
             chmod +x "$SCRIPT_PATH"
-            SKIP_GIT_PULL=1 "./$SCRIPT_PATH" || true
+            SKIP_GIT_PULL=1 SKIP_TESTS=1 "./$SCRIPT_PATH" || true
           else
             echo "⚠️ update_server.sh não encontrado após rollback."
           fi
