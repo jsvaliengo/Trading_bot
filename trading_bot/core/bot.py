@@ -189,6 +189,7 @@ class TradingBot:
         """
         self.running = False
         self.paused = False
+        self.invert_signals = False
         self.positions = {}
         self.trade_history = []
         self.closed_trades_count = 0
@@ -529,6 +530,7 @@ class TradingBot:
                 getattr(config, 'MAX_DRAWDOWN_FROM_PEAK_PERCENT', 0.0) or 0.0
             ),
             'sentiment_mode_enabled': bool(self.sentiment_mode_enabled),
+            'invert_signals': bool(self.invert_signals),
             'last_daily_performance_report_date': self.last_daily_performance_report_date,
             'last_transfer_check_ts_ms': int(self.last_transfer_check_ts_ms or 0),
             'processed_transfer_ids': self.processed_transfer_ids[
@@ -619,6 +621,9 @@ class TradingBot:
                     pass
             self.sentiment_mode_enabled = bool(
                 state.get('sentiment_mode_enabled', self.sentiment_mode_enabled)
+            )
+            self.invert_signals = bool(
+                state.get('invert_signals', getattr(self, 'invert_signals', False))
             )
             self.sentiment_cache = {}
             self.last_daily_performance_report_date = str(
@@ -2984,6 +2989,16 @@ class TradingBot:
         else:
             should_open_long = signal_name == 'STRONG_BUY'
             should_open_short = signal_name == 'STRONG_SELL'
+
+        # Inversão global de sinais (toggle via /invert no Telegram).
+        # Aplicada aqui pra manter SL/TP, trailing e execução intactos —
+        # o resto do pipeline só vê position_side já invertido.
+        if getattr(self, 'invert_signals', False) and (should_open_long or should_open_short):
+            should_open_long, should_open_short = should_open_short, should_open_long
+            logger.info(
+                f"🔀 Sinal invertido em {symbol}: {signal_name} → "
+                f"{'LONG' if should_open_long else 'SHORT'}"
+            )
 
         # Aplica filtro direcional de sentimento (quando ativo).
         should_open_long, should_open_short = self._apply_sentiment_direction_filter(
