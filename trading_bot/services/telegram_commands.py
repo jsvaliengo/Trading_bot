@@ -84,13 +84,15 @@ class TelegramCommandHandler:
         self.config = config
     
     def _apply_env_prefix(self, text: str) -> str:
-        """Prefixa mensagem com badge [TESTNET] quando a rede ativa for testnet."""
+        """Prefixa mensagem com badge indicando a rede ativa (TESTNET ou MAINNET)."""
         try:
             if self.config is None:
                 return text
-            env = getattr(self.config, 'ENVIRONMENT', 'mainnet')
-            if str(env).lower() == 'testnet':
+            env = str(getattr(self.config, 'ENVIRONMENT', 'mainnet')).lower()
+            if env == 'testnet':
                 return f"🧪 <b>[TESTNET]</b>\n{text}"
+            if env == 'mainnet':
+                return f"🌐 <b>[MAINNET]</b>\n{text}"
         except Exception:
             pass
         return text
