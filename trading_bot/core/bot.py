@@ -454,6 +454,34 @@ class TradingBot:
         """Delega pra convenção do StateManager (mantido por compat interna)."""
         return StateManager.backup_file_path(self._state_file_path)
 
+    def _archive_state_file_for_reset(self, state_path: str) -> str:
+        """
+        Move o arquivo de state pra backup timestampado — usado no switch de
+        ambiente pra zerar o tracking da rede nova sem perder dados antigos.
+
+        Retorna o nome do arquivo de backup (string vazia se não havia state).
+        Não levanta em caso de falha — reset deve continuar mesmo se o backup
+        não for possível (logger.warning cobre o caso).
+        """
+        try:
+            if not state_path or not os.path.exists(state_path):
+                return ""
+            timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            backup_path = f"{state_path}.reset-{timestamp}"
+            os.rename(state_path, backup_path)
+            # Remove .bak residual (fica stale após renomear o principal).
+            bak_path = StateManager.backup_file_path(state_path)
+            if os.path.exists(bak_path):
+                try:
+                    os.remove(bak_path)
+                except OSError:
+                    pass
+            logger.warning(f"🗄️ State anterior arquivado em {os.path.basename(backup_path)}")
+            return os.path.basename(backup_path)
+        except Exception as exc:
+            logger.warning(f"⚠️ Falha ao arquivar state antes do reset: {exc}")
+            return ""
+
     def _serialize_known_positions(self) -> Dict[str, Any]:
         """
         Converte known_positions para forma serializável em JSON.
@@ -847,8 +875,12 @@ class TradingBot:
                     f"Outra instância rodando nessa rede? Verifique {config.LOCK_FILE_NAME}."
                 )
 
-            # 7) Carrega state da nova rede (ou inicia vazio)
-            self.load_state()
+            # 7) Reset total no novo ambiente — renomeia o state file anterior
+            #    pra backup timestampado e pula load_state. O bot começa do zero
+            #    na nova rede (stats, trades, known_positions, tudo limpo em
+            #    memória). Posições reais continuam na Binance; este reset é
+            #    só do tracking local.
+            backup_note = self._archive_state_file_for_reset(self._state_file_path)
             for symbol in config.TRADING_PAIRS:
                 self.pnl_by_symbol.setdefault(symbol, 0.0)
 
@@ -858,15 +890,21 @@ class TradingBot:
             # 9) Re-assina streams WS na nova rede
             self._sync_ws_subscriptions(reason="switch-environment")
 
-            logger.warning(f"✅ Rede ativa agora: {target_norm.upper()}")
+            logger.warning(f"✅ Rede ativa agora: {target_norm.upper()} (estado zerado)")
 
+            backup_line = (
+                f"• Estado anterior: <code>{backup_note}</code>\n"
+                if backup_note else
+                ""
+            )
             return True, (
                 f"✅ Rede trocada com sucesso!\n"
                 f"• Anterior: <b>{current.upper()}</b>\n"
                 f"• Atual: <b>{target_norm.upper()}</b>\n"
                 f"• State file: <code>{config.STATE_FILE_NAME}</code>\n"
-                f"• Persistido — sobrevive a restart.\n\n"
-                f"⚠️ Bot está pausado. Use /resume quando quiser voltar a operar."
+                f"• <b>Estado zerado</b> — trades, stats e P&L começam do zero.\n"
+                f"{backup_line}"
+                f"\n⚠️ Bot está pausado. Use /resume quando quiser voltar a operar."
             )
         except Exception as exc:
             logger.exception(f"❌ Falha crítica ao trocar rede: {exc}")
