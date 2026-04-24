@@ -56,11 +56,14 @@ class TelegramNotifier:
 
     @staticmethod
     def _apply_env_prefix(message: str) -> str:
-        """Prefixa mensagem com badge [TESTNET] quando a rede ativa for testnet."""
+        """Prefixa mensagem com badge indicando a rede ativa (TESTNET ou MAINNET)."""
         try:
             from trading_bot.core.config import config
-            if str(getattr(config, 'ENVIRONMENT', 'mainnet')).lower() == 'testnet':
+            env = str(getattr(config, 'ENVIRONMENT', 'mainnet')).lower()
+            if env == 'testnet':
                 return f"🧪 <b>[TESTNET]</b>\n{message}"
+            if env == 'mainnet':
+                return f"🌐 <b>[MAINNET]</b>\n{message}"
         except Exception:
             pass
         return message
