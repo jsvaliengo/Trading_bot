@@ -86,12 +86,9 @@ class TelegramCommandHandler:
     def _apply_env_prefix(self, text: str) -> str:
         """Prefixa mensagem com badge [TESTNET] quando a rede ativa for testnet."""
         try:
-            env = None
-            if self.config is not None:
-                env = getattr(self.config, 'ENVIRONMENT', None)
-            if env is None:
-                from trading_bot.core.config import config as _cfg
-                env = getattr(_cfg, 'ENVIRONMENT', 'mainnet')
+            if self.config is None:
+                return text
+            env = getattr(self.config, 'ENVIRONMENT', 'mainnet')
             if str(env).lower() == 'testnet':
                 return f"🧪 <b>[TESTNET]</b>\n{text}"
         except Exception:
