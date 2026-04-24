@@ -54,6 +54,17 @@ class TelegramNotifier:
             logger.warning("⚠️  Telegram habilitado mas TOKEN ou CHAT_ID não configurados")
             self.enabled = False
 
+    @staticmethod
+    def _apply_env_prefix(message: str) -> str:
+        """Prefixa mensagem com badge [TESTNET] quando a rede ativa for testnet."""
+        try:
+            from trading_bot.core.config import config
+            if str(getattr(config, 'ENVIRONMENT', 'mainnet')).lower() == 'testnet':
+                return f"🧪 <b>[TESTNET]</b>\n{message}"
+        except Exception:
+            pass
+        return message
+
     def _get_usd_brl_rate(self) -> float:
         """
         Retorna a cotação USD->BRL com cache de 10 minutos.
@@ -135,9 +146,11 @@ class TelegramNotifier:
         """
         if not self.enabled:
             return False
-        
+
         import time
-        
+
+        message = self._apply_env_prefix(message)
+
         for attempt in range(max_retries):
             try:
                 url = f"{self.base_url}/sendMessage"

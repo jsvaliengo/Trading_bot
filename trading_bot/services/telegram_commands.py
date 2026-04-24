@@ -83,9 +83,25 @@ class TelegramCommandHandler:
         self.bot = bot
         self.config = config
     
+    def _apply_env_prefix(self, text: str) -> str:
+        """Prefixa mensagem com badge [TESTNET] quando a rede ativa for testnet."""
+        try:
+            env = None
+            if self.config is not None:
+                env = getattr(self.config, 'ENVIRONMENT', None)
+            if env is None:
+                from trading_bot.core.config import config as _cfg
+                env = getattr(_cfg, 'ENVIRONMENT', 'mainnet')
+            if str(env).lower() == 'testnet':
+                return f"🧪 <b>[TESTNET]</b>\n{text}"
+        except Exception:
+            pass
+        return text
+
     def send_message(self, text: str) -> bool:
         """Envia mensagem para o Telegram."""
         try:
+            text = self._apply_env_prefix(text)
             url = f"{self.base_url}/sendMessage"
             data = {
                 "chat_id": self.chat_id,
