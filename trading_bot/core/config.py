@@ -366,6 +366,20 @@ class TradingConfig:
     # Alerta quando win rate cai abaixo de Y% com amostra ≥ Z trades (sem pausar).
     KILL_SWITCH_WR_FLOOR_PERCENT: float = _env_float("TRADING_BOT_KILL_SWITCH_WR_FLOOR_PERCENT", 40.0)
     KILL_SWITCH_WR_MIN_TRADES: int = _env_int("TRADING_BOT_KILL_SWITCH_WR_MIN_TRADES", 20)
+
+    # Panic guard: exige confirmação reforçada no /closeall quando o drawdown
+    # intraday ultrapassa o threshold. Existe pra evitar fechar tudo no fundo
+    # de uma vol passageira — incidente recorrente no histórico.
+    PANIC_GUARD_ENABLED: bool = _env_bool("TRADING_BOT_PANIC_GUARD_ENABLED", True)
+    PANIC_GUARD_DRAWDOWN_PERCENT: float = _env_float("TRADING_BOT_PANIC_GUARD_DRAWDOWN_PERCENT", 5.0)
+    PANIC_GUARD_CONFIRMATION_PHRASE: str = (
+        os.getenv("TRADING_BOT_PANIC_GUARD_PHRASE", "eu_sei_o_risco").strip().lower() or "eu_sei_o_risco"
+    )
+
+    # Alerta proativo de drawdown intraday: dispara no Telegram quando o
+    # unrealized total cruza um novo bucket de % do capital. Reseta ao virar do dia.
+    DRAWDOWN_ALERT_ENABLED: bool = _env_bool("TRADING_BOT_DRAWDOWN_ALERT_ENABLED", True)
+    DRAWDOWN_ALERT_BUCKETS_PERCENT: list = None  # default no __post_init__
     
     # ============================================
     # ESTRATÉGIA BINANCE PADRÃO (por faixa de capital)
@@ -693,6 +707,17 @@ class TradingConfig:
         if self.DISABLED_PAIRS is None:
             self.DISABLED_PAIRS = ["BTCUSDT", "RIVERUSDT", "SIGNUSDT"]
         self.DISABLED_PAIRS = self.normalize_pair_list(self.DISABLED_PAIRS)
+
+        # Buckets do alerta de drawdown intraday — % do capital, ordem crescente.
+        if self.DRAWDOWN_ALERT_BUCKETS_PERCENT is None:
+            self.DRAWDOWN_ALERT_BUCKETS_PERCENT = [3.0, 5.0, 8.0, 12.0]
+        else:
+            try:
+                self.DRAWDOWN_ALERT_BUCKETS_PERCENT = sorted(
+                    {float(x) for x in self.DRAWDOWN_ALERT_BUCKETS_PERCENT if float(x) > 0}
+                )
+            except (TypeError, ValueError):
+                self.DRAWDOWN_ALERT_BUCKETS_PERCENT = [3.0, 5.0, 8.0, 12.0]
         
         # ============================================
         # ESTRATÉGIA BINANCE PADRÃO

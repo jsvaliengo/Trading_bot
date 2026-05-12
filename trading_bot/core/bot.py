@@ -209,6 +209,10 @@ class TradingBot:
         self.portfolio_history = []
         self.last_snapshot_time = None
         self.snapshot_interval_minutes = 30
+        # Drawdown alert state — bucket cruzado mais alto no dia (% do capital).
+        # Reseta automaticamente no virar do dia. Em memória só.
+        self._drawdown_alert_bucket_pct: float = 0.0
+        self._drawdown_alert_day: str | None = None
         self.start_time = datetime.now()
         self.initial_capital = None
         self.last_transfer_check_ts_ms = 0
@@ -4129,13 +4133,83 @@ class TradingBot:
         
         self.portfolio_history.append(snapshot)
         self.last_snapshot_time = now
-        
+
         # Mantém apenas os últimos 48 snapshots (24h se for a cada 30min)
         if len(self.portfolio_history) > 48:
             self.portfolio_history = self.portfolio_history[-48:]
-        
+
         logger.info(f"📸 Snapshot capturado: P&L Total ${snapshot['pnl_total']:.2f}")
-    
+
+        self._maybe_send_drawdown_alert(snapshot, now)
+
+    def _maybe_send_drawdown_alert(self, snapshot: dict, now: datetime) -> None:
+        """Dispara alerta Telegram quando o drawdown intraday cruza um bucket novo.
+
+        Existe pra dar visibilidade do drawdown ao usuário antes que ele entre
+        em pânico e mande /closeall no fundo. Reseta o bucket ao virar do dia.
+        """
+        if not getattr(config, "DRAWDOWN_ALERT_ENABLED", True):
+            return
+        buckets = list(getattr(config, "DRAWDOWN_ALERT_BUCKETS_PERCENT", []) or [])
+        if not buckets:
+            return
+        try:
+            initial_capital = float(self.initial_capital or 0.0)
+        except (TypeError, ValueError):
+            initial_capital = 0.0
+        if initial_capital <= 0:
+            return
+
+        total_pnl = float(snapshot.get("pnl_total", 0.0) or 0.0)
+        # Só alerta em drawdown (PnL negativo).
+        if total_pnl >= 0:
+            # Reset do bucket quando volta pra positivo.
+            self._drawdown_alert_bucket_pct = 0.0
+            return
+
+        drawdown_pct = abs(total_pnl) / initial_capital * 100.0
+
+        # Reset diário automático.
+        today_key = now.strftime("%Y-%m-%d")
+        if self._drawdown_alert_day != today_key:
+            self._drawdown_alert_day = today_key
+            self._drawdown_alert_bucket_pct = 0.0
+
+        # Maior bucket cruzado.
+        crossed = [b for b in buckets if drawdown_pct >= b]
+        if not crossed:
+            return
+        highest = max(crossed)
+
+        if highest <= self._drawdown_alert_bucket_pct:
+            return  # Já alertou esse nível ou mais alto
+
+        self._drawdown_alert_bucket_pct = highest
+
+        global_sl_pct = float(getattr(config, "GLOBAL_STOP_LOSS_PERCENT", 0.0) or 0.0)
+        daily_loss_usd = float(getattr(config, "DAILY_LOSS_LIMIT", 0.0) or 0.0)
+        global_sl_usd = (global_sl_pct / 100.0) * initial_capital if global_sl_pct > 0 else 0.0
+        unrealized = float(snapshot.get("pnl_unrealized", 0.0) or 0.0)
+        realized = float(snapshot.get("pnl_realized", 0.0) or 0.0)
+
+        try:
+            self.telegram.send_message(
+                f"🟡 <b>DRAWDOWN INTRADAY</b>\n\n"
+                f"📉 PnL total: <code>${total_pnl:+.2f}</code> "
+                f"(<code>-{drawdown_pct:.2f}%</code> do capital)\n"
+                f"   • Realizado: <code>${realized:+.2f}</code>\n"
+                f"   • Não realizado: <code>${unrealized:+.2f}</code>\n\n"
+                f"<b>Gates automáticos (ainda dentro):</b>\n"
+                f"• Global SL: <code>-{global_sl_pct:.0f}%</code> "
+                f"(≈ <code>-${global_sl_usd:.2f}</code>)\n"
+                f"• Daily Loss: <code>-${daily_loss_usd:.2f}</code>\n\n"
+                f"⏳ Drawdown intraday é normal. Aguarde a estratégia trabalhar — "
+                f"fechar no fundo congela a perda.\n\n"
+                f"Use /portfolio pra detalhe ou /positions pra ver posições."
+            )
+        except Exception as exc:
+            logger.warning("Falha enviando alerta de drawdown: %s", exc)
+
     def send_portfolio_evolution(self):
         """
         Envia relatório de evolução da carteira para o Telegram.

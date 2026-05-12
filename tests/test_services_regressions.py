@@ -596,6 +596,79 @@ def test_closeall_reports_partial_failures():
     assert "Falhas" in final_message
 
 
+def _build_panic_guard_handler(unrealized_pnls, initial_capital=100.0):
+    """Helper para testes do panic guard. Cria handler + bot stub configurado."""
+    handler = TelegramCommandHandler(token="token", chat_id="123")
+
+    class ExchangeStub:
+        def __init__(self, pnls):
+            self._pnls = pnls
+
+        def get_open_positions(self, force_refresh=False):
+            return [
+                {"symbol": f"PAIR{i}USDT", "side": "LONG", "quantity": 1.0,
+                 "unrealized_pnl": pnl}
+                for i, pnl in enumerate(self._pnls)
+            ]
+
+        def place_market_order(self, symbol, side, position_side, quantity):
+            return {"orderId": 1}
+
+    bot = SimpleNamespace(exchange=ExchangeStub(unrealized_pnls),
+                         initial_capital=initial_capital)
+    handler.set_bot_reference(bot, SimpleNamespace())
+    messages = []
+    handler.send_message = lambda text: messages.append(text) or True
+    return handler, messages
+
+
+def test_closeall_panic_guard_blocks_when_drawdown_exceeds_threshold():
+    """/closeall confirm com drawdown profundo deve exigir frase explícita."""
+    # -8% num capital de $100 = unrealized -$8 (acima do default 5%)
+    handler, messages = _build_panic_guard_handler([-4.0, -4.0], initial_capital=100.0)
+
+    handler.cmd_close_all(["confirm"])
+
+    assert messages, "deveria ter enviado mensagem"
+    blocked = messages[-1]
+    assert "PANIC GUARD" in blocked
+    assert "eu_sei_o_risco" in blocked
+    # Não deve ter executado fechamento
+    assert "POSIÇÕES FECHADAS" not in blocked
+
+
+def test_closeall_panic_guard_allows_when_drawdown_shallow():
+    """Drawdown raso (-2%) não dispara panic guard."""
+    handler, messages = _build_panic_guard_handler([-1.0, -1.0], initial_capital=100.0)
+
+    handler.cmd_close_all(["confirm"])
+
+    final = messages[-1]
+    assert "PANIC GUARD" not in final
+    assert "POSIÇÕES FECHADAS" in final or "FECHAMENTO" in final
+
+
+def test_closeall_force_phrase_bypasses_panic_guard():
+    """Frase explícita força fechamento mesmo em drawdown profundo."""
+    handler, messages = _build_panic_guard_handler([-15.0, -15.0], initial_capital=100.0)
+
+    handler.cmd_close_all(["eu_sei_o_risco"])
+
+    final = messages[-1]
+    assert "PANIC GUARD" not in final
+    assert "POSIÇÕES FECHADAS" in final or "FECHAMENTO" in final
+
+
+def test_closeall_panic_guard_skipped_when_no_initial_capital():
+    """Sem initial_capital configurado, panic guard fica inativo (não bloqueia)."""
+    handler, messages = _build_panic_guard_handler([-50.0], initial_capital=0.0)
+
+    handler.cmd_close_all(["confirm"])
+
+    final = messages[-1]
+    assert "PANIC GUARD" not in final
+
+
 def test_coins_command_disable_enable_and_add_pairs():
     handler = TelegramCommandHandler(token="token", chat_id="123")
 
