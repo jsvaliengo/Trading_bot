@@ -2311,3 +2311,93 @@ def test_health_classification_minor_issues_is_atencao():
         loop_errors=0, has_issues=True,  # só retries/overruns
     )
     assert status == "ATENÇÃO"
+
+
+def _make_bot_with_drawdown_alert_stubs(initial_capital=100.0):
+    """Bot mínimo com telegram stub pra testar _maybe_send_drawdown_alert."""
+    bot = _make_light_bot()
+    bot.initial_capital = initial_capital
+    sent = []
+    bot.telegram = SimpleNamespace(send_message=lambda text: sent.append(text) or True)
+    return bot, sent
+
+
+def test_drawdown_alert_fires_on_first_bucket_crossed():
+    """Drawdown cruzando o primeiro bucket (3%) dispara 1 alerta."""
+    bot, sent = _make_bot_with_drawdown_alert_stubs(initial_capital=100.0)
+    now = datetime(2026, 5, 1, 10, 0, 0, tzinfo=timezone.utc)
+    snap = {"pnl_total": -4.0, "pnl_realized": -1.0, "pnl_unrealized": -3.0}
+
+    bot._maybe_send_drawdown_alert(snap, now)
+
+    assert len(sent) == 1
+    assert "DRAWDOWN" in sent[0]
+    assert bot._drawdown_alert_bucket_pct == 3.0
+
+
+def test_drawdown_alert_does_not_repeat_same_bucket():
+    """Mesmo bucket não dispara segundo alerta."""
+    bot, sent = _make_bot_with_drawdown_alert_stubs(initial_capital=100.0)
+    now = datetime(2026, 5, 1, 10, 0, 0, tzinfo=timezone.utc)
+    snap = {"pnl_total": -4.0, "pnl_realized": -1.0, "pnl_unrealized": -3.0}
+
+    bot._maybe_send_drawdown_alert(snap, now)
+    bot._maybe_send_drawdown_alert(snap, now)
+    bot._maybe_send_drawdown_alert(snap, now)
+
+    assert len(sent) == 1
+
+
+def test_drawdown_alert_fires_on_higher_bucket():
+    """Drawdown piorando pra próximo bucket dispara novo alerta."""
+    bot, sent = _make_bot_with_drawdown_alert_stubs(initial_capital=100.0)
+    now = datetime(2026, 5, 1, 10, 0, 0, tzinfo=timezone.utc)
+
+    bot._maybe_send_drawdown_alert(
+        {"pnl_total": -4.0, "pnl_realized": 0, "pnl_unrealized": -4.0}, now
+    )  # bucket 3%
+    bot._maybe_send_drawdown_alert(
+        {"pnl_total": -9.0, "pnl_realized": 0, "pnl_unrealized": -9.0}, now
+    )  # bucket 8%
+
+    assert len(sent) == 2
+    assert bot._drawdown_alert_bucket_pct == 8.0
+
+
+def test_drawdown_alert_resets_on_new_day():
+    """Bucket reseta ao virar do dia."""
+    bot, sent = _make_bot_with_drawdown_alert_stubs(initial_capital=100.0)
+    day1 = datetime(2026, 5, 1, 23, 0, 0, tzinfo=timezone.utc)
+    day2 = datetime(2026, 5, 2, 1, 0, 0, tzinfo=timezone.utc)
+    snap = {"pnl_total": -4.0, "pnl_realized": 0, "pnl_unrealized": -4.0}
+
+    bot._maybe_send_drawdown_alert(snap, day1)
+    bot._maybe_send_drawdown_alert(snap, day2)
+
+    assert len(sent) == 2  # dispara em cada dia
+
+
+def test_drawdown_alert_skipped_when_positive_pnl():
+    """PnL positivo não dispara alerta e zera bucket."""
+    bot, sent = _make_bot_with_drawdown_alert_stubs(initial_capital=100.0)
+    now = datetime(2026, 5, 1, 10, 0, 0, tzinfo=timezone.utc)
+    bot._drawdown_alert_bucket_pct = 5.0  # estado simulado de alerta anterior
+
+    bot._maybe_send_drawdown_alert(
+        {"pnl_total": 2.0, "pnl_realized": 1.0, "pnl_unrealized": 1.0}, now
+    )
+
+    assert sent == []
+    assert bot._drawdown_alert_bucket_pct == 0.0
+
+
+def test_drawdown_alert_skipped_when_no_initial_capital():
+    """Sem initial_capital, não há % de referência — alerta inativo."""
+    bot, sent = _make_bot_with_drawdown_alert_stubs(initial_capital=0.0)
+    now = datetime(2026, 5, 1, 10, 0, 0, tzinfo=timezone.utc)
+
+    bot._maybe_send_drawdown_alert(
+        {"pnl_total": -50.0, "pnl_realized": -50.0, "pnl_unrealized": 0.0}, now
+    )
+
+    assert sent == []

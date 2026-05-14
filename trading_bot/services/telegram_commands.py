@@ -15,7 +15,7 @@ import threading
 import time
 from difflib import get_close_matches
 from datetime import datetime, timezone
-from typing import Any, List
+from typing import Any, List, Optional
 import requests
 from requests.exceptions import RequestException
 
@@ -1873,13 +1873,26 @@ class TelegramCommandHandler:
                 self.send_message("📍 Nenhuma posição aberta para fechar.")
                 return
 
-            if not args or args[0].lower() != 'confirm':
+            first_arg = (args[0].lower() if args else "")
+            panic_phrase = str(getattr(self.config, "PANIC_GUARD_CONFIRMATION_PHRASE", "eu_sei_o_risco")).lower()
+            wants_confirm = first_arg == "confirm"
+            wants_force = first_arg == panic_phrase
+
+            if not wants_confirm and not wants_force:
                 self.send_message(
                     f"⚠️ <b>FECHAR {len(positions)} POSIÇÕES?</b>\n\n"
                     f"Esta ação é irreversível!\n\n"
                     f"Para confirmar, use:\n<code>/closeall confirm</code>"
                 )
                 return
+
+            # Panic guard: se o drawdown intraday cruzou o threshold, exige a
+            # frase explícita pra evitar fechamento em pânico no fundo da vol.
+            if wants_confirm and getattr(self.config, "PANIC_GUARD_ENABLED", True):
+                panic_msg = self._panic_guard_block_message(positions)
+                if panic_msg is not None:
+                    self.send_message(panic_msg)
+                    return
 
             self.send_message(f"🔄 Fechando {len(positions)} posições...")
 
@@ -1937,7 +1950,53 @@ class TelegramCommandHandler:
 
         except Exception as e:
             self.send_message(f"❌ Erro ao fechar posições: {e}")
-    
+
+    def _panic_guard_block_message(self, positions: list) -> Optional[str]:
+        """Retorna mensagem de bloqueio se o drawdown intraday justifica panic guard.
+
+        None = guard inativo, segue o fluxo normal de /closeall confirm.
+        """
+        cfg = self.config
+        threshold = float(getattr(cfg, "PANIC_GUARD_DRAWDOWN_PERCENT", 5.0))
+        if threshold <= 0:
+            return None
+
+        try:
+            unrealized = sum(float(p.get("unrealized_pnl", 0.0) or 0.0) for p in positions)
+        except (TypeError, ValueError):
+            return None
+        if unrealized >= 0:
+            return None
+
+        initial_capital = float(getattr(self.bot, "initial_capital", 0.0) or 0.0)
+        if initial_capital <= 0:
+            return None
+
+        drawdown_pct = abs(unrealized) / initial_capital * 100.0
+        if drawdown_pct < threshold:
+            return None
+
+        phrase = str(getattr(cfg, "PANIC_GUARD_CONFIRMATION_PHRASE", "eu_sei_o_risco"))
+        global_sl_pct = float(getattr(cfg, "GLOBAL_STOP_LOSS_PERCENT", 0.0) or 0.0)
+        daily_loss_usd = float(getattr(cfg, "DAILY_LOSS_LIMIT", 0.0) or 0.0)
+        global_sl_usd = (global_sl_pct / 100.0) * initial_capital if global_sl_pct > 0 else 0.0
+
+        return (
+            f"🟡 <b>PANIC GUARD — fechamento bloqueado</b>\n\n"
+            f"📉 Unrealized: <code>${unrealized:+.2f}</code> "
+            f"(<code>-{drawdown_pct:.2f}%</code> do capital)\n"
+            f"💼 Capital: <code>${initial_capital:.2f}</code>\n"
+            f"📊 Posições abertas: <code>{len(positions)}</code>\n\n"
+            f"<b>Gates automáticos ainda NÃO disparados:</b>\n"
+            f"• Global SL: <code>-{global_sl_pct:.0f}%</code> "
+            f"(≈ <code>-${global_sl_usd:.2f}</code>)\n"
+            f"• Daily Loss: <code>-${daily_loss_usd:.2f}</code>\n\n"
+            f"⏳ Drawdown intraday é normal — fechar no fundo congela a perda. "
+            f"O histórico mostra que esse foi o pior erro do bot.\n\n"
+            f"Se mesmo assim quer forçar, use:\n"
+            f"<code>/closeall {phrase}</code>"
+        )
+
     def cmd_strategy(self, args: list):
         """Ativa, desativa ou lista estratégias em runtime.
 
@@ -2042,7 +2101,8 @@ class TelegramCommandHandler:
 
 <b>⚡ AÇÕES:</b>
 /closeall - Fechar todas posições
-/closeall confirm - Confirmar
+/closeall confirm - Confirmar (bloqueado em drawdown profundo)
+/closeall eu_sei_o_risco - Forçar fechamento em drawdown
 /rescore - Forçar rescore de pares agora
 
 <b>🌐 REDE BINANCE:</b>
