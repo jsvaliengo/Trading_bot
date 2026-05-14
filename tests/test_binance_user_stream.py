@@ -79,16 +79,25 @@ def test_error_message_does_not_dispatch_and_counts():
 
 def test_terminal_error_triggers_restart_thread_once(monkeypatch):
     """ReadLoopClosed deve agendar restart em thread separada, sem reentrância."""
+    import threading as _threading
+
     import trading_bot.infra.binance_user_stream as mod
 
+    # Bloqueia o restart até o loop de erros terminar, evitando race onde o
+    # restart bem-sucedido resetaria _terminal_error_count antes do assert.
+    release = _threading.Event()
+
+    def blocking_start(*args, **kwargs):
+        release.wait(timeout=5.0)
+        return "new-sock"
+
     twm = MagicMock()
-    twm.start_futures_user_socket.return_value = "new-sock"
+    twm.start_futures_user_socket.side_effect = blocking_start
     m = _make_monitor(twm=twm)
-    # Pula o sleep do backoff pra teste rápido.
     monkeypatch.setattr(mod, "_RESTART_BACKOFF_SECONDS", (0,))
 
     threads_started = []
-    real_start = __import__("threading").Thread.start
+    real_start = _threading.Thread.start
 
     def track_start(self):
         threads_started.append(self)
@@ -102,6 +111,8 @@ def test_terminal_error_triggers_restart_thread_once(monkeypatch):
 
     assert m._terminal_error_count == 50
     assert len(threads_started) == 1
+    # Agora libera o restart e espera concluir.
+    release.set()
     threads_started[0].join(timeout=2.0)
     assert m._restart_success_count == 1
     assert m._socket_id == "new-sock"
