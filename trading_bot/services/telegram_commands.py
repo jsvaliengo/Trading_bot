@@ -378,6 +378,72 @@ class TelegramCommandHandler:
             except Exception as e:
                 logger.warning(f"⚠️ Falha ao salvar estado após comando Telegram: {e}")
 
+    def _describe_trend_risk_profile(self, kind: str) -> str:
+        """
+        Retorna string com min-max do risk_profile do primeiro trend_signal ativo,
+        para exibir o valor REALMENTE usado nas entradas.
+        kind: 'stop_loss' ou 'take_profit'.
+        """
+        profiles = getattr(self.config, "STRATEGY_PROFILES", None) or []
+        for profile in profiles:
+            if not isinstance(profile, dict):
+                continue
+            if profile.get("strategy_type", "trend_signal") != "trend_signal":
+                continue
+            rp = profile.get("risk_profile") or {}
+            mn = rp.get(f"{kind}_min_percent")
+            mx = rp.get(f"{kind}_max_percent")
+            if mn is None and mx is None:
+                continue
+            if mn == mx:
+                return f"{mn}%"
+            return f"{mn}–{mx}%"
+        return "n/a"
+
+    def _apply_trend_risk_profile_field(self, field_pairs: dict) -> int:
+        """
+        Patch in-place dos campos do risk_profile dos perfis trend_signal e força
+        reload no bot pra que NOVAS posições usem os novos limites.
+
+        field_pairs: dict {field_name: value}, ex: {"stop_loss_min_percent": 3.0,
+        "stop_loss_max_percent": 3.0}.
+
+        Necessário porque trading_bot/core/strategy.py:676-705 ignora
+        config.STOP_LOSS_PERCENT quando o perfil tem risk_profile (que é o caso
+        padrão), lendo só stop_loss_min/max_percent do dict.
+
+        Retorna o número de perfis atualizados.
+        """
+        if self.config is None:
+            return 0
+        profiles = getattr(self.config, "STRATEGY_PROFILES", None) or []
+        updated = 0
+        for profile in profiles:
+            if not isinstance(profile, dict):
+                continue
+            if profile.get("strategy_type", "trend_signal") != "trend_signal":
+                continue
+            rp = profile.get("risk_profile")
+            if not isinstance(rp, dict):
+                rp = {}
+                profile["risk_profile"] = rp
+            for k, v in field_pairs.items():
+                rp[k] = float(v)
+            updated += 1
+        if updated and hasattr(self.config, "_normalize_strategy_profiles"):
+            try:
+                self.config.STRATEGY_PROFILES = self.config._normalize_strategy_profiles(
+                    self.config.STRATEGY_PROFILES
+                )
+            except Exception as exc:
+                logger.warning("⚠️ Falha normalizando STRATEGY_PROFILES após update: %s", exc)
+        if updated and self.bot is not None and hasattr(self.bot, "_reload_strategy_profiles"):
+            try:
+                self.bot._reload_strategy_profiles(reason="telegram-risk-update")
+            except Exception as exc:
+                logger.warning("⚠️ Falha recarregando perfis após update Telegram: %s", exc)
+        return updated
+
     def _get_drawdown_snapshot(self) -> dict[str, Any]:
         """Monta snapshot do drawdown desde o pico para uso nos comandos Telegram."""
         limit_pct = float(getattr(self.config, "MAX_DRAWDOWN_FROM_PEAK_PERCENT", 0) or 0)
@@ -1431,8 +1497,10 @@ class TelegramCommandHandler:
             return
         
         if not args:
+            effective = self._describe_trend_risk_profile("take_profit")
             self.send_message(
-                f"🎯 <b>Take Profit atual:</b> <code>{self.config.TAKE_PROFIT_PERCENT}%</code>\n\n"
+                f"🎯 <b>Take Profit atual:</b> <code>{self.config.TAKE_PROFIT_PERCENT}%</code>\n"
+                f"   Efetivo (risk_profile): <code>{effective}</code>\n\n"
                 f"Para alterar, use:\n<code>/tp [valor]</code>\n\n"
                 f"Exemplo: <code>/tp 10</code> (para 10%)"
             )
@@ -1447,12 +1515,17 @@ class TelegramCommandHandler:
             
             old_tp = self.config.TAKE_PROFIT_PERCENT
             self.config.TAKE_PROFIT_PERCENT = new_tp
+            profiles_updated = self._apply_trend_risk_profile_field({
+                "take_profit_min_percent": new_tp,
+                "take_profit_max_percent": new_tp,
+            })
             self._persist_runtime_state()
 
             self.send_message(
                 f"✅ <b>TAKE PROFIT ALTERADO</b>\n\n"
                 f"   Anterior: <code>{old_tp}%</code>\n"
-                f"   Novo: <code>{new_tp}%</code>\n\n"
+                f"   Novo: <code>{new_tp}%</code>\n"
+                f"   Perfis trend_signal atualizados: <code>{profiles_updated}</code>\n\n"
                 f"⚠️ Aplicado às NOVAS posições."
             )
             
@@ -1468,8 +1541,10 @@ class TelegramCommandHandler:
         status = "ativo" if self.config.USE_INDIVIDUAL_STOP_LOSS else "desativado"
         
         if not args:
+            effective = self._describe_trend_risk_profile("stop_loss")
             self.send_message(
-                f"🛑 <b>Stop Loss atual:</b> <code>{self.config.STOP_LOSS_PERCENT}%</code> ({status})\n\n"
+                f"🛑 <b>Stop Loss atual:</b> <code>{self.config.STOP_LOSS_PERCENT}%</code> ({status})\n"
+                f"   Efetivo (risk_profile): <code>{effective}</code>\n\n"
                 f"Para alterar, use:\n<code>/sl [valor]</code> ou <code>/sl on</code> / <code>/sl off</code>\n\n"
                 f"Exemplos:\n"
                 f"• <code>/sl 5</code> (para 5%)\n"
@@ -1501,12 +1576,17 @@ class TelegramCommandHandler:
             
             old_sl = self.config.STOP_LOSS_PERCENT
             self.config.STOP_LOSS_PERCENT = new_sl
+            profiles_updated = self._apply_trend_risk_profile_field({
+                "stop_loss_min_percent": new_sl,
+                "stop_loss_max_percent": new_sl,
+            })
             self._persist_runtime_state()
 
             self.send_message(
                 f"✅ <b>STOP LOSS ALTERADO</b>\n\n"
                 f"   Anterior: <code>{old_sl}%</code>\n"
-                f"   Novo: <code>{new_sl}%</code>\n\n"
+                f"   Novo: <code>{new_sl}%</code>\n"
+                f"   Perfis trend_signal atualizados: <code>{profiles_updated}</code>\n\n"
                 f"⚠️ Aplicado às NOVAS posições."
             )
             
