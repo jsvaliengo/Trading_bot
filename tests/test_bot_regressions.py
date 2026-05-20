@@ -376,6 +376,7 @@ def test_execute_signal_trade_skips_fixed_sl_on_exchange_when_individual_sl_disa
         place_market_order=lambda **_kwargs: {"orderId": 1},
         set_stop_loss_take_profit=lambda **kwargs: sltp_calls.append(kwargs) or True,
         get_account_balance=lambda: 1000.0,
+        get_symbol_cooldown_info=lambda _symbol: None,
     )
     bot.telegram = SimpleNamespace(send_trade_alert=lambda **_kwargs: True)
     bot._get_total_open_notional_percent = lambda: 0.0
@@ -427,6 +428,7 @@ def test_execute_signal_trade_notifies_when_gated_ai_trade_is_blocked_by_exposur
         get_symbol_price=lambda _symbol: 100.0,
         get_symbol_info=lambda _symbol: {"minNotional": 5.0, "pricePrecision": 2},
         get_account_balance=lambda: 213.49,
+        get_symbol_cooldown_info=lambda _symbol: None,
     )
     bot.telegram = SimpleNamespace(send_trade_alert=send_trade_alert, send_message=MagicMock(return_value=True))
     bot._get_total_open_notional_percent = lambda: 450.0
