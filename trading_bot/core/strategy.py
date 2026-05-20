@@ -183,6 +183,51 @@ class TechnicalAnalysis:
         return np.mean(true_ranges[-period:])
 
     @staticmethod
+    def compute_atr_based_trailing(
+        entry_price: float,
+        atr: float,
+    ) -> Optional[Tuple[float, float]]:
+        """
+        Retorna (activation_pct, distance_pct) para trailing dinâmico ancorado
+        em ATR%. Retorna None se ATR inválido ou ATR-trailing desabilitado.
+
+        Clamps:
+          - activation ∈ [TRAILING_ACTIVATION_MIN_PERCENT, TRAILING_ACTIVATION_MAX_PERCENT]
+          - distance ∈ [TRAILING_DISTANCE_MIN_PERCENT, TRAILING_DISTANCE_MAX_PERCENT]
+
+        Invariante preservada: activation ≥ distance + 0.15% (fee_floor round-trip).
+        Se o clamp inicial violar isso, a activation é puxada pra cima.
+        """
+        if not getattr(config, "USE_ATR_TRAILING", False):
+            return None
+        if atr is None or atr <= 0 or entry_price is None or entry_price <= 0:
+            return None
+
+        atr_pct = (float(atr) / float(entry_price)) * 100.0
+
+        act_mult = float(getattr(config, "TRAILING_ACTIVATION_ATR_MULT", 2.0))
+        dist_mult = float(getattr(config, "TRAILING_DISTANCE_ATR_MULT", 1.0))
+
+        act_min = float(getattr(config, "TRAILING_ACTIVATION_MIN_PERCENT", 0.40))
+        act_max = float(getattr(config, "TRAILING_ACTIVATION_MAX_PERCENT", 2.50))
+        dist_min = float(getattr(config, "TRAILING_DISTANCE_MIN_PERCENT", 0.20))
+        dist_max = float(getattr(config, "TRAILING_DISTANCE_MAX_PERCENT", 1.50))
+
+        activation = max(act_min, min(atr_pct * act_mult, act_max))
+        distance = max(dist_min, min(atr_pct * dist_mult, dist_max))
+
+        # Invariante de breakeven (mesmo fee_floor usado em validate_params)
+        fee_floor_pct = 0.15
+        min_activation = distance + fee_floor_pct
+        if activation < min_activation:
+            activation = min(min_activation, act_max)
+            # Se o teto da activation não cobre o piso, encolhe a distância
+            if activation < min_activation:
+                distance = max(dist_min, activation - fee_floor_pct)
+
+        return (round(activation, 4), round(distance, 4))
+
+    @staticmethod
     def calculate_vwap(
         highs: List[float],
         lows: List[float],
@@ -611,50 +656,67 @@ class HedgeStrategy:
         return (long_size, short_size)
     
     def calculate_dca_levels(
-        self, 
-        entry_price: float, 
-        signal: Signal
+        self,
+        entry_price: float,
+        signal: Signal,
+        atr: Optional[float] = None,
     ) -> List[Dict]:
         """
         Calcula os níveis de DCA (Dollar Cost Averaging).
-        
-        DCA funciona assim:
-        1. Abre posição inicial
-        2. Se o preço cai X%, adiciona mais à posição
-        3. Isso reduz o preço médio de entrada
-        4. Quando o preço volta, lucra mais rápido
-        
+
+        Modo ATR (quando USE_ATR_DCA=True e atr>0): cada nível i fica a
+        (BASE + (i-1)*INCREMENT) × ATR do preço de entrada, em %, clampado a
+        [MIN_STEP_PERCENT, MAX_STEP_PERCENT]. Defaults: 1.5×, 2.5×, 3.5× ATR.
+
+        Modo legado (atr ausente ou ATR-DCA desabilitado): step linear em
+        DCA_STEP_PERCENT × i.
+
         CUIDADO: DCA em posição perdedora pode aumentar muito o risco!
         """
         if not self.config.DCA_ENABLED:
             return []
-        
+
+        use_atr = (
+            getattr(self.config, "USE_ATR_DCA", False)
+            and atr is not None
+            and float(atr) > 0
+            and entry_price > 0
+        )
+        if use_atr:
+            atr_pct = (float(atr) / float(entry_price)) * 100.0
+            base_mult = float(getattr(self.config, "DCA_ATR_MULTIPLIER_BASE", 1.5))
+            step_inc = float(getattr(self.config, "DCA_ATR_STEP_INCREMENT", 1.0))
+            min_step_pct = float(getattr(self.config, "DCA_ATR_MIN_STEP_PERCENT", 0.5))
+            max_step_pct = float(getattr(self.config, "DCA_ATR_MAX_STEP_PERCENT", 8.0))
+
         dca_levels = []
-        current_size = 1.0  # Tamanho base
-        
+        current_size = 1.0
+
         for i in range(1, self.config.DCA_MAX_ORDERS + 1):
-            # Calcula o preço do nível DCA
-            step = self.config.DCA_STEP_PERCENT * i / 100
-            
-            # Para LONG: DCA em preços mais baixos
-            # Para SHORT: DCA em preços mais altos
+            if use_atr:
+                mult = base_mult + (i - 1) * step_inc
+                step_pct = atr_pct * mult
+                step_pct = max(min_step_pct, min(step_pct, max_step_pct))
+                step = step_pct / 100.0
+            else:
+                step = self.config.DCA_STEP_PERCENT * i / 100.0
+
             if signal in [Signal.STRONG_BUY, Signal.BUY, Signal.NEUTRAL]:
                 dca_price = entry_price * (1 - step)
                 position_side = 'LONG'
             else:
                 dca_price = entry_price * (1 + step)
                 position_side = 'SHORT'
-            
-            # Aumenta o tamanho progressivamente (Martingale suave)
+
             current_size *= self.config.DCA_MULTIPLIER
-            
+
             dca_levels.append({
                 'level': i,
                 'price': round(dca_price, 2),
                 'size_multiplier': round(current_size, 2),
-                'position_side': position_side
+                'position_side': position_side,
             })
-        
+
         return dca_levels
     
     def calculate_stop_loss_take_profit(
@@ -782,6 +844,25 @@ class HedgeStrategy:
             atr,
             risk_profile=risk_profile,
         )
+        trailing_params = self.ta.compute_atr_based_trailing(entry_price, atr)
+
+        ai_metadata: Dict[str, Any] = {
+            "strategy_type": "trend_signal",
+            "custom_stop_loss": round(stop_loss, 8),
+            "custom_take_profit": round(take_profit, 8),
+            "signal_timestamp": datetime.now(),
+            "source_signal": Signal.NEUTRAL.name,
+            "ai_override_from_neutral": True,
+            "ai_override_reason": (
+                f"tendência alinhada em {exec_direction} sem gatilho clássico confirmado"
+            ),
+            "trend_candidate_side": exec_direction,
+            "execution_direction": exec_direction,
+            "confirmation_direction": confirm_direction,
+        }
+        if trailing_params is not None:
+            ai_metadata["trailing_activation_pct"] = trailing_params[0]
+            ai_metadata["trailing_distance_pct"] = trailing_params[1]
 
         return TradeSetup(
             symbol=symbol,
@@ -792,20 +873,7 @@ class HedgeStrategy:
             stop_loss=stop_loss,
             take_profit=take_profit,
             dca_levels=[],
-            metadata={
-                "strategy_type": "trend_signal",
-                "custom_stop_loss": round(stop_loss, 8),
-                "custom_take_profit": round(take_profit, 8),
-                "signal_timestamp": datetime.now(),
-                "source_signal": Signal.NEUTRAL.name,
-                "ai_override_from_neutral": True,
-                "ai_override_reason": (
-                    f"tendência alinhada em {exec_direction} sem gatilho clássico confirmado"
-                ),
-                "trend_candidate_side": exec_direction,
-                "execution_direction": exec_direction,
-                "confirmation_direction": confirm_direction,
-            },
+            metadata=ai_metadata,
         )
 
     def generate_trade_setup(
@@ -872,8 +940,10 @@ class HedgeStrategy:
             entry_price, signal, atr, risk_profile=risk_profile
         )
         
-        # Calcula níveis de DCA
-        dca_levels = self.calculate_dca_levels(entry_price, signal)
+        # Calcula níveis de DCA (ATR-based quando USE_ATR_DCA=True)
+        dca_levels = self.calculate_dca_levels(entry_price, signal, atr=atr)
+        # Trailing dinâmico ancorado em ATR (None se desabilitado / atr ruim)
+        trailing_params = self.ta.compute_atr_based_trailing(entry_price, atr)
         
         logger.info(f"""
         📊 Trade Setup para {symbol}:
@@ -886,6 +956,11 @@ class HedgeStrategy:
         └── DCA Levels: {len(dca_levels)}
         """)
         
+        setup_metadata: Dict[str, Any] = {}
+        if trailing_params is not None:
+            setup_metadata["trailing_activation_pct"] = trailing_params[0]
+            setup_metadata["trailing_distance_pct"] = trailing_params[1]
+
         return TradeSetup(
             symbol=symbol,
             signal=signal,
@@ -894,7 +969,8 @@ class HedgeStrategy:
             entry_price=entry_price,
             stop_loss=stop_loss,
             take_profit=take_profit,
-            dca_levels=[d['price'] for d in dca_levels]
+            dca_levels=[d['price'] for d in dca_levels],
+            metadata=setup_metadata,
         )
 
 
@@ -1158,6 +1234,28 @@ class RangeScalpingStrategy:
             depth,
         )
 
+        highs_for_atr = [float(k["high"]) for k in klines]
+        lows_for_atr = [float(k["low"]) for k in klines]
+        closes_for_atr = [float(k["close"]) for k in klines]
+        atr_value = TechnicalAnalysis.calculate_atr(highs_for_atr, lows_for_atr, closes_for_atr)
+        trailing_params = TechnicalAnalysis.compute_atr_based_trailing(current_price, atr_value)
+
+        range_metadata: Dict[str, Any] = {
+            "strategy_type": "range_scalping",
+            "range_support": round(support, 8),
+            "range_resistance": round(resistance, 8),
+            "range_mid_price": round(context["mid_price"], 8),
+            "range_amplitude_pct": round(context["amplitude_pct"], 6),
+            "custom_stop_loss": round(stop_loss, 8),
+            "custom_take_profit": round(take_profit, 8),
+            "position_multiplier": round(size_multiplier, 6),
+            "range_window_candles": int(context["window_size"]),
+            "entry_zone": zone_side,
+        }
+        if trailing_params is not None:
+            range_metadata["trailing_activation_pct"] = trailing_params[0]
+            range_metadata["trailing_distance_pct"] = trailing_params[1]
+
         return TradeSetup(
             symbol=symbol,
             signal=signal,
@@ -1167,18 +1265,7 @@ class RangeScalpingStrategy:
             stop_loss=round(stop_loss, 8),
             take_profit=round(take_profit, 8),
             dca_levels=dca_levels,
-            metadata={
-                "strategy_type": "range_scalping",
-                "range_support": round(support, 8),
-                "range_resistance": round(resistance, 8),
-                "range_mid_price": round(context["mid_price"], 8),
-                "range_amplitude_pct": round(context["amplitude_pct"], 6),
-                "custom_stop_loss": round(stop_loss, 8),
-                "custom_take_profit": round(take_profit, 8),
-                "position_multiplier": round(size_multiplier, 6),
-                "range_window_candles": int(context["window_size"]),
-                "entry_zone": zone_side,
-            },
+            metadata=range_metadata,
         )
 
 

@@ -25,7 +25,7 @@ import concurrent.futures
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from .config import config
 from .scheduler import LoopScheduler, get_loop_timing_profile, timing_profile_changed
@@ -1822,6 +1822,8 @@ class TradingBot:
                 'custom_take_profit': state_entry.get('custom_take_profit'),
                 'range_mid_price': state_entry.get('range_mid_price'),
                 'range_entry_side': state_entry.get('range_entry_side'),
+                'trailing_activation_pct': state_entry.get('trailing_activation_pct'),
+                'trailing_distance_pct': state_entry.get('trailing_distance_pct'),
             }
             if state_entry:
                 logger.info(
@@ -3251,6 +3253,8 @@ class TradingBot:
                     'custom_take_profit': previous.get('custom_take_profit'),
                     'range_mid_price': previous.get('range_mid_price'),
                     'range_entry_side': previous.get('range_entry_side'),
+                    'trailing_activation_pct': previous.get('trailing_activation_pct'),
+                    'trailing_distance_pct': previous.get('trailing_distance_pct'),
                 }
 
             # Verifica se alguma posição conhecida sumiu (snapshot sob lock)
@@ -3590,7 +3594,31 @@ class TradingBot:
             f"   • <b>P&L Líquido: <code>${pnl_net:+.4f}</code></b>"
         )
     
-    def _trailing_stop_price(self, side: str, entry_price: float, peak_price: float) -> float:
+    def _get_position_trailing_params(self, position_key: str) -> Tuple[float, float]:
+        """
+        Retorna (activation_pct, distance_pct) para uma posição.
+
+        Prefere os valores armazenados na posição (computados via ATR no open).
+        Cai pra config global quando a posição não tem (reconciliação sem
+        metadata, posições pré-feature, ou USE_ATR_TRAILING desabilitado).
+        """
+        meta = self._get_known_position(position_key)
+        activation = meta.get('trailing_activation_pct')
+        distance = meta.get('trailing_distance_pct')
+        if activation is None or distance is None:
+            return (
+                float(config.TRAILING_ACTIVATION_PERCENT),
+                float(config.TRAILING_DISTANCE_PERCENT),
+            )
+        return (float(activation), float(distance))
+
+    def _trailing_stop_price(
+        self,
+        side: str,
+        entry_price: float,
+        peak_price: float,
+        distance_pct: Optional[float] = None,
+    ) -> float:
         """
         Calcula o preço do trailing stop com piso de breakeven.
 
@@ -3598,8 +3626,12 @@ class TradingBot:
         o trade sai com P&L bruto ≈ 0 e fees transformam em prejuízo
         (ver caso BNBUSDT 2026-04-20 20:00). O piso garante que, depois do
         trailing ativar, o pior cenário de saída é lucro ≥ fees round-trip.
+
+        `distance_pct` (em %) sobrepõe o config global quando passado — usado
+        pelo trailing por posição ancorado em ATR.
         """
-        distance = config.TRAILING_DISTANCE_PERCENT / 100.0
+        effective_pct = distance_pct if distance_pct is not None else config.TRAILING_DISTANCE_PERCENT
+        distance = float(effective_pct) / 100.0
         # Piso: cobre fees round-trip + pequena margem de segurança
         fee_floor = (self.get_taker_fee_rate() * 2.0) + 0.0005
 
@@ -3644,14 +3676,20 @@ class TradingBot:
                 self.peak_prices[position_key] = current_price
         
         peak_price = self.peak_prices[position_key]
-        
+        activation_pct, distance_pct = self._get_position_trailing_params(position_key)
+
         if not self.trailing_activated[position_key]:
-            if profit_pct >= config.TRAILING_ACTIVATION_PERCENT:
+            if profit_pct >= activation_pct:
                 self.trailing_activated[position_key] = True
 
-                trailing_stop_price = self._trailing_stop_price(side, entry_price, peak_price)
-                
-                logger.info(f"🔔 Trailing Stop ATIVADO para {position_key}!")
+                trailing_stop_price = self._trailing_stop_price(
+                    side, entry_price, peak_price, distance_pct=distance_pct,
+                )
+
+                logger.info(
+                    f"🔔 Trailing Stop ATIVADO para {position_key}! "
+                    f"(activation={activation_pct:.2f}% / distance={distance_pct:.2f}%)"
+                )
                 logger.info(f"   Pico: ${peak_price:.4f} | Stop em: ${trailing_stop_price:.4f}")
                 
                 trailing_pos_meta = self._get_known_position(position_key)
@@ -3670,12 +3708,14 @@ class TradingBot:
                 )
         
         if self.trailing_activated[position_key]:
-            trailing_stop_price = self._trailing_stop_price(side, entry_price, peak_price)
+            trailing_stop_price = self._trailing_stop_price(
+                side, entry_price, peak_price, distance_pct=distance_pct,
+            )
             if side == "LONG":
                 price_hit = current_price <= trailing_stop_price
             else:  # SHORT
                 price_hit = current_price >= trailing_stop_price
-            
+
             if price_hit:
                 # Fecha sempre que o stop for atingido. A activation_threshold já garante
                 # que a posição estava lucrativa quando o trailing foi ativado.
@@ -3683,7 +3723,7 @@ class TradingBot:
                 # (ex: order=$3, leverage=10x → profit_usd < $0.20 na ativação) deixando a
                 # posição aberta enquanto o preço continuava caindo.
                 logger.info(f"   🎯 Trailing Stop atingido | lucro ${profit_usd:.4f} ({profit_pct:.3f}%)")
-                return (True, f"Trailing Stop ({config.TRAILING_DISTANCE_PERCENT}% do pico)")
+                return (True, f"Trailing Stop ({distance_pct:.2f}% do pico)")
             
             # Log do status do trailing
             logger.info(f"   🎯 Trailing ativo | Pico: ${peak_price:.4f} | Stop: ${trailing_stop_price:.4f} | Lucro: ${profit_usd:.4f}")

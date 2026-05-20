@@ -104,6 +104,10 @@ class ExecutionEngine:
         custom_stop_loss = _safe_float(setup_metadata.get("custom_stop_loss", setup.stop_loss))
         custom_take_profit = _safe_float(setup_metadata.get("custom_take_profit", setup.take_profit))
         range_mid_price = _safe_float(setup_metadata.get("range_mid_price"))
+        # Trailing dinâmico computado pela strategy a partir do ATR no momento
+        # do setup. None aqui significa "usar config global no _check_trailing_stop".
+        trailing_activation_pct = _safe_float(setup_metadata.get("trailing_activation_pct"))
+        trailing_distance_pct = _safe_float(setup_metadata.get("trailing_distance_pct"))
         exchange_stop_loss_enabled = bool(getattr(config, "USE_INDIVIDUAL_STOP_LOSS", False))
         if not exchange_stop_loss_enabled:
             custom_stop_loss = None
@@ -375,6 +379,8 @@ class ExecutionEngine:
                         'custom_take_profit': custom_take_profit,
                         'range_mid_price': range_mid_price,
                         'range_entry_side': "LONG",
+                        'trailing_activation_pct': trailing_activation_pct,
+                        'trailing_distance_pct': trailing_distance_pct,
                     },
                 )
 
@@ -521,6 +527,8 @@ class ExecutionEngine:
                         'custom_take_profit': short_tp,
                         'range_mid_price': range_mid_price,
                         'range_entry_side': "SHORT",
+                        'trailing_activation_pct': trailing_activation_pct,
+                        'trailing_distance_pct': trailing_distance_pct,
                     },
                 )
 

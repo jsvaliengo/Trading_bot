@@ -458,6 +458,29 @@ class TradingConfig:
     # TRAILING_MIN_PROFIT_USD removido — gate em USD bloqueava fechamento em posições pequenas
     # (order=$3 × 10x = $30 notional → profit_usd < $0.20 na ativação)
 
+    # --- ATR-based Dynamic Risk ---
+    # DCA distance ao invés de DCA_STEP_PERCENT fixo: cada nível i fica a
+    # multiplier_i × ATR do preço de entrada, com multiplier_i = BASE + (i-1)*STEP.
+    # Defaults: 1.5×, 2.5×, 3.5× ATR. Sempre clampado a [MIN_STEP, MAX_STEP] em
+    # % do preço pra não disparar com ruído (MIN) nem ficar longe demais e nunca
+    # encher o DCA (MAX).
+    USE_ATR_DCA: bool = _env_bool("TRADING_BOT_USE_ATR_DCA", True)
+    DCA_ATR_MULTIPLIER_BASE: float = _env_float("TRADING_BOT_DCA_ATR_MULTIPLIER_BASE", 1.5)
+    DCA_ATR_STEP_INCREMENT: float = _env_float("TRADING_BOT_DCA_ATR_STEP_INCREMENT", 1.0)
+    DCA_ATR_MIN_STEP_PERCENT: float = _env_float("TRADING_BOT_DCA_ATR_MIN_STEP_PERCENT", 0.5)
+    DCA_ATR_MAX_STEP_PERCENT: float = _env_float("TRADING_BOT_DCA_ATR_MAX_STEP_PERCENT", 8.0)
+    # Trailing dinâmico computado uma vez no open e armazenado por posição.
+    # ACTIVATION = mult × ATR%, DISTANCE = mult × ATR%, ambos clampados nos
+    # bounds abaixo. Invariante: ACTIVATION ≥ DISTANCE + fee_floor (0.15%) é
+    # enforced em compute_atr_based_trailing pra preservar o breakeven floor.
+    USE_ATR_TRAILING: bool = _env_bool("TRADING_BOT_USE_ATR_TRAILING", True)
+    TRAILING_ACTIVATION_ATR_MULT: float = _env_float("TRADING_BOT_TRAILING_ACTIVATION_ATR_MULT", 2.0)
+    TRAILING_DISTANCE_ATR_MULT: float = _env_float("TRADING_BOT_TRAILING_DISTANCE_ATR_MULT", 1.0)
+    TRAILING_ACTIVATION_MIN_PERCENT: float = _env_float("TRADING_BOT_TRAILING_ACTIVATION_MIN_PERCENT", 0.40)
+    TRAILING_ACTIVATION_MAX_PERCENT: float = _env_float("TRADING_BOT_TRAILING_ACTIVATION_MAX_PERCENT", 2.50)
+    TRAILING_DISTANCE_MIN_PERCENT: float = _env_float("TRADING_BOT_TRAILING_DISTANCE_MIN_PERCENT", 0.20)
+    TRAILING_DISTANCE_MAX_PERCENT: float = _env_float("TRADING_BOT_TRAILING_DISTANCE_MAX_PERCENT", 1.50)
+
     # ============================================
     # FUNDING RATE (Taxa de financiamento)
     # ============================================
