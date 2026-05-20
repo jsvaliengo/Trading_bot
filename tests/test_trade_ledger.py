@@ -34,6 +34,7 @@ def _make_bot() -> SimpleNamespace:
         trades_by_symbol={},
         trades_by_strategy={},
         pnl_by_symbol={},
+        trade_history=[],
     )
 
 
@@ -170,6 +171,106 @@ def test_zero_pnl_classifies_as_loss():
         ledger.record_trade_closed(symbol="X", strategy_name="x", pnl_net=0.0, total_fees=0.0)
     assert bot.trades_loss_count == 1
     assert bot.trades_win_count == 0
+
+
+# ---------- record_trade_opened ----------
+
+
+def test_record_trade_opened_appends_to_trade_history():
+    bot = _make_bot()
+    ledger = TradeLedger(bot)
+    record = ledger.record_trade_opened(
+        symbol="BTCUSDT", signal="STRONG_BUY", side="LONG",
+        quantity=0.01, order_size=300.0, entry_price=50000.0,
+        stop_loss=49500.0, take_profit=51000.0,
+        strategy_name="trend_strong", strategy_type="trend_signal",
+    )
+    assert len(bot.trade_history) == 1
+    assert bot.trade_history[0] is record
+    assert record["symbol"] == "BTCUSDT"
+    assert record["signal"] == "STRONG_BUY"
+    assert record["side"] == "LONG"
+    assert record["qty"] == 0.01
+    assert record["value"] == 300.0
+    assert record["entry_price"] == 50000.0
+    assert record["stop_loss"] == 49500.0
+    assert record["take_profit"] == 51000.0
+    assert record["strategy_name"] == "trend_strong"
+    assert record["strategy_type"] == "trend_signal"
+    assert record["double_first"] is False
+    assert record["ai_consultive"] == {}
+    # timestamp deve ser ISO format string
+    assert isinstance(record["timestamp"], str)
+    assert "T" in record["timestamp"]
+
+
+def test_record_trade_opened_normalizes_empty_strategy_to_primary():
+    bot = _make_bot()
+    ledger = TradeLedger(bot)
+    record = ledger.record_trade_opened(
+        symbol="X", signal="BUY", side="LONG",
+        quantity=1.0, order_size=10.0, entry_price=1.0,
+        stop_loss=None, take_profit=None,
+        strategy_name="", strategy_type="trend_signal",
+    )
+    assert record["strategy_name"] == "primary"
+
+
+def test_record_trade_opened_copies_ai_consultive_metadata():
+    bot = _make_bot()
+    ledger = TradeLedger(bot)
+    ai_meta = {"approval": True, "confidence": 85, "decision": "ENTER_NOW"}
+    record = ledger.record_trade_opened(
+        symbol="X", signal="BUY", side="LONG",
+        quantity=1.0, order_size=10.0, entry_price=1.0,
+        stop_loss=None, take_profit=None,
+        strategy_name="x", strategy_type="trend_signal",
+        ai_consultive=ai_meta,
+    )
+    assert record["ai_consultive"] == ai_meta
+    # Defensive copy — mutar o original não afeta o registro
+    ai_meta["approval"] = False
+    assert record["ai_consultive"]["approval"] is True
+
+
+def test_record_trade_opened_handles_none_ai_consultive():
+    bot = _make_bot()
+    ledger = TradeLedger(bot)
+    record = ledger.record_trade_opened(
+        symbol="X", signal="BUY", side="LONG",
+        quantity=1.0, order_size=10.0, entry_price=1.0,
+        stop_loss=None, take_profit=None,
+        strategy_name="x", strategy_type="trend_signal",
+        ai_consultive=None,
+    )
+    assert record["ai_consultive"] == {}
+
+
+def test_record_trade_opened_accepts_double_first_flag():
+    bot = _make_bot()
+    ledger = TradeLedger(bot)
+    record = ledger.record_trade_opened(
+        symbol="X", signal="BUY", side="LONG",
+        quantity=2.0, order_size=20.0, entry_price=1.0,
+        stop_loss=None, take_profit=None,
+        strategy_name="x", strategy_type="trend_signal",
+        double_first=True,
+    )
+    assert record["double_first"] is True
+
+
+def test_record_trade_opened_multiple_trades_accumulate_in_history():
+    bot = _make_bot()
+    ledger = TradeLedger(bot)
+    for i in range(3):
+        ledger.record_trade_opened(
+            symbol=f"PAIR{i}", signal="BUY", side="LONG",
+            quantity=1.0, order_size=10.0, entry_price=1.0,
+            stop_loss=None, take_profit=None,
+            strategy_name="x", strategy_type="trend_signal",
+        )
+    assert len(bot.trade_history) == 3
+    assert [r["symbol"] for r in bot.trade_history] == ["PAIR0", "PAIR1", "PAIR2"]
 
 
 def test_fees_accumulate_per_symbol_and_strategy():

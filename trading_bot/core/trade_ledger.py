@@ -24,7 +24,8 @@ A ledger NÃO toca:
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict
+from datetime import datetime
+from typing import Any, Dict, Optional
 
 from ..observability import metrics
 
@@ -36,6 +37,47 @@ class TradeLedger:
 
     def __init__(self, bot):
         self._bot = bot
+
+    def record_trade_opened(
+        self,
+        *,
+        symbol: str,
+        signal: str,
+        side: str,
+        quantity: float,
+        order_size: float,
+        entry_price: float,
+        stop_loss: Optional[float],
+        take_profit: Optional[float],
+        strategy_name: str,
+        strategy_type: str,
+        double_first: bool = False,
+        ai_consultive: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Append do trade no histórico (open path). Constrói o dict com o
+        schema canônico — antes era replicado em engine.py em dois blocos
+        13-fields quase idênticos (LONG e SHORT), com risco de divergir.
+        Retorna o trade_record (caso o caller queira inspecionar).
+        """
+        bot = self._bot
+        record = {
+            "timestamp": datetime.now().isoformat(),
+            "symbol": symbol,
+            "signal": signal,
+            "side": side,
+            "qty": quantity,
+            "value": order_size,
+            "entry_price": entry_price,
+            "stop_loss": stop_loss,
+            "take_profit": take_profit,
+            "strategy_name": str(strategy_name or "primary"),
+            "strategy_type": strategy_type,
+            "double_first": bool(double_first),
+            "ai_consultive": dict(ai_consultive or {}),
+        }
+        bot.trade_history.append(record)
+        return record
 
     def record_trade_closed(
         self,

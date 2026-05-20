@@ -343,23 +343,20 @@ class ExecutionEngine:
                     strategy_name=strategy_name
                 )
 
-                # Registra o trade
-                trade_record = {
-                    'timestamp': datetime.now().isoformat(),
-                    'symbol': symbol,
-                    'signal': signal_name,
-                    'side': 'LONG',
-                    'qty': long_qty,
-                    'value': order_size,
-                    'entry_price': price,
-                    'stop_loss': custom_stop_loss,
-                    'take_profit': custom_take_profit if custom_take_profit else setup.take_profit,
-                    'strategy_name': str(strategy_name or "primary"),
-                    'strategy_type': strategy_type,
-                    'double_first': bool(double_first_applied),
-                    'ai_consultive': dict(setup_metadata.get('ai_consultive', {}) or {}),
-                }
-                bot.trade_history.append(trade_record)
+                bot.ledger.record_trade_opened(
+                    symbol=symbol,
+                    signal=signal_name,
+                    side="LONG",
+                    quantity=long_qty,
+                    order_size=order_size,
+                    entry_price=price,
+                    stop_loss=custom_stop_loss,
+                    take_profit=custom_take_profit if custom_take_profit else setup.take_profit,
+                    strategy_name=strategy_name,
+                    strategy_type=strategy_type,
+                    double_first=double_first_applied,
+                    ai_consultive=setup_metadata.get("ai_consultive"),
+                )
 
                 position_key = bot.positions.open(
                     symbol=symbol,
@@ -493,23 +490,20 @@ class ExecutionEngine:
                     strategy_name=strategy_name
                 )
 
-                # Registra o trade
-                trade_record = {
-                    'timestamp': datetime.now().isoformat(),
-                    'symbol': symbol,
-                    'signal': signal_name,
-                    'side': 'SHORT',
-                    'qty': short_qty,
-                    'value': order_size,
-                    'entry_price': price,
-                    'stop_loss': custom_stop_loss,
-                    'take_profit': short_tp,
-                    'strategy_name': str(strategy_name or "primary"),
-                    'strategy_type': strategy_type,
-                    'double_first': bool(double_first_applied),
-                    'ai_consultive': dict(setup_metadata.get('ai_consultive', {}) or {}),
-                }
-                bot.trade_history.append(trade_record)
+                bot.ledger.record_trade_opened(
+                    symbol=symbol,
+                    signal=signal_name,
+                    side="SHORT",
+                    quantity=short_qty,
+                    order_size=order_size,
+                    entry_price=price,
+                    stop_loss=custom_stop_loss,
+                    take_profit=short_tp,
+                    strategy_name=strategy_name,
+                    strategy_type=strategy_type,
+                    double_first=double_first_applied,
+                    ai_consultive=setup_metadata.get("ai_consultive"),
+                )
 
                 position_key = bot.positions.open(
                     symbol=symbol,
