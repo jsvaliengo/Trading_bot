@@ -184,7 +184,7 @@ class ExecutionEngine:
                 )
                 order_size = min_margin_needed
 
-            order_size, double_first_applied, double_first_state_key = bot._apply_double_first_order_size(
+            order_size, double_first_applied, double_first_state_key = bot.double_first_policy.try_double(
                 symbol=symbol,
                 side=trade_side,
                 order_size=order_size,
@@ -311,7 +311,7 @@ class ExecutionEngine:
                     return False
 
                 if double_first_applied:
-                    bot._mark_double_first_used(
+                    bot.double_first_policy.mark_used(
                         state_key=double_first_state_key,
                         symbol=symbol,
                         side="LONG",
@@ -455,7 +455,7 @@ class ExecutionEngine:
                     return False
 
                 if double_first_applied:
-                    bot._mark_double_first_used(
+                    bot.double_first_policy.mark_used(
                         state_key=double_first_state_key,
                         symbol=symbol,
                         side="SHORT",

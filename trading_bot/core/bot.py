@@ -29,6 +29,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .config import config
 from .scheduler import LoopScheduler, get_loop_timing_profile, timing_profile_changed
+from .double_first_policy import DoubleFirstPolicy
 from .position_tracker import PositionTracker
 from .state_manager import StateManager
 from .trade_block_reporter import TradeBlockReporter
@@ -258,6 +259,9 @@ class TradingBot:
         # (known_positions, peak_prices, trailing_activated) atrás de uma
         # API uniforme. Storage continua nos atributos do bot.
         self.positions = PositionTracker(self)
+        # Policy do Double First — multiplicador da primeira entrada
+        # quando habilitado. Encapsula scope/state_key/try_double/mark_used.
+        self.double_first_policy = DoubleFirstPolicy(self)
         # Ledger de bookkeeping pós-trade — encapsula as mutações de
         # stats/contadores que antes ficavam espalhadas no engine.
         self.ledger = TradeLedger(self)
@@ -947,32 +951,8 @@ class TradingBot:
             )
 
     def _normalize_double_first_state(self, raw_state) -> Dict[str, bool]:
-        """
-        Normaliza o estado da regra Double First carregado do JSON.
-        Aceita dict/list legados e mantém apenas chaves válidas.
-        """
-        normalized: Dict[str, bool] = {}
-
-        if isinstance(raw_state, dict):
-            items = raw_state.items()
-        elif isinstance(raw_state, list):
-            items = [(item, True) for item in raw_state]
-        else:
-            return normalized
-
-        for key, enabled in items:
-            if not enabled:
-                continue
-            normalized_key = str(key).strip().upper()
-            if not normalized_key:
-                continue
-            if normalized_key in {"LONG", "SHORT"}:
-                normalized[normalized_key] = True
-                continue
-            if normalized_key.endswith("_LONG") or normalized_key.endswith("_SHORT"):
-                normalized[normalized_key] = True
-
-        return normalized
+        """Backward-compat: delegate à DoubleFirstPolicy."""
+        return DoubleFirstPolicy.normalize_state(raw_state)
 
     def _set_known_position(self, position_key: str, payload: Dict[str, Any]):
         """Backward-compat: delegate ao PositionTracker."""
@@ -987,63 +967,26 @@ class TradingBot:
         return self.positions.get(position_key)
 
     def _double_first_scope(self) -> str:
-        scope = str(getattr(config, "DOUBLE_FIRST_SCOPE", "global") or "global").strip().lower()
-        return scope if scope in {"global", "symbol"} else "global"
+        """Backward-compat: delegate à DoubleFirstPolicy."""
+        return self.double_first_policy.scope()
 
     @staticmethod
     def _normalize_position_side(side: str) -> str:
         return "SHORT" if str(side).upper() == "SHORT" else "LONG"
 
     def _is_double_first_enabled(self, side: str) -> bool:
-        normalized_side = self._normalize_position_side(side)
-        if normalized_side == "LONG":
-            return bool(getattr(config, "DOUBLE_FIRST_LONG_ENABLED", False))
-        return bool(getattr(config, "DOUBLE_FIRST_SHORT_ENABLED", False))
+        """Backward-compat: delegate à DoubleFirstPolicy."""
+        return self.double_first_policy.is_enabled(side)
 
     def _double_first_state_key(self, symbol: str, side: str) -> str:
-        normalized_side = self._normalize_position_side(side)
-        if self._double_first_scope() == "symbol":
-            return f"{str(symbol).upper()}_{normalized_side}"
-        return normalized_side
+        """Backward-compat: delegate à DoubleFirstPolicy."""
+        return self.double_first_policy.state_key(symbol, side)
 
-    def _apply_double_first_order_size(self, symbol: str, side: str, order_size: float) -> Tuple[float, bool, str]:
-        """
-        Aplica o multiplicador de "Double First" quando elegível.
-        Retorna (novo_order_size, aplicado, state_key).
-        A marcação como "usado" deve acontecer apenas após a ordem abrir com sucesso.
-        """
-        try:
-            base_order_size = float(order_size)
-        except Exception:
-            return order_size, False, ""
-
-        if base_order_size <= 0:
-            return base_order_size, False, ""
-
-        if not hasattr(self, "double_first_used") or not isinstance(self.double_first_used, dict):
-            self.double_first_used = {}
-
-        normalized_side = self._normalize_position_side(side)
-        if not self._is_double_first_enabled(normalized_side):
-            return base_order_size, False, ""
-
-        multiplier = float(getattr(config, "DOUBLE_FIRST_MULTIPLIER", 1.0) or 1.0)
-        if multiplier <= 1.0:
-            return base_order_size, False, ""
-
-        state_key = self._double_first_state_key(symbol, normalized_side)
-        if bool(self.double_first_used.get(state_key)):
-            return base_order_size, False, ""
-
-        doubled_order_size = base_order_size * multiplier
-        max_margin = float(getattr(config, "DOUBLE_FIRST_MAX_MARGIN_USDT", 0.0) or 0.0)
-        if max_margin > 0:
-            doubled_order_size = min(doubled_order_size, max_margin)
-
-        if doubled_order_size <= base_order_size:
-            return base_order_size, False, ""
-
-        return doubled_order_size, True, state_key
+    def _apply_double_first_order_size(
+        self, symbol: str, side: str, order_size: float
+    ) -> Tuple[float, bool, str]:
+        """Backward-compat: delegate à DoubleFirstPolicy.try_double()."""
+        return self.double_first_policy.try_double(symbol, side, order_size)
 
     def _mark_double_first_used(
         self,
@@ -1053,19 +996,9 @@ class TradingBot:
         base_order_size: float,
         applied_order_size: float,
     ) -> None:
-        if not state_key:
-            return
-        if not hasattr(self, "double_first_used") or not isinstance(self.double_first_used, dict):
-            self.double_first_used = {}
-
-        self.double_first_used[state_key] = True
-        logger.info(
-            "🚀 Double First confirmado em %s %s: $%.2f → $%.2f (escopo=%s)",
-            str(symbol).upper(),
-            self._normalize_position_side(side),
-            float(base_order_size),
-            float(applied_order_size),
-            self._double_first_scope(),
+        """Backward-compat: delegate à DoubleFirstPolicy.mark_used()."""
+        self.double_first_policy.mark_used(
+            state_key, symbol, side, base_order_size, applied_order_size
         )
     
     def _signal_handler(self, _signum, _frame):
