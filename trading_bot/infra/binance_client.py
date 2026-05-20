@@ -22,6 +22,13 @@ from .binance_user_stream import UserStreamMonitor
 logger = logging.getLogger(__name__)
 
 
+# Códigos de erro da Binance que indicam rejeição estrutural — ou seja,
+# que não vai se resolver retentando em segundos. O tratamento padrão é
+# entrar em cooldown por símbolo (ver SYMBOL_STRUCTURAL_COOLDOWN_SECONDS).
+#   -2027: Exceeded the maximum allowable position at current leverage
+STRUCTURAL_REJECTION_CODES: frozenset = frozenset({-2027})
+
+
 class BinanceConnection:
     """
     Classe que encapsula toda a comunicação com a Binance.
@@ -47,6 +54,11 @@ class BinanceConnection:
         self._reset_retry_stats(time.monotonic())
         self._order_stats_lock = threading.Lock()
         self._order_stats_since_report = self._new_order_stats()
+
+        # Cooldown por símbolo após rejeição estrutural (ex.: -2027). Map
+        # symbol -> {"until_monotonic", "code", "message", "set_at_wall"}.
+        self._symbol_cooldowns_lock = threading.Lock()
+        self._symbol_cooldowns: Dict[str, Dict[str, Any]] = {}
 
         # Improvement 6: TTL cache para get_symbol_info e get_exchange_info
         self._symbol_info_cache: Dict[str, Dict] = {}
@@ -349,6 +361,7 @@ class BinanceConnection:
             -2010,  # New order rejected
             -2019,  # Margin is insufficient
             -2021,  # Order would immediately trigger
+            -2027,  # Exceeded the maximum allowable position at current leverage
             -1111,  # BAD_PRECISION
             -1116,  # Invalid order type
             -1110,  # BAD_INSTRUMENT_TYPE
@@ -372,6 +385,66 @@ class BinanceConnection:
             "lot size",
         ]
         return any(pattern in message for pattern in rejection_patterns)
+
+    # ------------------------------------------------------------------
+    # Cooldown por símbolo (rejeições estruturais da exchange)
+    # ------------------------------------------------------------------
+
+    def _structural_cooldown_seconds(self) -> float:
+        return max(
+            0.0,
+            float(getattr(self.config, "SYMBOL_STRUCTURAL_COOLDOWN_SECONDS", 1800)),
+        )
+
+    def _set_symbol_cooldown(self, symbol: str, code: int, message: str) -> float:
+        """Marca o símbolo em cooldown estrutural. Retorna duração aplicada."""
+        duration = self._structural_cooldown_seconds()
+        if duration <= 0:
+            return 0.0
+        now_mono = time.monotonic()
+        with self._symbol_cooldowns_lock:
+            self._symbol_cooldowns[symbol] = {
+                "until_monotonic": now_mono + duration,
+                "code": int(code),
+                "message": str(message),
+                "set_at_wall": time.time(),
+            }
+        logger.warning(
+            f"⏳ Cooldown estrutural ativado para {symbol}: code={code} "
+            f"duração={duration:.0f}s motivo={message}"
+        )
+        return duration
+
+    def is_symbol_on_cooldown(self, symbol: str) -> bool:
+        with self._symbol_cooldowns_lock:
+            info = self._symbol_cooldowns.get(symbol)
+            if info is None:
+                return False
+            if time.monotonic() >= info["until_monotonic"]:
+                del self._symbol_cooldowns[symbol]
+                return False
+            return True
+
+    def get_symbol_cooldown_info(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """Retorna info do cooldown ativo (ou None se expirado/inexistente)."""
+        with self._symbol_cooldowns_lock:
+            info = self._symbol_cooldowns.get(symbol)
+            if info is None:
+                return None
+            remaining = info["until_monotonic"] - time.monotonic()
+            if remaining <= 0:
+                del self._symbol_cooldowns[symbol]
+                return None
+            return {
+                "code": info["code"],
+                "message": info["message"],
+                "remaining_seconds": remaining,
+                "set_at_wall": info["set_at_wall"],
+            }
+
+    def clear_symbol_cooldown(self, symbol: str) -> bool:
+        with self._symbol_cooldowns_lock:
+            return self._symbol_cooldowns.pop(symbol, None) is not None
 
     def get_order_stats_report(self, reset: bool = True) -> Dict[str, Any]:
         """
@@ -1386,6 +1459,19 @@ class BinanceConnection:
         Para ABRIR posição SHORT: side='SELL', position_side='SHORT'
         Para FECHAR posição SHORT: side='BUY', position_side='SHORT'
         """
+        # Curto-circuito: símbolos em cooldown estrutural não tentam de novo
+        # até o cooldown expirar. Evita flood de ordens rejeitadas e alertas
+        # de Telegram quando o erro é por limite de leverage/tier da exchange.
+        cooldown_info = self.get_symbol_cooldown_info(symbol)
+        if cooldown_info is not None:
+            logger.info(
+                f"⏳ {symbol} em cooldown estrutural — pulando ordem "
+                f"({int(cooldown_info['remaining_seconds'])}s restantes, "
+                f"code={cooldown_info['code']})"
+            )
+            self._record_order_stat(symbol, attempts=1, failures=1, rejections=1)
+            return None
+
         self._record_order_stat(symbol, attempts=1)
         try:
             # Obtém a precisão do símbolo
@@ -1420,6 +1506,9 @@ class BinanceConnection:
             
         except Exception as e:
             logger.error(f"Erro ao enviar ordem: {e}")
+            api_code = getattr(e, "code", None)
+            if api_code in STRUCTURAL_REJECTION_CODES:
+                self._set_symbol_cooldown(symbol, api_code, str(e))
             self._record_order_stat(
                 symbol,
                 failures=1,

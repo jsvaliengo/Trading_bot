@@ -32,6 +32,8 @@ def _make_client():
     conn._order_stats_since_report = {
         "attempts": 0, "successes": 0, "failures": 0, "rejections": 0, "symbols": {}
     }
+    conn._symbol_cooldowns_lock = threading.Lock()
+    conn._symbol_cooldowns = {}
     return conn
 
 

@@ -457,7 +457,7 @@ class TradingConfig:
     TRAILING_DISTANCE_PERCENT: float = _env_float("TRADING_BOT_TRAILING_DISTANCE_PERCENT", 0.40)
     # TRAILING_MIN_PROFIT_USD removido — gate em USD bloqueava fechamento em posições pequenas
     # (order=$3 × 10x = $30 notional → profit_usd < $0.20 na ativação)
-    
+
     # ============================================
     # FUNDING RATE (Taxa de financiamento)
     # ============================================
@@ -586,6 +586,15 @@ class TradingConfig:
 
     # Cooldown entre alertas críticos imediatos
     API_HEALTH_CRITICAL_COOLDOWN_SECONDS: int = 300
+
+    # Cooldown por símbolo após rejeição estrutural da exchange (ex.: -2027
+    # "Exceeded the maximum allowable position at current leverage"). Esses
+    # erros não resolvem em segundos — dependem de mudança de tier, alavancagem
+    # ou cap da exchange — então reentrar imediatamente só gera flood de
+    # ordens rejeitadas e alertas no Telegram.
+    SYMBOL_STRUCTURAL_COOLDOWN_SECONDS: int = _env_int(
+        "TRADING_BOT_SYMBOL_STRUCTURAL_COOLDOWN_SECONDS", 1800
+    )
 
     # Relatório diário consolidado para decisão de risco/SL (Telegram)
     DAILY_PERFORMANCE_REPORT_ENABLED: bool = _env_bool("TRADING_BOT_DAILY_REPORT_ENABLED", True)

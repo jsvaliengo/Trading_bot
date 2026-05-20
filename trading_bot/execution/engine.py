@@ -69,6 +69,29 @@ class ExecutionEngine:
         setup_metadata = dict(getattr(setup, "metadata", {}) or {})
         requested_side = "LONG" if open_long else "SHORT" if open_short else "NONE"
 
+        # Curto-circuito: símbolo em cooldown estrutural não tenta abrir
+        # nem chama funding/preço/info. A IA já avaliou e aprovou; o motivo
+        # do bloqueio é puramente operacional (limite de leverage/tier).
+        cooldown_info = bot.exchange.get_symbol_cooldown_info(symbol)
+        if cooldown_info is not None and requested_side in ("LONG", "SHORT"):
+            remaining_min = max(1, int(cooldown_info["remaining_seconds"] / 60))
+            logger.info(
+                f"⏳ {symbol} em cooldown estrutural — entrada {requested_side} cancelada "
+                f"(code={cooldown_info['code']}, {remaining_min}min restantes)"
+            )
+            bot._notify_ai_approved_trade_block(
+                symbol=symbol,
+                side=requested_side,
+                strategy_name=strategy_name,
+                reason="Cooldown estrutural ativo",
+                detail=(
+                    f"Exchange rejeitou ordens anteriores (code {cooldown_info['code']}). "
+                    f"Reentrada bloqueada por ~{remaining_min}min."
+                ),
+                setup_metadata=setup_metadata,
+            )
+            return False
+
         def _safe_float(value):
             try:
                 return float(value)
@@ -262,12 +285,23 @@ class ExecutionEngine:
 
                 if not long_order:
                     logger.error("❌ Falha ao abrir posição LONG")
+                    post_cooldown = bot.exchange.get_symbol_cooldown_info(symbol)
+                    if post_cooldown is not None:
+                        remaining_min = max(1, int(post_cooldown["remaining_seconds"] / 60))
+                        block_reason = "Cooldown estrutural ativado"
+                        block_detail = (
+                            f"Exchange rejeitou a ordem (code {post_cooldown['code']}). "
+                            f"Reentrada em {symbol} bloqueada por ~{remaining_min}min."
+                        )
+                    else:
+                        block_reason = "Falha ao abrir posição LONG"
+                        block_detail = "A exchange rejeitou ou não retornou a ordem de mercado."
                     bot._notify_ai_approved_trade_block(
                         symbol=symbol,
                         side="LONG",
                         strategy_name=strategy_name,
-                        reason="Falha ao abrir posição LONG",
-                        detail="A exchange rejeitou ou não retornou a ordem de mercado.",
+                        reason=block_reason,
+                        detail=block_detail,
                         setup_metadata=setup_metadata,
                     )
                     return False
@@ -394,12 +428,23 @@ class ExecutionEngine:
 
                 if not short_order:
                     logger.error("❌ Falha ao abrir posição SHORT")
+                    post_cooldown = bot.exchange.get_symbol_cooldown_info(symbol)
+                    if post_cooldown is not None:
+                        remaining_min = max(1, int(post_cooldown["remaining_seconds"] / 60))
+                        block_reason = "Cooldown estrutural ativado"
+                        block_detail = (
+                            f"Exchange rejeitou a ordem (code {post_cooldown['code']}). "
+                            f"Reentrada em {symbol} bloqueada por ~{remaining_min}min."
+                        )
+                    else:
+                        block_reason = "Falha ao abrir posição SHORT"
+                        block_detail = "A exchange rejeitou ou não retornou a ordem de mercado."
                     bot._notify_ai_approved_trade_block(
                         symbol=symbol,
                         side="SHORT",
                         strategy_name=strategy_name,
-                        reason="Falha ao abrir posição SHORT",
-                        detail="A exchange rejeitou ou não retornou a ordem de mercado.",
+                        reason=block_reason,
+                        detail=block_detail,
                         setup_metadata=setup_metadata,
                     )
                     return False
