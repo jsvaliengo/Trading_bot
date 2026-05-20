@@ -183,6 +183,158 @@ class TechnicalAnalysis:
         return np.mean(true_ranges[-period:])
 
     @staticmethod
+    def calculate_adx(
+        highs: List[float],
+        lows: List[float],
+        closes: List[float],
+        period: int = 14,
+    ) -> float:
+        """
+        Calcula o ADX (Average Directional Index) usando o método de Wilder.
+
+        ADX mede a FORÇA da tendência (não direção):
+        - ADX > 25: tendência forte
+        - ADX < 20: mercado lateral (range)
+        - Entre 20-25: zona ambígua (transição)
+
+        Retorna 0.0 quando dados insuficientes (caller trata como indeterminado).
+        """
+        n = min(len(highs), len(lows), len(closes))
+        if n < period * 2 + 1:
+            return 0.0
+
+        highs_a = np.asarray(highs[-n:], dtype=float)
+        lows_a = np.asarray(lows[-n:], dtype=float)
+        closes_a = np.asarray(closes[-n:], dtype=float)
+
+        up_move = highs_a[1:] - highs_a[:-1]
+        down_move = lows_a[:-1] - lows_a[1:]
+
+        plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
+        minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0.0)
+
+        high_low = highs_a[1:] - lows_a[1:]
+        high_close = np.abs(highs_a[1:] - closes_a[:-1])
+        low_close = np.abs(lows_a[1:] - closes_a[:-1])
+        tr = np.maximum.reduce([high_low, high_close, low_close])
+
+        # Wilder smoothing: seed = soma do período, depois prev*(p-1)/p + atual
+        def _wilder(values: np.ndarray) -> np.ndarray:
+            out = np.zeros_like(values)
+            out[period - 1] = np.sum(values[:period])
+            for i in range(period, len(values)):
+                out[i] = out[i - 1] - (out[i - 1] / period) + values[i]
+            return out
+
+        atr_smooth = _wilder(tr)
+        plus_dm_smooth = _wilder(plus_dm)
+        minus_dm_smooth = _wilder(minus_dm)
+
+        atr_nonzero = np.where(atr_smooth > 0, atr_smooth, 1.0)
+        plus_di = 100.0 * (plus_dm_smooth / atr_nonzero)
+        minus_di = 100.0 * (minus_dm_smooth / atr_nonzero)
+
+        di_sum = plus_di + minus_di
+        di_sum_nonzero = np.where(di_sum > 0, di_sum, 1.0)
+        dx = 100.0 * np.abs(plus_di - minus_di) / di_sum_nonzero
+
+        # Seed do ADX: média dos primeiros 'period' valores válidos de DX
+        adx_seed_slice = dx[period - 1 : 2 * period - 1]
+        if len(adx_seed_slice) < period:
+            return 0.0
+        adx = float(np.mean(adx_seed_slice))
+        for i in range(2 * period - 1, len(dx)):
+            adx = (adx * (period - 1) + dx[i]) / period
+
+        return float(adx)
+
+    @staticmethod
+    def calculate_bb_width_percent(
+        prices: List[float],
+        period: int = 20,
+        std_dev: int = 2,
+    ) -> float:
+        """
+        Largura das Bandas de Bollinger como % do meio: (upper - lower) / mid * 100.
+        BBW baixo (~< 4%) tipicamente precede rompimentos violentos (squeeze).
+        """
+        lower, middle, upper = TechnicalAnalysis.calculate_bollinger_bands(
+            prices, period=period, std_dev=std_dev
+        )
+        if middle <= 0:
+            return 0.0
+        return ((upper - lower) / middle) * 100.0
+
+    @staticmethod
+    def classify_regime(
+        highs: List[float],
+        lows: List[float],
+        closes: List[float],
+    ) -> Dict[str, Any]:
+        """
+        Classifica o regime de mercado combinando ADX e BBW.
+
+        Retorna dict com 'regime' ∈ {"trend", "range", "squeeze", "neutral"},
+        além de 'adx', 'bbw_percent' e 'reason' para log.
+
+        Regras:
+          ADX ≥ TREND_THRESHOLD                       → "trend"
+          ADX ≤ RANGE_THRESHOLD e BBW > SQUEEZE       → "range"
+          ADX ≤ RANGE_THRESHOLD e BBW ≤ SQUEEZE       → "squeeze" (lateral comprimido)
+          Caso contrário (zona entre thresholds)      → "neutral"
+        """
+        adx_period = int(getattr(config, "REGIME_ADX_PERIOD", 14))
+        trend_thr = float(getattr(config, "REGIME_ADX_TREND_THRESHOLD", 25.0))
+        range_thr = float(getattr(config, "REGIME_ADX_RANGE_THRESHOLD", 20.0))
+        squeeze_thr = float(getattr(config, "REGIME_BBW_SQUEEZE_PERCENT", 4.0))
+
+        adx = TechnicalAnalysis.calculate_adx(highs, lows, closes, period=adx_period)
+        bbw = TechnicalAnalysis.calculate_bb_width_percent(closes)
+
+        if adx <= 0:
+            return {
+                "regime": "neutral",
+                "adx": adx,
+                "bbw_percent": bbw,
+                "reason": "ADX indeterminado (dados insuficientes)",
+            }
+
+        if adx >= trend_thr:
+            return {
+                "regime": "trend",
+                "adx": adx,
+                "bbw_percent": bbw,
+                "reason": f"ADX={adx:.1f} ≥ {trend_thr:.0f} (tendência forte)",
+            }
+
+        if adx <= range_thr:
+            if bbw <= squeeze_thr:
+                return {
+                    "regime": "squeeze",
+                    "adx": adx,
+                    "bbw_percent": bbw,
+                    "reason": (
+                        f"ADX={adx:.1f} ≤ {range_thr:.0f} mas BBW={bbw:.2f}% "
+                        f"≤ {squeeze_thr:.1f}% (squeeze — bloqueia range)"
+                    ),
+                }
+            return {
+                "regime": "range",
+                "adx": adx,
+                "bbw_percent": bbw,
+                "reason": (
+                    f"ADX={adx:.1f} ≤ {range_thr:.0f} e BBW={bbw:.2f}% (lateral saudável)"
+                ),
+            }
+
+        return {
+            "regime": "neutral",
+            "adx": adx,
+            "bbw_percent": bbw,
+            "reason": f"ADX={adx:.1f} entre {range_thr:.0f} e {trend_thr:.0f} (zona ambígua)",
+        }
+
+    @staticmethod
     def compute_atr_based_trailing(
         entry_price: float,
         atr: float,

@@ -34,7 +34,7 @@ from ..ai.consultive_engine import ConsultiveEngine
 from ..execution import ExecutionEngine
 from ..infra.binance_client import BinanceConnection
 from ..observability import metrics
-from .strategy import HedgeStrategy, RangeScalpingStrategy, RiskManager
+from .strategy import HedgeStrategy, RangeScalpingStrategy, RiskManager, TechnicalAnalysis
 from ..services.kill_switch import KillSwitchMonitor
 from ..services.notifications import TelegramNotifier
 from ..services.pair_selector import PairSelector
@@ -233,6 +233,13 @@ class TradingBot:
         self._instance_lock_handle = None
         self._strategy_engines: Dict[str, Any] = {}
         self.strategy_profiles: List[Dict[str, Any]] = []
+        # Regime classifier — observações por símbolo (janela rolante de
+        # HYSTERESIS_TICKS) e regime atualmente comprometido (após hysteresis).
+        self._regime_observations: Dict[str, List[str]] = {}
+        self._regime_committed: Dict[str, str] = {}
+        # Engines reutilizáveis quando o classifier sobrepõe a estratégia
+        # estática do profile (lazy-init em _get_or_create_regime_engine).
+        self._regime_engine_cache: Dict[str, Any] = {}
         self._runtime_stats_lock = threading.Lock()
         self._runtime_stats_since_report = self._new_runtime_stats()
         self._positions_lock = threading.Lock()
@@ -1440,42 +1447,147 @@ class TradingBot:
             tasks.append({"symbol": symbol, "strategy_name": "primary"})
         return tasks
 
-    def _resolve_strategy_context(self, symbol: str, strategy_name: str | None = None) -> Dict[str, Any]:
-        """Resolve engine + parâmetros do perfil para um símbolo."""
+    def _get_or_create_regime_engine(self, strategy_type: str):
+        """Engine reutilizável usado quando o classifier sobrepõe a estratégia."""
+        normalized = self._normalize_strategy_type(strategy_type)
+        cached = self._regime_engine_cache.get(normalized)
+        if cached is not None:
+            return cached
+        if normalized == "range_scalping":
+            engine = RangeScalpingStrategy()
+        else:
+            engine = HedgeStrategy()
+        self._regime_engine_cache[normalized] = engine
+        return engine
+
+    def _classify_symbol_regime(self, klines: List[Dict]) -> Dict[str, Any]:
+        """Wrapper sobre TechnicalAnalysis.classify_regime usando klines do tick."""
+        try:
+            highs = [float(k["high"]) for k in klines]
+            lows = [float(k["low"]) for k in klines]
+            closes = [float(k["close"]) for k in klines]
+        except (KeyError, TypeError, ValueError):
+            return {"regime": "neutral", "adx": 0.0, "bbw_percent": 0.0, "reason": "klines inválidos"}
+        return TechnicalAnalysis.classify_regime(highs, lows, closes)
+
+    def _update_regime_history(self, symbol: str, observation: str) -> Optional[str]:
+        """
+        Adiciona uma observação à janela rolante do símbolo e tenta comitar.
+
+        Hysteresis: precisa de N observações IGUAIS consecutivas (N =
+        REGIME_HYSTERESIS_TICKS) para trocar o regime comitado. Observações
+        "neutral" não substituem o regime atual — ficam fora da contagem
+        (mantêm o status quo até um sinal claro aparecer).
+
+        Retorna o regime comitado APÓS esta observação (pode ser igual ao
+        anterior se hysteresis ainda não bateu).
+        """
+        if observation not in ("trend", "range", "squeeze", "neutral"):
+            observation = "neutral"
+
+        window_size = max(1, int(getattr(config, "REGIME_HYSTERESIS_TICKS", 3)))
+        current = self._regime_committed.get(symbol)
+
+        # "neutral" não vota: limpa a janela mas mantém o regime comitado.
+        if observation == "neutral":
+            self._regime_observations[symbol] = []
+            return current
+
+        history = self._regime_observations.setdefault(symbol, [])
+        history.append(observation)
+        if len(history) > window_size:
+            del history[: len(history) - window_size]
+
+        if len(history) >= window_size and all(h == observation for h in history):
+            if current != observation:
+                logger.info(
+                    f"🌀 Regime de {symbol}: {current or '∅'} → {observation} "
+                    f"(hysteresis {window_size} ticks)"
+                )
+            self._regime_committed[symbol] = observation
+            return observation
+
+        return current
+
+    def _strategy_type_for_regime(self, regime: Optional[str]) -> Optional[str]:
+        """Mapeia o regime comitado para o strategy_type. None = sem override."""
+        if regime == "trend":
+            return "trend_signal"
+        if regime == "range":
+            return "range_scalping"
+        # "squeeze" e "neutral": não força override (squeeze é tratado abaixo
+        # bloqueando entradas de range; deixa a estratégia estática rodar
+        # mas tipicamente sem entrar).
+        return None
+
+    def _resolve_strategy_context(
+        self,
+        symbol: str,
+        strategy_name: str | None = None,
+        regime_override: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Resolve engine + parâmetros do perfil para um símbolo.
+
+        `regime_override`, quando passado, sobrescreve o `strategy_type` do
+        profile e troca o engine pelo correspondente (cache em
+        `_regime_engine_cache`). Outros campos do profile (entry_mode,
+        risk_profile, pairs) são preservados.
+        """
         profiles = list(getattr(self, "strategy_profiles", []) or [])
         if not profiles:
             fallback_strategy = getattr(self, "strategy", None)
             if fallback_strategy is not None:
-                return {
+                base = {
                     "name": str(strategy_name or "primary"),
                     "strategy_type": "trend_signal",
                     "entry_mode": "strong_only",
                     "pairs": [str(symbol).upper()],
                     "strategy": fallback_strategy,
                 }
+                return self._apply_regime_override(base, regime_override)
             self._reload_strategy_profiles(reason="analysis-resolve")
             profiles = list(getattr(self, "strategy_profiles", []) or [])
 
         if strategy_name:
             for profile in profiles:
                 if str(profile.get("name")) == str(strategy_name):
-                    return profile
+                    return self._apply_regime_override(profile, regime_override)
 
         normalized_symbol = str(symbol).upper()
         for profile in profiles:
             if normalized_symbol in set(profile.get("pairs", [])):
-                return profile
+                return self._apply_regime_override(profile, regime_override)
 
         fallback_strategy = getattr(self, "strategy", None) or HedgeStrategy()
         if not hasattr(self, "strategy"):
             self.strategy = fallback_strategy
-        return {
+        base = {
             "name": str(strategy_name or "primary"),
             "strategy_type": "trend_signal",
             "entry_mode": "strong_only",
             "pairs": [normalized_symbol],
             "strategy": fallback_strategy,
         }
+        return self._apply_regime_override(base, regime_override)
+
+    def _apply_regime_override(
+        self, profile: Dict[str, Any], regime_override: Optional[str]
+    ) -> Dict[str, Any]:
+        """Sobrescreve strategy_type + engine no profile quando regime_override é dado."""
+        if not regime_override:
+            return profile
+        target_strategy_type = self._strategy_type_for_regime(regime_override)
+        if not target_strategy_type:
+            return profile
+        current_type = self._normalize_strategy_type(profile.get("strategy_type", "trend_signal"))
+        if current_type == target_strategy_type:
+            return profile
+        engine = self._get_or_create_regime_engine(target_strategy_type)
+        overridden = dict(profile)
+        overridden["strategy_type"] = target_strategy_type
+        overridden["strategy"] = engine
+        overridden["regime_override_applied"] = regime_override
+        return overridden
 
     def _refresh_binance_coin_universe(self, trigger_reason: str = "runtime") -> list:
         """
@@ -2932,7 +3044,16 @@ class TradingBot:
         except Exception:
             pass
 
-        strategy_context = self._resolve_strategy_context(symbol=symbol, strategy_name=strategy_name)
+        # Override de estratégia pelo regime classifier (committed após hysteresis).
+        # Em tickz iniciais o committed é None — usa o profile estático.
+        regime_committed = (
+            self._regime_committed.get(str(symbol).upper())
+            if getattr(config, "REGIME_CLASSIFIER_ENABLED", False)
+            else None
+        )
+        strategy_context = self._resolve_strategy_context(
+            symbol=symbol, strategy_name=strategy_name, regime_override=regime_committed,
+        )
         strategy_engine = strategy_context.get("strategy", getattr(self, "strategy", None) or HedgeStrategy())
         strategy_label = str(strategy_context.get("name", "primary"))
         strategy_type = self._normalize_strategy_type(strategy_context.get("strategy_type", "trend_signal"))
@@ -2979,7 +3100,25 @@ class TradingBot:
         if is_trend_strong and confirmation_timeframe and not confirmation_klines:
             logger.warning(f"⚠️  Sem dados de confirmação ({confirmation_timeframe}) para {symbol}")
             return False
-        
+
+        # Regime classifier — alimenta observação do tick na janela de hysteresis.
+        # O override (se houver) é aplicado no PRÓXIMO tick — neste, já estamos
+        # rodando a estratégia comitada anteriormente (ou a estática se não há
+        # commit). Squeeze bloqueia entradas de range scalping no tick atual.
+        if getattr(config, "REGIME_CLASSIFIER_ENABLED", False):
+            regime_info = self._classify_symbol_regime(klines)
+            new_commit = self._update_regime_history(symbol, regime_info["regime"])
+            logger.info(
+                f"   🌀 Regime {symbol}: obs={regime_info['regime']} "
+                f"(ADX={regime_info['adx']:.1f}, BBW={regime_info['bbw_percent']:.2f}%) "
+                f"committed={new_commit or '∅'}"
+            )
+            if regime_info["regime"] == "squeeze" and strategy_type == "range_scalping":
+                logger.info(
+                    f"⏸️  {symbol}: squeeze detectado — pulando entrada range_scalping"
+                )
+                return False
+
         # Verifica saldo DISPONÍVEL para novos trades
         available_balance = self.exchange.get_available_balance()
         logger.info(f"💰 Saldo disponível: ${available_balance:.2f}")

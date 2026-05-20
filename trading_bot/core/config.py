@@ -481,6 +481,24 @@ class TradingConfig:
     TRAILING_DISTANCE_MIN_PERCENT: float = _env_float("TRADING_BOT_TRAILING_DISTANCE_MIN_PERCENT", 0.20)
     TRAILING_DISTANCE_MAX_PERCENT: float = _env_float("TRADING_BOT_TRAILING_DISTANCE_MAX_PERCENT", 1.50)
 
+    # --- Regime Classifier (ADX + Bollinger Band Width) ---
+    # Quando habilitado, a cada tick o bot classifica o regime de cada par
+    # via ADX(14) e BBW(20,2) e dinamicamente escolhe entre trend_signal
+    # (HedgeStrategy) e range_scalping (RangeScalpingStrategy). Decisão exige
+    # `HYSTERESIS_TICKS` ticks consecutivos do mesmo regime pra trocar a
+    # estratégia em vigor, evitando flip-flop em zona neutra.
+    #   ADX > TREND_THRESHOLD → "trend" (forte tendência)
+    #   ADX < RANGE_THRESHOLD → "range" (mercado lateral)
+    #   Entre os dois → "neutral" (mantém regime anterior, não conta pra hysteresis)
+    # BBW abaixo de SQUEEZE_PERCENT bloqueia novas entradas de range mesmo
+    # quando ADX está baixo, porque squeeze prevê rompimento violento.
+    REGIME_CLASSIFIER_ENABLED: bool = _env_bool("TRADING_BOT_REGIME_CLASSIFIER_ENABLED", True)
+    REGIME_ADX_PERIOD: int = _env_int("TRADING_BOT_REGIME_ADX_PERIOD", 14)
+    REGIME_ADX_TREND_THRESHOLD: float = _env_float("TRADING_BOT_REGIME_ADX_TREND_THRESHOLD", 25.0)
+    REGIME_ADX_RANGE_THRESHOLD: float = _env_float("TRADING_BOT_REGIME_ADX_RANGE_THRESHOLD", 20.0)
+    REGIME_BBW_SQUEEZE_PERCENT: float = _env_float("TRADING_BOT_REGIME_BBW_SQUEEZE_PERCENT", 4.0)
+    REGIME_HYSTERESIS_TICKS: int = _env_int("TRADING_BOT_REGIME_HYSTERESIS_TICKS", 3)
+
     # ============================================
     # FUNDING RATE (Taxa de financiamento)
     # ============================================
