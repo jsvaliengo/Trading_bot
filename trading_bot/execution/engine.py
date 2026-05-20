@@ -647,77 +647,27 @@ class ExecutionEngine:
         logger.info(f"   Quantidade: {quantity:.6f} | Nocional: ${notional_value:.2f}")
         logger.info(f"   Variação: {price_change_pct*100:.2f}% | P&L Bruto: ${pnl_gross:.4f}")
 
-        # ============================================
-        # ATUALIZA CONTADORES (no bot — stats são do bot)
-        # ============================================
-        bot.closed_trades_count += 1
-        bot.daily_realized_pnl += pnl_net
-        bot.total_pnl += pnl_net
+        # Risk manager continua direto — é lógica de risco, não bookkeeping.
         bot.risk_manager.update_pnl(pnl_net)
 
-        if pnl_net > 0:
-            bot.trades_win_count += 1
-            bot.trades_win_total += pnl_net
-        else:
-            bot.trades_loss_count += 1
-            bot.trades_loss_total += pnl_net  # Será negativo
-
-        bot.total_fees_paid += total_fees
-
-        if symbol not in bot.trades_by_symbol:
-            bot.trades_by_symbol[symbol] = {
-                'wins': 0, 'losses': 0, 'win_value': 0.0, 'loss_value': 0.0, 'fees': 0.0,
-            }
-
-        if pnl_net > 0:
-            bot.trades_by_symbol[symbol]['wins'] += 1
-            bot.trades_by_symbol[symbol]['win_value'] += pnl_net
-        else:
-            bot.trades_by_symbol[symbol]['losses'] += 1
-            bot.trades_by_symbol[symbol]['loss_value'] += pnl_net
-        bot.trades_by_symbol[symbol]['fees'] = (
-            bot.trades_by_symbol[symbol].get('fees', 0.0) + total_fees
-        )
-
-        if strategy_name not in bot.trades_by_strategy:
-            bot.trades_by_strategy[strategy_name] = {
-                'wins': 0, 'losses': 0, 'win_value': 0.0, 'loss_value': 0.0, 'fees': 0.0,
-            }
-        if pnl_net > 0:
-            bot.trades_by_strategy[strategy_name]['wins'] += 1
-            bot.trades_by_strategy[strategy_name]['win_value'] += pnl_net
-        else:
-            bot.trades_by_strategy[strategy_name]['losses'] += 1
-            bot.trades_by_strategy[strategy_name]['loss_value'] += pnl_net
-        bot.trades_by_strategy[strategy_name]['fees'] = (
-            bot.trades_by_strategy[strategy_name].get('fees', 0.0) + total_fees
-        )
-
-        metrics.record_trade_closed(
+        # Bookkeeping de stats encapsulado em TradeLedger (counters, dicts
+        # por símbolo/estratégia, métrica Prometheus). Retorna resumo pra log.
+        ledger_summary = bot.ledger.record_trade_closed(
             symbol=symbol,
-            strategy=strategy_name,
-            result="win" if pnl_net > 0 else "loss",
-            pnl_usd=pnl_net,
-            fees_usd=total_fees,
+            strategy_name=strategy_name,
+            pnl_net=pnl_net,
+            total_fees=total_fees,
             close_reason=reason,
         )
 
-        if symbol in bot.pnl_by_symbol:
-            bot.pnl_by_symbol[symbol] += pnl_net
-        else:
-            bot.pnl_by_symbol[symbol] = pnl_net
-
-        win_rate = (
-            (bot.trades_win_count / bot.closed_trades_count * 100)
-            if bot.closed_trades_count > 0 else 0
-        )
         logger.info(
             f"💰 P&L Bruto: ${pnl_gross:.4f} | Taxas: ${total_fees:.4f} | "
             f"P&L Líquido: ${pnl_net:.4f}"
         )
         logger.info(
-            f"📊 Trade #{bot.closed_trades_count} | Win Rate: {win_rate:.1f}% | "
-            f"P&L Diário: ${bot.daily_realized_pnl:.2f}"
+            f"📊 Trade #{ledger_summary['closed_trades_count']} | "
+            f"Win Rate: {ledger_summary['win_rate']:.1f}% | "
+            f"P&L Diário: ${ledger_summary['daily_pnl']:.2f}"
         )
 
         telegram_sent = bot.telegram.send_position_closed(

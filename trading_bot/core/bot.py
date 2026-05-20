@@ -30,6 +30,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from .config import config
 from .scheduler import LoopScheduler, get_loop_timing_profile, timing_profile_changed
 from .state_manager import StateManager
+from .trade_ledger import TradeLedger
 from ..ai.consultive_engine import ConsultiveEngine
 from ..execution import ExecutionEngine
 from ..infra.binance_client import BinanceConnection
@@ -251,6 +252,9 @@ class TradingBot:
         # Engine de execução (close/emergência). Recebe self — mantém
         # acoplamento de dados pra simplicidade; separação CÓDIGO, não DADOS.
         self.execution_engine = ExecutionEngine(self)
+        # Ledger de bookkeeping pós-trade — encapsula as mutações de
+        # stats/contadores que antes ficavam espalhadas no engine.
+        self.ledger = TradeLedger(self)
         # Dashboard web (opt-in via DASHBOARD_ENABLED). Lazy import pra não
         # forçar Flask como dependência obrigatória em ambientes minimalistas.
         self.dashboard_server = None
