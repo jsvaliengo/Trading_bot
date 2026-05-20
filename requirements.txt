@@ -19,5 +19,12 @@ requests>=2.28.0
 # Métricas Prometheus (exporter HTTP embutido)
 prometheus-client>=0.20.0
 
+# Dashboard web (Flask thread dentro do processo do bot)
+Flask>=3.0.0
+Flask-SocketIO>=5.3.0
+# Backend WebSocket do SocketIO — escolhido por compatibilidade com threading
+# nativo. Evita eventlet/gevent (monkey-patch stdlib, conflita com python-binance).
+simple-websocket>=1.0.0
+
 # Para testes (opcional)
 pytest>=7.0.0

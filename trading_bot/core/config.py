@@ -91,6 +91,13 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
+def _env_str(name: str, default: str) -> str:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip()
+
+
 @dataclass
 class TradingConfig:
     """
@@ -498,6 +505,22 @@ class TradingConfig:
     REGIME_ADX_RANGE_THRESHOLD: float = _env_float("TRADING_BOT_REGIME_ADX_RANGE_THRESHOLD", 20.0)
     REGIME_BBW_SQUEEZE_PERCENT: float = _env_float("TRADING_BOT_REGIME_BBW_SQUEEZE_PERCENT", 4.0)
     REGIME_HYSTERESIS_TICKS: int = _env_int("TRADING_BOT_REGIME_HYSTERESIS_TICKS", 3)
+
+    # --- Dashboard Web (Flask thread no processo do bot) ---
+    # Por segurança o dashboard é OPT-IN (default False) — para ligar, defina
+    # DASHBOARD_ENABLED=True E configure DASHBOARD_USERNAME + DASHBOARD_PASSWORD
+    # (sem usuário/senha o app recusa subir). Por default escuta SÓ em 127.0.0.1
+    # — para acessar de fora da OCI use túnel SSH ('ssh -L 5050:localhost:5050 oci-bot').
+    DASHBOARD_ENABLED: bool = _env_bool("TRADING_BOT_DASHBOARD_ENABLED", False)
+    DASHBOARD_HOST: str = _env_str("TRADING_BOT_DASHBOARD_HOST", "127.0.0.1")
+    DASHBOARD_PORT: int = _env_int("TRADING_BOT_DASHBOARD_PORT", 5050)
+    DASHBOARD_USERNAME: str = _env_str("TRADING_BOT_DASHBOARD_USERNAME", "")
+    DASHBOARD_PASSWORD: str = _env_str("TRADING_BOT_DASHBOARD_PASSWORD", "")
+    # Chave secreta para sessões/SocketIO. Auto-gerada na inicialização se vazia
+    # (cada restart invalida sessões — para sessões persistentes, defina via env).
+    DASHBOARD_SECRET_KEY: str = _env_str("TRADING_BOT_DASHBOARD_SECRET_KEY", "")
+    # Intervalo (segundos) do polling fallback no client quando WebSocket cai.
+    DASHBOARD_POLL_INTERVAL_SECONDS: int = _env_int("TRADING_BOT_DASHBOARD_POLL_INTERVAL_SECONDS", 5)
 
     # ============================================
     # FUNDING RATE (Taxa de financiamento)

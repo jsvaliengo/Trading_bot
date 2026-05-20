@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trading Bot — {{ environment|upper }}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body data-environment="{{ environment }}" data-poll-interval="{{ poll_interval }}">
+
+    <div class="aurora-bg">
+        <div class="aurora aurora-1"></div>
+        <div class="aurora aurora-2"></div>
+        <div class="aurora aurora-3"></div>
+    </div>
+
+    <header class="topbar">
+        <div class="brand">
+            <span class="brand-mark">⟁</span>
+            <span class="brand-name">Trading Bot</span>
+            <span class="env-badge env-{{ environment }}">{{ environment|upper }}</span>
+        </div>
+        <div class="status-cluster">
+            <span class="status-pill" id="status-connection">conectando…</span>
+            <span class="status-pill" id="status-running">—</span>
+            <span class="status-pill" id="status-ai">AI: —</span>
+        </div>
+    </header>
+
+    <main class="dashboard">
+
+        <!-- KPIs -->
+        <section class="kpi-grid">
+            <article class="card kpi">
+                <span class="kpi-label">Saldo</span>
+                <span class="kpi-value" id="kpi-balance">—</span>
+                <span class="kpi-sub" id="kpi-initial">Inicial: —</span>
+            </article>
+            <article class="card kpi">
+                <span class="kpi-label">P&amp;L Total</span>
+                <span class="kpi-value" id="kpi-pnl-total">—</span>
+                <span class="kpi-sub" id="kpi-roi">ROI: —</span>
+            </article>
+            <article class="card kpi">
+                <span class="kpi-label">P&amp;L Hoje</span>
+                <span class="kpi-value" id="kpi-pnl-daily">—</span>
+                <span class="kpi-sub" id="kpi-closed-trades">Trades fechados: —</span>
+            </article>
+            <article class="card kpi">
+                <span class="kpi-label">Posições abertas</span>
+                <span class="kpi-value" id="kpi-positions-open">—</span>
+                <span class="kpi-sub" id="kpi-last-update">Atualizado: —</span>
+            </article>
+        </section>
+
+        <!-- Controles -->
+        <section class="card controls">
+            <h2>Controles</h2>
+            <div class="controls-row">
+                <button class="btn btn-warning" id="btn-pause" data-action="pause">⏸ Pausar</button>
+                <button class="btn btn-success" id="btn-resume" data-action="resume">▶ Retomar</button>
+                <button class="btn btn-danger" id="btn-close-all" data-action="close_all">🚨 Fechar Tudo</button>
+            </div>
+            <p class="controls-help">Pause/Retomar afetam o loop principal de análise. Fechar Tudo envia ordens
+            de mercado para todas as posições abertas — equivalente ao /closeall do Telegram.</p>
+        </section>
+
+        <!-- Gráfico de Equity -->
+        <section class="card chart-card">
+            <header class="card-head">
+                <h2>Equity</h2>
+                <span class="card-sub" id="chart-range">—</span>
+            </header>
+            <div id="equity-chart" class="chart-canvas"></div>
+        </section>
+
+        <!-- Posições abertas -->
+        <section class="card">
+            <header class="card-head">
+                <h2>Posições abertas</h2>
+                <span class="card-sub" id="positions-count">0</span>
+            </header>
+            <div class="table-scroll">
+                <table class="table" id="positions-table">
+                    <thead>
+                        <tr>
+                            <th>Par</th>
+                            <th>Lado</th>
+                            <th>Entrada</th>
+                            <th>Qtd</th>
+                            <th>Estratégia</th>
+                            <th>SL</th>
+                            <th>TP</th>
+                            <th>Trailing</th>
+                        </tr>
+                    </thead>
+                    <tbody><tr><td colspan="8" class="empty">Sem posições.</td></tr></tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- Regime classifier -->
+        <section class="card">
+            <header class="card-head">
+                <h2>Regime Classifier</h2>
+                <span class="card-sub" id="regime-status">—</span>
+            </header>
+            <div class="table-scroll">
+                <table class="table" id="regime-table">
+                    <thead>
+                        <tr>
+                            <th>Par</th>
+                            <th>Regime comitado</th>
+                            <th>Janela (hysteresis)</th>
+                        </tr>
+                    </thead>
+                    <tbody><tr><td colspan="3" class="empty">Sem dados ainda.</td></tr></tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- Últimos trades -->
+        <section class="card">
+            <header class="card-head">
+                <h2>Trades recentes</h2>
+                <span class="card-sub" id="trades-count">0</span>
+            </header>
+            <div class="table-scroll">
+                <table class="table" id="trades-table">
+                    <thead>
+                        <tr>
+                            <th>Horário</th>
+                            <th>Par</th>
+                            <th>Lado</th>
+                            <th>Entrada</th>
+                            <th>Saída</th>
+                            <th>P&amp;L líquido</th>
+                            <th>Motivo</th>
+                        </tr>
+                    </thead>
+                    <tbody><tr><td colspan="7" class="empty">Sem trades fechados ainda.</td></tr></tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+
+    <footer class="footer">
+        <span>Dashboard servido in-process</span>
+        <span class="dot">·</span>
+        <span>WebSocket: <code id="footer-transport">—</code></span>
+    </footer>
+
+    <!-- Confirmação modal -->
+    <div class="modal" id="confirm-modal" aria-hidden="true">
+        <div class="modal-card">
+            <h3 id="confirm-title">Confirmar ação</h3>
+            <p id="confirm-message">Tem certeza?</p>
+            <div class="modal-actions">
+                <button class="btn" id="confirm-cancel">Cancelar</button>
+                <button class="btn btn-danger" id="confirm-ok">Confirmar</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- TradingView Lightweight Charts -->
+    <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+    <!-- Socket.IO client -->
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html>

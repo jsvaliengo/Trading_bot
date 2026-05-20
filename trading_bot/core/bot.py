@@ -251,6 +251,9 @@ class TradingBot:
         # Engine de execução (close/emergência). Recebe self — mantém
         # acoplamento de dados pra simplicidade; separação CÓDIGO, não DADOS.
         self.execution_engine = ExecutionEngine(self)
+        # Dashboard web (opt-in via DASHBOARD_ENABLED). Lazy import pra não
+        # forçar Flask como dependência obrigatória em ambientes minimalistas.
+        self.dashboard_server = None
 
     def _acquire_instance_lock(self) -> bool:
         """
@@ -4728,6 +4731,16 @@ class TradingBot:
         
         self.running = True
         analysis_cycle = 0  # contador exibido no log ao iniciar cada ciclo de análise
+
+        # Sobe o dashboard web (no-op se DASHBOARD_ENABLED=False ou credenciais
+        # ausentes). Falha aqui não bloqueia o bot — apenas loga e segue.
+        try:
+            if getattr(config, "DASHBOARD_ENABLED", False):
+                from ..web import DashboardServer
+                self.dashboard_server = DashboardServer(self)
+                self.dashboard_server.start()
+        except Exception:
+            logger.exception("📊 Falha ao iniciar dashboard — bot segue sem ele")
 
         # Configuração inicial dos dois ciclos (com ajuste dinâmico por faixa)
         timing_profile = get_loop_timing_profile(config, len(config.TRADING_PAIRS))
