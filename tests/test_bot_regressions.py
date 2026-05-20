@@ -432,7 +432,10 @@ def test_execute_signal_trade_notifies_when_gated_ai_trade_is_blocked_by_exposur
     )
     bot.telegram = SimpleNamespace(send_trade_alert=send_trade_alert, send_message=MagicMock(return_value=True))
     bot._get_total_open_notional_percent = lambda: 450.0
-    bot._notify_ai_approved_trade_block = notify_block
+    # Engine agora chama bot.block_reporter.notify_blocked direto. O método
+    # antigo bot._notify_ai_approved_trade_block ainda existe como delegate
+    # mas mockar ele não é mais o ponto certo de interceptação.
+    bot.block_reporter.notify_blocked = notify_block
 
     monkeypatch.setattr(config, "CHECK_FUNDING_RATE", False)
     monkeypatch.setattr(config, "USE_BINANCE_STRATEGY", False)

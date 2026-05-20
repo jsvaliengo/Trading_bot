@@ -79,7 +79,7 @@ class ExecutionEngine:
                 f"⏳ {symbol} em cooldown estrutural — entrada {requested_side} cancelada "
                 f"(code={cooldown_info['code']}, {remaining_min}min restantes)"
             )
-            bot._notify_ai_approved_trade_block(
+            bot.block_reporter.notify_blocked(
                 symbol=symbol,
                 side=requested_side,
                 strategy_name=strategy_name,
@@ -137,7 +137,7 @@ class ExecutionEngine:
             price = bot.exchange.get_symbol_price(symbol)
             if price <= 0:
                 logger.error(f"❌ Preço inválido para {symbol}: {price} — abortando abertura")
-                bot._notify_ai_approved_trade_block(
+                bot.block_reporter.notify_blocked(
                     symbol=symbol,
                     side=requested_side,
                     strategy_name=strategy_name,
@@ -200,7 +200,7 @@ class ExecutionEngine:
                         logger.info(
                             f"⏱️ Sinal expirado para {symbol}: {_signal_age:.0f}s > {_max_age:.0f}s — pulando"
                         )
-                        bot._notify_ai_approved_trade_block(
+                        bot.block_reporter.notify_blocked(
                             symbol=symbol,
                             side=requested_side,
                             strategy_name=strategy_name,
@@ -219,7 +219,7 @@ class ExecutionEngine:
                 logger.warning(
                     f"⚠️ Exposição total {_notional_pct:.1f}% excede limite {_max_notional:.0f}%"
                 )
-                bot._notify_ai_approved_trade_block(
+                bot.block_reporter.notify_blocked(
                     symbol=symbol,
                     side=requested_side,
                     strategy_name=strategy_name,
@@ -242,7 +242,7 @@ class ExecutionEngine:
                             f"⚠️ {symbol}: Margem da posição {_conc_pct:.1f}% do saldo "
                             f"excede limite {_max_conc:.0f}%"
                         )
-                        bot._notify_ai_approved_trade_block(
+                        bot.block_reporter.notify_blocked(
                             symbol=symbol,
                             side=requested_side,
                             strategy_name=strategy_name,
@@ -266,7 +266,7 @@ class ExecutionEngine:
                         f"   Mínimo: ${min_notional:.2f}, Notional: ${effective_notional:.2f} "
                         f"(Order Size: ${order_size:.2f} x {leverage:g}x)"
                     )
-                    bot._notify_ai_approved_trade_block(
+                    bot.block_reporter.notify_blocked(
                         symbol=symbol,
                         side="LONG",
                         strategy_name=strategy_name,
@@ -300,7 +300,7 @@ class ExecutionEngine:
                     else:
                         block_reason = "Falha ao abrir posição LONG"
                         block_detail = "A exchange rejeitou ou não retornou a ordem de mercado."
-                    bot._notify_ai_approved_trade_block(
+                    bot.block_reporter.notify_blocked(
                         symbol=symbol,
                         side="LONG",
                         strategy_name=strategy_name,
@@ -421,7 +421,7 @@ class ExecutionEngine:
                         f"   Mínimo: ${min_notional:.2f}, Notional: ${effective_notional:.2f} "
                         f"(Order Size: ${order_size:.2f} x {leverage:g}x)"
                     )
-                    bot._notify_ai_approved_trade_block(
+                    bot.block_reporter.notify_blocked(
                         symbol=symbol,
                         side="SHORT",
                         strategy_name=strategy_name,
@@ -455,7 +455,7 @@ class ExecutionEngine:
                     else:
                         block_reason = "Falha ao abrir posição SHORT"
                         block_detail = "A exchange rejeitou ou não retornou a ordem de mercado."
-                    bot._notify_ai_approved_trade_block(
+                    bot.block_reporter.notify_blocked(
                         symbol=symbol,
                         side="SHORT",
                         strategy_name=strategy_name,
@@ -568,7 +568,7 @@ class ExecutionEngine:
 
         except Exception as e:
             logger.error(f"❌ Erro ao executar trade: {e}")
-            bot._notify_ai_approved_trade_block(
+            bot.block_reporter.notify_blocked(
                 symbol=symbol,
                 side=requested_side,
                 strategy_name=strategy_name,

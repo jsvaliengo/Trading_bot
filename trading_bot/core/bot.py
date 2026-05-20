@@ -30,6 +30,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from .config import config
 from .scheduler import LoopScheduler, get_loop_timing_profile, timing_profile_changed
 from .state_manager import StateManager
+from .trade_block_reporter import TradeBlockReporter
 from .trade_ledger import TradeLedger
 from ..ai.consultive_engine import ConsultiveEngine
 from ..execution import ExecutionEngine
@@ -255,6 +256,13 @@ class TradingBot:
         # Ledger de bookkeeping pós-trade — encapsula as mutações de
         # stats/contadores que antes ficavam espalhadas no engine.
         self.ledger = TradeLedger(self)
+        # Reporter de bloqueios de execução (IA aprovou mas barrou na ordem).
+        # Recebe um getter pro telegram porque self.telegram é setado depois,
+        # no setup_exchange.
+        self.block_reporter = TradeBlockReporter(
+            telegram_provider=lambda: getattr(self, "telegram", None),
+            config=config,
+        )
         # Dashboard web (opt-in via DASHBOARD_ENABLED). Lazy import pra não
         # forçar Flask como dependência obrigatória em ambientes minimalistas.
         self.dashboard_server = None
@@ -2995,45 +3003,20 @@ class TradingBot:
         detail: str = "",
         setup_metadata: Dict[str, Any] | None = None,
     ) -> bool:
-        """Notifica quando a IA aprovou o setup, mas a ordem foi barrada depois."""
-        telegram = getattr(self, "telegram", None)
-        if telegram is None:
-            return False
+        """Backward-compat: delegate ao TradeBlockReporter.
 
-        if str(getattr(config, "AI_CONSULTIVE_MODE", "off")).strip().lower() != "gated":
-            return False
-
-        ai_metadata = dict((setup_metadata or {}).get("ai_consultive", {}) or {})
-        if not bool(ai_metadata.get("approval")):
-            return False
-
-        now_monotonic = time.monotonic()
-        cache_key = f"{symbol}:{side}:{reason}"
-        last_sent = self._ai_execution_block_notifications.get(cache_key)
-        if last_sent is not None and (now_monotonic - float(last_sent)) < 180.0:
-            return False
-        self._ai_execution_block_notifications[cache_key] = now_monotonic
-
-        confidence = int(ai_metadata.get("confidence", 0) or 0)
-        decision = str(ai_metadata.get("decision", "ENTER_NOW") or "ENTER_NOW")
-        side_label = "Compra" if side == "LONG" else "Venda" if side == "SHORT" else side
-        strategy_label = str(strategy_name or "primary").replace("_", " ")
-        detail_line = f"\n📝 <b>Detalhe:</b> {html.escape(detail)}" if detail else ""
-
-        message = f"""
-⏸️ <b>ENTRADA CANCELADA</b> <i>({datetime.now(timezone(timedelta(hours=-3))).strftime("%H:%M:%S")})</i>
-━━━━━━━━━━━━━━━━━━━━━
-
-📍 <b>Par:</b> {html.escape(symbol.replace("USDT", ""))}/USDT
-🤖 <b>Estratégia:</b> {html.escape(strategy_label)}
-🧭 <b>Direção:</b> {html.escape(side_label)}
-🧠 <b>IA:</b> {html.escape(decision)} ({confidence}/100)
-⚠️ <b>Motivo do bloqueio:</b> {html.escape(reason)}{detail_line}
-
-<i>A IA aprovou o setup, mas a execução foi barrada pelos freios operacionais do bot.</i>
-━━━━━━━━━━━━━━━━━━━━━
-""".strip()
-        return bool(telegram.send_message(message))
+        Mantido pra não quebrar fixtures de teste que monkeypatcham este
+        método. Novos call sites devem usar `self.block_reporter.notify_blocked`
+        direto.
+        """
+        return self.block_reporter.notify_blocked(
+            symbol=symbol,
+            side=side,
+            strategy_name=strategy_name,
+            reason=reason,
+            detail=detail,
+            setup_metadata=setup_metadata,
+        )
 
     def analyze_and_trade(self, symbol: str, strategy_name: str | None = None) -> bool:
         """
