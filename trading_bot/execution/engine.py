@@ -361,27 +361,19 @@ class ExecutionEngine:
                 }
                 bot.trade_history.append(trade_record)
 
-                # Adiciona ao rastreamento de posições conhecidas
-                position_key = f"{symbol}_LONG"
-                _now = datetime.now()
-                bot._set_known_position(
-                    position_key,
-                    {
-                        'symbol': symbol,
-                        'side': 'LONG',
-                        'entry_price': price,
-                        'quantity': long_qty,
-                        'entry_time': _now,
-                        'last_seen': _now,
-                        'strategy_name': str(strategy_name or "primary"),
-                        'strategy_type': strategy_type,
-                        'custom_stop_loss': custom_stop_loss,
-                        'custom_take_profit': custom_take_profit,
-                        'range_mid_price': range_mid_price,
-                        'range_entry_side': "LONG",
-                        'trailing_activation_pct': trailing_activation_pct,
-                        'trailing_distance_pct': trailing_distance_pct,
-                    },
+                position_key = bot.positions.open(
+                    symbol=symbol,
+                    side="LONG",
+                    entry_price=price,
+                    quantity=long_qty,
+                    strategy_name=strategy_name,
+                    strategy_type=strategy_type,
+                    custom_stop_loss=custom_stop_loss,
+                    custom_take_profit=custom_take_profit,
+                    range_mid_price=range_mid_price,
+                    range_entry_side="LONG",
+                    trailing_activation_pct=trailing_activation_pct,
+                    trailing_distance_pct=trailing_distance_pct,
                 )
 
                 logger.info("✅ LONG aberto com sucesso!")
@@ -519,27 +511,19 @@ class ExecutionEngine:
                 }
                 bot.trade_history.append(trade_record)
 
-                # Adiciona ao rastreamento de posições conhecidas
-                position_key = f"{symbol}_SHORT"
-                _now = datetime.now()
-                bot._set_known_position(
-                    position_key,
-                    {
-                        'symbol': symbol,
-                        'side': 'SHORT',
-                        'entry_price': price,
-                        'quantity': short_qty,
-                        'entry_time': _now,
-                        'last_seen': _now,
-                        'strategy_name': str(strategy_name or "primary"),
-                        'strategy_type': strategy_type,
-                        'custom_stop_loss': custom_stop_loss,
-                        'custom_take_profit': short_tp,
-                        'range_mid_price': range_mid_price,
-                        'range_entry_side': "SHORT",
-                        'trailing_activation_pct': trailing_activation_pct,
-                        'trailing_distance_pct': trailing_distance_pct,
-                    },
+                position_key = bot.positions.open(
+                    symbol=symbol,
+                    side="SHORT",
+                    entry_price=price,
+                    quantity=short_qty,
+                    strategy_name=strategy_name,
+                    strategy_type=strategy_type,
+                    custom_stop_loss=custom_stop_loss,
+                    custom_take_profit=short_tp,
+                    range_mid_price=range_mid_price,
+                    range_entry_side="SHORT",
+                    trailing_activation_pct=trailing_activation_pct,
+                    trailing_distance_pct=trailing_distance_pct,
                 )
 
                 logger.info("✅ SHORT aberto com sucesso!")
@@ -599,7 +583,7 @@ class ExecutionEngine:
         entry_price = pos['entry_price']
         quantity = pos['quantity']
         position_key = f"{symbol}_{side}"
-        pos_meta = bot._get_known_position(position_key)
+        pos_meta = bot.positions.get(position_key)
         strategy_name = pos_meta.get('strategy_name')
         if not strategy_name:
             profile = bot._resolve_strategy_context(symbol)
@@ -742,9 +726,7 @@ class ExecutionEngine:
                 logger.info(f"   Fechando {side} {symbol}...")
                 bot.exchange.close_position(symbol, side)
 
-                position_key = f"{symbol}_{side}"
-                bot._clear_trailing_data(position_key)
-                bot._remove_known_position(position_key)
+                bot.positions.close(f"{symbol}_{side}")
             except Exception as e:
                 logger.error(f"   ❌ Erro ao fechar {side} {symbol}: {e}")
 

@@ -29,6 +29,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .config import config
 from .scheduler import LoopScheduler, get_loop_timing_profile, timing_profile_changed
+from .position_tracker import PositionTracker
 from .state_manager import StateManager
 from .trade_block_reporter import TradeBlockReporter
 from .trade_ledger import TradeLedger
@@ -253,6 +254,10 @@ class TradingBot:
         # Engine de execução (close/emergência). Recebe self — mantém
         # acoplamento de dados pra simplicidade; separação CÓDIGO, não DADOS.
         self.execution_engine = ExecutionEngine(self)
+        # Tracker de posições — encapsula os 3 dicts correlacionados
+        # (known_positions, peak_prices, trailing_activated) atrás de uma
+        # API uniforme. Storage continua nos atributos do bot.
+        self.positions = PositionTracker(self)
         # Ledger de bookkeeping pós-trade — encapsula as mutações de
         # stats/contadores que antes ficavam espalhadas no engine.
         self.ledger = TradeLedger(self)
@@ -970,19 +975,16 @@ class TradingBot:
         return normalized
 
     def _set_known_position(self, position_key: str, payload: Dict[str, Any]):
-        """Atualiza o registro de uma posição rastreada com proteção de lock."""
-        with self._positions_lock:
-            self.known_positions[position_key] = dict(payload)
+        """Backward-compat: delegate ao PositionTracker."""
+        self.positions.set(position_key, payload)
 
     def _remove_known_position(self, position_key: str):
-        """Remove posição rastreada com proteção de lock."""
-        with self._positions_lock:
-            self.known_positions.pop(position_key, None)
+        """Backward-compat: delegate ao PositionTracker."""
+        self.positions.remove(position_key)
 
     def _get_known_position(self, position_key: str) -> Dict[str, Any]:
-        """Retorna cópia defensiva dos metadados de posição."""
-        with self._positions_lock:
-            return dict(self.known_positions.get(position_key, {}) or {})
+        """Backward-compat: delegate ao PositionTracker."""
+        return self.positions.get(position_key)
 
     def _double_first_scope(self) -> str:
         scope = str(getattr(config, "DOUBLE_FIRST_SCOPE", "global") or "global").strip().lower()
@@ -3406,8 +3408,7 @@ class TradingBot:
             # Busca o P&L real da Binance
             self._process_binance_closed_position(pos_info)
 
-            self._remove_known_position(position_key)
-            self._clear_trailing_data(position_key)
+            self.positions.close(position_key)
         
         if not positions:
             return
@@ -3477,8 +3478,7 @@ class TradingBot:
                     f"Take Profit custom ({float(custom_take_profit):.4f})"
                 )
                 if closed:
-                    self._clear_trailing_data(position_key)
-                    self._remove_known_position(position_key)
+                    self.positions.close(position_key)
                 else:
                     logger.warning(
                         f"⚠️ Fechamento não confirmado para {position_key} em TP custom. "
@@ -3499,8 +3499,7 @@ class TradingBot:
                     f"Stop Loss custom ({float(custom_stop_loss):.4f})"
                 )
                 if closed:
-                    self._clear_trailing_data(position_key)
-                    self._remove_known_position(position_key)
+                    self.positions.close(position_key)
                 else:
                     logger.warning(
                         f"⚠️ Fechamento não confirmado para {position_key} em SL custom. "
@@ -3519,8 +3518,7 @@ class TradingBot:
                     "Saída antecipada por possível breakout de range"
                 )
                 if closed:
-                    self._clear_trailing_data(position_key)
-                    self._remove_known_position(position_key)
+                    self.positions.close(position_key)
                 else:
                     logger.warning(
                         f"⚠️ Fechamento não confirmado para {position_key} em saída antecipada de range."
@@ -3536,8 +3534,7 @@ class TradingBot:
                     f"Take Profit ({config.TAKE_PROFIT_PERCENT}%)"
                 )
                 if closed:
-                    self._clear_trailing_data(position_key)
-                    self._remove_known_position(position_key)
+                    self.positions.close(position_key)
                 else:
                     logger.warning(
                         f"⚠️ Fechamento não confirmado para {position_key} em Take Profit. "
@@ -3560,8 +3557,7 @@ class TradingBot:
                     pos['current_price'] = current_price
                     closed = self._close_position_with_notification(pos, reason)
                     if closed:
-                        self._clear_trailing_data(position_key)
-                        self._remove_known_position(position_key)
+                        self.positions.close(position_key)
                     else:
                         logger.warning(
                             f"⚠️ Fechamento não confirmado para {position_key} via trailing. "
@@ -3578,8 +3574,7 @@ class TradingBot:
                         f"Stop Loss ({config.STOP_LOSS_PERCENT}%)"
                     )
                     if closed:
-                        self._clear_trailing_data(position_key)
-                        self._remove_known_position(position_key)
+                        self.positions.close(position_key)
                     else:
                         logger.warning(
                             f"⚠️ Fechamento não confirmado para {position_key} via stop loss. "
@@ -3866,13 +3861,8 @@ class TradingBot:
         return (False, "")
     
     def _clear_trailing_data(self, position_key: str):
-        """
-        Limpa os dados de trailing para uma posição fechada.
-        """
-        if position_key in self.peak_prices:
-            del self.peak_prices[position_key]
-        if position_key in self.trailing_activated:
-            del self.trailing_activated[position_key]
+        """Backward-compat: delegate ao PositionTracker."""
+        self.positions.clear_trailing(position_key)
     
     def _close_position_with_notification(self, pos: dict, reason: str) -> bool:
         """Delegador — lógica real em ExecutionEngine (preserva API interna)."""
