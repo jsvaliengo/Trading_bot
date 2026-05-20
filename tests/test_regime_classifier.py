@@ -251,6 +251,49 @@ def test_apply_regime_override_no_op_when_regime_is_none_or_neutral():
     assert bot._apply_regime_override(base, "neutral") is base
 
 
+def test_regime_change_emits_to_dashboard_server(monkeypatch):
+    """Quando hysteresis comita um regime NOVO, dashboard_server.emit_regime_changed é chamado."""
+    from unittest.mock import MagicMock
+
+    monkeypatch.setattr(config, "REGIME_HYSTERESIS_TICKS", 3)
+    bot = _make_bot()
+    bot.dashboard_server = MagicMock()
+
+    # 3 ticks consecutivos comitam o regime — emit deve disparar 1x
+    for _ in range(3):
+        bot._update_regime_history("BTCUSDT", "trend")
+    bot.dashboard_server.emit_regime_changed.assert_called_once()
+    payload = bot.dashboard_server.emit_regime_changed.call_args[0][0]
+    assert payload["symbol"] == "BTCUSDT"
+    assert payload["regime"] == "trend"
+    assert payload["previous"] is None
+
+    # Mais 3 ticks IGUAIS — não emite de novo (regime não mudou)
+    bot.dashboard_server.emit_regime_changed.reset_mock()
+    for _ in range(3):
+        bot._update_regime_history("BTCUSDT", "trend")
+    bot.dashboard_server.emit_regime_changed.assert_not_called()
+
+    # 3 ticks de range — emite mudança trend → range
+    for _ in range(3):
+        bot._update_regime_history("BTCUSDT", "range")
+    bot.dashboard_server.emit_regime_changed.assert_called_once()
+    payload = bot.dashboard_server.emit_regime_changed.call_args[0][0]
+    assert payload["regime"] == "range"
+    assert payload["previous"] == "trend"
+
+
+def test_regime_change_no_emit_when_dashboard_disabled(monkeypatch):
+    """Sem dashboard_server, hysteresis não falha — só atualiza estado."""
+    monkeypatch.setattr(config, "REGIME_HYSTERESIS_TICKS", 3)
+    bot = _make_bot()
+    bot.dashboard_server = None  # explicit
+
+    for _ in range(3):
+        bot._update_regime_history("BTCUSDT", "trend")
+    assert bot._regime_committed["BTCUSDT"] == "trend"  # estado atualizou
+
+
 def test_regime_engine_cache_reuses_instance():
     bot = _make_bot()
     e1 = bot._get_or_create_regime_engine("range_scalping")

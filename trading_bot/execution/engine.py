@@ -397,6 +397,16 @@ class ExecutionEngine:
                         f"TP: ${(custom_take_profit if custom_take_profit else setup.take_profit):.4f}"
                     )
 
+                if getattr(bot, "dashboard_server", None):
+                    bot.dashboard_server.emit_position_opened({
+                        "symbol": symbol,
+                        "side": "LONG",
+                        "entry_price": price,
+                        "quantity": long_qty,
+                        "strategy_name": str(strategy_name or "primary"),
+                        "strategy_type": strategy_type,
+                    })
+
                 return True
 
             # ============================================
@@ -541,6 +551,16 @@ class ExecutionEngine:
                     )
                 else:
                     logger.info(f"   Order Size: ${order_size} | TP: ${short_tp:.4f}")
+
+                if getattr(bot, "dashboard_server", None):
+                    bot.dashboard_server.emit_position_opened({
+                        "symbol": symbol,
+                        "side": "SHORT",
+                        "entry_price": price,
+                        "quantity": short_qty,
+                        "strategy_name": str(strategy_name or "primary"),
+                        "strategy_type": strategy_type,
+                    })
 
                 return True
 
@@ -721,6 +741,20 @@ class ExecutionEngine:
             logger.error(
                 f"❌ FALHA ao enviar notificação Telegram para trade #{bot.closed_trades_count}"
             )
+
+        if getattr(bot, "dashboard_server", None):
+            bot.dashboard_server.emit_position_closed({
+                "symbol": symbol,
+                "side": side,
+                "entry_price": entry_price,
+                "exit_price": current_price,
+                "quantity": quantity,
+                "pnl_gross": pnl_gross,
+                "pnl_net": pnl_net,
+                "fees": total_fees,
+                "reason": reason,
+                "strategy_name": strategy_name,
+            })
 
         return True
 

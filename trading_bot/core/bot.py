@@ -1507,6 +1507,12 @@ class TradingBot:
                     f"🌀 Regime de {symbol}: {current or '∅'} → {observation} "
                     f"(hysteresis {window_size} ticks)"
                 )
+                if getattr(self, "dashboard_server", None):
+                    self.dashboard_server.emit_regime_changed({
+                        "symbol": symbol,
+                        "regime": observation,
+                        "previous": current,
+                    })
             self._regime_committed[symbol] = observation
             return observation
 
@@ -4861,6 +4867,11 @@ class TradingBot:
                                 metrics.update_drawdown(
                                     (self.peak_equity - _current_bal) / self.peak_equity * 100
                                 )
+                            if getattr(self, "dashboard_server", None):
+                                self.dashboard_server.emit_balance_update({
+                                    "balance": _current_bal,
+                                    "peak_equity": self.peak_equity,
+                                })
                     except Exception:
                         pass
 
