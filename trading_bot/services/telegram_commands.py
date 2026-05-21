@@ -792,8 +792,23 @@ class TelegramCommandHandler:
         
         try:
             account_info = self.bot.exchange.get_account_info()
-            balance = account_info['wallet_balance']
+            wallet_balance = account_info['wallet_balance']
             unrealized = account_info['unrealized_pnl']
+
+            # Equity efetivo: em testnet com SIMULATED_BALANCE_USD ativo, o
+            # wallet vem cappado no SIMULATED_BALANCE — soma realized+unrealized
+            # do dia pra refletir o saldo real.
+            try:
+                daily_realized = float(
+                    self.bot.exchange.get_daily_pnl_from_binance().get('total', 0.0)
+                )
+            except Exception:
+                daily_realized = 0.0
+            sim_cap = float(getattr(self.config, "SIMULATED_BALANCE_USD", 0.0) or 0.0)
+            if getattr(self.config, "USE_TESTNET", False) and sim_cap > 0:
+                balance = sim_cap + daily_realized + unrealized
+            else:
+                balance = wallet_balance + unrealized
 
             if not self.bot.running:
                 status = "🔴 PARADO"
@@ -812,7 +827,11 @@ class TelegramCommandHandler:
                 logger.warning(f"⚠️ /status: API indisponível ao listar posições: {exc}")
                 positions = []
 
-            pnl_emoji = "🟢" if self.bot.total_pnl >= 0 else "🔴"
+            # P&L mostrado vem da Binance (fonte de verdade) pra bater com
+            # /portfolio e dashboard. self.bot.total_pnl seria o counter
+            # interno (estimativa de taxas, diverge ~$1 a cada 18 trades).
+            pnl_display = daily_realized
+            pnl_emoji = "🟢" if pnl_display >= 0 else "🔴"
             
             message = f"""
 📊 <b>STATUS DO BOT</b>
@@ -825,7 +844,7 @@ class TelegramCommandHandler:
    • Não Realizado: <code>{self._format_usd_brl(unrealized, 2, True)}</code>
 
 📈 <b>PERFORMANCE:</b>
-   • P&L Total Realizado: {pnl_emoji} <code>{self._format_usd_brl(self.bot.total_pnl, 2, True)}</code>
+   • P&L Total Realizado: {pnl_emoji} <code>{self._format_usd_brl(pnl_display, 2, True)}</code>
    • Trades: <code>{total_trades}</code>
    • Win Rate: <code>{win_rate:.1f}%</code>
 
