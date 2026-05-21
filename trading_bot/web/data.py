@@ -74,7 +74,14 @@ def collect_summary(bot) -> Dict[str, Any]:
 
 
 def collect_positions(bot) -> List[Dict[str, Any]]:
-    """Posições conhecidas (snapshot sob o lock do bot)."""
+    """Posições conhecidas + mark_price e P&L unrealized do cache da exchange.
+
+    Lê known_positions (metadata estratégica) e cruza com o snapshot live
+    do bot.exchange (mark_price, unrealized_pnl). O get_open_positions tem
+    cache de 5s — se for hit, é gratuito; se for miss, faz uma chamada e
+    aquece o cache pro monitor_positions usar logo a seguir. Em caso de
+    falha de API, mark_price/unrealized_pnl voltam None.
+    """
     positions: List[Dict[str, Any]] = []
     lock = getattr(bot, "_positions_lock", None)
     known = getattr(bot, "known_positions", {}) or {}
@@ -88,16 +95,42 @@ def collect_positions(bot) -> List[Dict[str, Any]]:
     else:
         snapshot = dict(known)
 
+    # Cruza com o cache da exchange pra ter mark_price/unrealized_pnl.
+    live_by_key: Dict[str, Dict[str, Any]] = {}
+    exchange = getattr(bot, "exchange", None)
+    if exchange is not None:
+        try:
+            for live in exchange.get_open_positions() or []:
+                key = f"{live.get('symbol', '')}_{live.get('side', '')}"
+                live_by_key[key] = live
+        except Exception:
+            # API down: dashboard segue sem mark_price (mostra "—" nos campos).
+            live_by_key = {}
+
     for position_key, payload in snapshot.items():
         if not isinstance(payload, dict):
             continue
+        live = live_by_key.get(position_key, {})
+        mark_price = _safe_float(live.get("mark_price")) if live else None
+        unrealized_pnl = _safe_float(live.get("unrealized_pnl")) if live else None
+        entry_price = _safe_float(payload.get("entry_price"))
+        side = payload.get("side", "")
+
+        pnl_percent: Optional[float] = None
+        if mark_price and entry_price > 0:
+            raw_pct = (mark_price - entry_price) / entry_price * 100.0
+            pnl_percent = raw_pct if side == "LONG" else -raw_pct
+
         positions.append(
             {
                 "key": position_key,
                 "symbol": payload.get("symbol", ""),
-                "side": payload.get("side", ""),
-                "entry_price": _safe_float(payload.get("entry_price")),
+                "side": side,
+                "entry_price": entry_price,
+                "mark_price": mark_price,
                 "quantity": _safe_float(payload.get("quantity")),
+                "unrealized_pnl_usd": unrealized_pnl,
+                "unrealized_pnl_percent": pnl_percent,
                 "strategy_name": payload.get("strategy_name", "primary"),
                 "strategy_type": payload.get("strategy_type", "trend_signal"),
                 "custom_stop_loss": payload.get("custom_stop_loss"),

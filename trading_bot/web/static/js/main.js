@@ -106,7 +106,7 @@
         $('kpi-positions-open').textContent = positions.length;
 
         if (!positions.length) {
-            tbody.innerHTML = '<tr><td colspan="8" class="empty">Sem posições.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="10" class="empty">Sem posições.</td></tr>';
             return;
         }
 
@@ -115,11 +115,33 @@
             const trailing = (p.trailing_activation_pct !== null && p.trailing_distance_pct !== null)
                 ? `${Number(p.trailing_activation_pct).toFixed(2)}% / ${Number(p.trailing_distance_pct).toFixed(2)}%`
                 : '<span style="color:var(--text-muted)">config</span>';
+
+            // P&L unrealized: cor + USD + percentual (vindos do mark_price atual).
+            // Se exchange indisponível, mostra "—" sem cor.
+            let pnlCell;
+            if (p.unrealized_pnl_usd === null || p.unrealized_pnl_usd === undefined) {
+                pnlCell = '<span style="color:var(--text-muted)">—</span>';
+            } else {
+                const pnlClass = p.unrealized_pnl_usd > 0 ? 'pnl-pos'
+                               : p.unrealized_pnl_usd < 0 ? 'pnl-neg'
+                               : '';
+                const pctTxt = (p.unrealized_pnl_percent !== null && p.unrealized_pnl_percent !== undefined)
+                    ? ` <small>(${fmt.pct(p.unrealized_pnl_percent)})</small>`
+                    : '';
+                pnlCell = `<span class="${pnlClass}">${fmt.usd(p.unrealized_pnl_usd, { signed: true })}${pctTxt}</span>`;
+            }
+
+            const markPrice = (p.mark_price !== null && p.mark_price !== undefined && p.mark_price > 0)
+                ? fmt.num(p.mark_price, 4)
+                : '<span style="color:var(--text-muted)">—</span>';
+
             return `<tr>
                 <td><strong>${p.symbol}</strong></td>
                 <td><span class="${sideClass}">${p.side}</span></td>
                 <td>${fmt.num(p.entry_price, 4)}</td>
+                <td>${markPrice}</td>
                 <td>${fmt.num(p.quantity, 4)}</td>
+                <td>${pnlCell}</td>
                 <td><small>${p.strategy_name}</small></td>
                 <td>${p.custom_stop_loss !== null ? fmt.num(p.custom_stop_loss, 4) : '—'}</td>
                 <td>${p.custom_take_profit !== null ? fmt.num(p.custom_take_profit, 4) : '—'}</td>
