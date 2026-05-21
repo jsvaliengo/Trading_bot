@@ -352,7 +352,11 @@ class TradingConfig:
     # Stop Loss Individual (por posição)
     # Se False, as posições não têm SL individual - só fecham por TP ou Trailing Stop
     USE_INDIVIDUAL_STOP_LOSS: bool = True
-    STOP_LOSS_PERCENT: float = 1.2  # SL apertado pro caminho A (entradas tardias)
+    # SL default 5% — afrouxado vs 1.2% após análise de produção (Q2/26):
+    # 1.2% era prematuro demais em pares voláteis, fechava no ruído antes do
+    # trade desenvolver. 5% dá espaço pro setup, com trailing stop como
+    # mecanismo de saída final quando o lucro materializa.
+    STOP_LOSS_PERCENT: float = _env_float("TRADING_BOT_STOP_LOSS_PERCENT", 5.0)
     
     # Stop Loss Global (baseado no capital total)
     # Se o prejuízo total atingir esse % do capital inicial, fecha TUDO e para o bot
