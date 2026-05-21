@@ -44,16 +44,59 @@ def collect_snapshot(bot) -> Dict[str, Any]:
 
 
 def collect_summary(bot) -> Dict[str, Any]:
-    """KPIs do topo da página."""
+    """KPIs do topo da página.
+
+    Fonte de verdade para os valores monetários é a Binance (mesma origem
+    que o /portfolio do Telegram), não os contadores internos do bot —
+    os contadores estimam taxas com base no taker rate e não capturam
+    funding fee + slippage real, então divergem do extrato. Bot counters
+    ficam disponíveis em `bot_*` fields pra debugging.
+
+    Saldo exibido = wallet REAL + unrealized PnL (equity total). Em testnet
+    com SIMULATED_BALANCE_USD ativo, o wallet vem cappado em $130; nesse
+    caso o equity é $130 + realized_dia + unrealized.
+    """
     initial_capital = _safe_float(getattr(bot, "initial_capital", 0.0))
-    total_pnl = _safe_float(getattr(bot, "total_pnl", 0.0))
-    daily_pnl = _safe_float(getattr(bot, "daily_realized_pnl", 0.0))
     closed_trades = int(getattr(bot, "closed_trades_count", 0) or 0)
-    last_balance = _safe_float(getattr(bot, "last_known_balance", 0.0) or 0.0)
     paused = bool(getattr(bot, "paused", False))
     running = bool(getattr(bot, "running", False))
 
-    # ROI desde initial_capital (se temos valor de inicial coerente)
+    # Contadores internos do bot (fonte secundária, mostrada como bot_*)
+    bot_total_pnl = _safe_float(getattr(bot, "total_pnl", 0.0))
+    bot_daily_pnl = _safe_float(getattr(bot, "daily_realized_pnl", 0.0))
+
+    # Fonte de verdade: Binance
+    binance_daily_realized = 0.0
+    binance_unrealized = 0.0
+    wallet_balance = _safe_float(getattr(bot, "last_known_balance", 0.0) or 0.0)
+    exchange = getattr(bot, "exchange", None)
+    if exchange is not None:
+        try:
+            daily = exchange.get_daily_pnl_from_binance()
+            binance_daily_realized = _safe_float(daily.get("total"))
+        except Exception:
+            pass
+        try:
+            info = exchange.get_account_info()
+            wallet_balance = _safe_float(info.get("wallet_balance", wallet_balance))
+            binance_unrealized = _safe_float(info.get("unrealized_pnl"))
+        except Exception:
+            pass
+
+    # P&L total = realizado do dia + não realizado das posições abertas
+    # (mesma fórmula usada no /portfolio do Telegram)
+    total_pnl = binance_daily_realized + binance_unrealized
+    # Equity = wallet + unrealized. Em simulated mode, wallet é capped,
+    # então equity ≈ cap + (lucro/prejuízo aberto). Quando trades fecham,
+    # o wallet em testnet REAL muda mas o cap simulated não — então
+    # somamos realized do dia também pra refletir lucros já materializados.
+    if getattr(config, "USE_TESTNET", False) and float(
+        getattr(config, "SIMULATED_BALANCE_USD", 0.0) or 0.0
+    ) > 0:
+        effective_balance = float(getattr(config, "SIMULATED_BALANCE_USD")) + binance_daily_realized + binance_unrealized
+    else:
+        effective_balance = wallet_balance + binance_unrealized
+
     if initial_capital > 0:
         roi_percent = (total_pnl / initial_capital) * 100.0
     else:
@@ -61,9 +104,13 @@ def collect_summary(bot) -> Dict[str, Any]:
 
     return {
         "initial_capital": initial_capital,
-        "last_balance": last_balance,
+        "last_balance": effective_balance,
         "total_pnl": total_pnl,
-        "daily_pnl": daily_pnl,
+        "daily_pnl": binance_daily_realized,
+        "unrealized_pnl": binance_unrealized,
+        # Debug: contadores internos do bot (estimados, podem divergir)
+        "bot_total_pnl": bot_total_pnl,
+        "bot_daily_pnl": bot_daily_pnl,
         "roi_percent": round(roi_percent, 4),
         "closed_trades": closed_trades,
         "paused": paused,
@@ -174,11 +221,31 @@ def collect_recent_trades(bot, limit: int = 20) -> List[Dict[str, Any]]:
 
 
 def collect_regime(bot) -> Dict[str, Any]:
-    """Estado atual do regime classifier por símbolo."""
-    committed = dict(getattr(bot, "_regime_committed", {}) or {})
+    """Estado do regime classifier — só pares ATIVOS no momento.
+
+    O classifier acumula observações pra todos os símbolos que passam
+    pela análise (top N por score), inclusive os que o bot nem chega a
+    operar. Pra o painel, filtramos só os pares que estão sendo
+    efetivamente operados — união de:
+      - pares no trading set atual (config.TRADING_PAIRS)
+      - pares com posição aberta agora (known_positions)
+    """
+    committed_all = dict(getattr(bot, "_regime_committed", {}) or {})
+    observations_all = dict(getattr(bot, "_regime_observations", {}) or {})
+
+    active_pairs = set(str(p).upper() for p in (getattr(config, "TRADING_PAIRS", []) or []))
+    for pk in (getattr(bot, "known_positions", {}) or {}).keys():
+        # known_positions keys são "{SYMBOL}_{SIDE}" — extrai o símbolo
+        if isinstance(pk, str) and "_" in pk:
+            sym = pk.rsplit("_", 1)[0]
+            if sym:
+                active_pairs.add(sym.upper())
+
+    committed = {k: v for k, v in committed_all.items() if str(k).upper() in active_pairs}
     observations = {
-        sym: list(window or [])
-        for sym, window in (getattr(bot, "_regime_observations", {}) or {}).items()
+        k: list(v or [])
+        for k, v in observations_all.items()
+        if str(k).upper() in active_pairs
     }
     return {
         "committed": committed,

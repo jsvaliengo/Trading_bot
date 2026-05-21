@@ -222,16 +222,43 @@ def test_control_endpoints_require_auth():
 # ---------- Coletor de dados ----------
 
 
-def test_collect_summary_includes_kpis():
+def test_collect_summary_includes_kpis(monkeypatch):
+    """Summary com fonte Binance (mockada). Testnet sem SIMULATED_BALANCE_USD
+    significa equity = wallet + unrealized."""
+    monkeypatch.setattr(global_config, "SIMULATED_BALANCE_USD", 0.0, raising=False)
     bot = _make_bot(initial_capital=100.0, last_known_balance=120.0, total_pnl=20.0)
+    bot.exchange = SimpleNamespace(
+        get_daily_pnl_from_binance=lambda: {"total": 5.0},
+        get_account_info=lambda: {"wallet_balance": 120.0, "unrealized_pnl": 2.0},
+        get_open_positions=lambda: [],
+    )
     summary = dashboard_data.collect_summary(bot)
     assert summary["initial_capital"] == 100.0
-    assert summary["last_balance"] == 120.0
-    assert summary["total_pnl"] == 20.0
-    assert summary["roi_percent"] == 20.0
+    # Binance daily_realized (5.0) + unrealized (2.0) = 7.0
+    assert summary["total_pnl"] == 7.0
+    assert summary["daily_pnl"] == 5.0
+    assert summary["unrealized_pnl"] == 2.0
+    # Equity = wallet + unrealized = 122.0
+    assert summary["last_balance"] == 122.0
+    # Bot counters preservados pra debug
+    assert summary["bot_total_pnl"] == 20.0
     assert summary["paused"] is False
     assert summary["running"] is True
     assert summary["environment"] == "testnet"
+
+
+def test_collect_summary_uses_simulated_cap_in_testnet(monkeypatch):
+    """Com SIMULATED_BALANCE_USD ativo, equity = cap + daily_realized + unrealized."""
+    monkeypatch.setattr(global_config, "SIMULATED_BALANCE_USD", 130.0, raising=False)
+    bot = _make_bot(initial_capital=130.0)
+    bot.exchange = SimpleNamespace(
+        get_daily_pnl_from_binance=lambda: {"total": 1.5},
+        get_account_info=lambda: {"wallet_balance": 130.0, "unrealized_pnl": -0.20},
+        get_open_positions=lambda: [],
+    )
+    summary = dashboard_data.collect_summary(bot)
+    # 130 + 1.5 - 0.20 = 131.30
+    assert summary["last_balance"] == pytest.approx(131.30, abs=0.001)
 
 
 def test_collect_positions_serializes_known_positions():
@@ -259,15 +286,38 @@ def test_collect_positions_serializes_known_positions():
     assert p["trailing_activation_pct"] == 0.7
 
 
-def test_collect_regime_reports_committed_and_observations():
+def test_collect_regime_filters_to_active_trading_pairs(monkeypatch):
+    """Regime classifier acumula obs de TODOS os pares analisados; o painel
+    só deve mostrar os pares ATIVOS (em TRADING_PAIRS ou com posição aberta)."""
+    monkeypatch.setattr(global_config, "TRADING_PAIRS", ["BTCUSDT", "ETHUSDT"], raising=False)
     bot = _make_bot(
-        _regime_committed={"BTCUSDT": "trend"},
-        _regime_observations={"BTCUSDT": ["trend", "trend"], "ETHUSDT": ["range"]},
+        _regime_committed={"BTCUSDT": "trend", "DOGEUSDT": "range", "FILUSDT": "squeeze"},
+        _regime_observations={
+            "BTCUSDT": ["trend", "trend"],
+            "ETHUSDT": ["range"],
+            "DOGEUSDT": ["range", "range"],
+            "FILUSDT": ["squeeze"],
+        },
     )
     regime = dashboard_data.collect_regime(bot)
-    assert regime["enabled"] is True
+    # Só BTCUSDT/ETHUSDT estão em TRADING_PAIRS
     assert regime["committed"] == {"BTCUSDT": "trend"}
-    assert regime["observations"]["ETHUSDT"] == ["range"]
+    assert set(regime["observations"].keys()) == {"BTCUSDT", "ETHUSDT"}
+    assert "DOGEUSDT" not in regime["observations"]
+    assert "FILUSDT" not in regime["observations"]
+
+
+def test_collect_regime_includes_pairs_with_open_positions(monkeypatch):
+    """Mesmo fora de TRADING_PAIRS, pares com posição aberta entram no painel."""
+    monkeypatch.setattr(global_config, "TRADING_PAIRS", ["BTCUSDT"], raising=False)
+    bot = _make_bot(
+        known_positions={"XRPUSDT_LONG": {"symbol": "XRPUSDT"}},
+        _regime_committed={"XRPUSDT": "trend", "OTHERUSDT": "range"},
+        _regime_observations={"XRPUSDT": ["trend"], "OTHERUSDT": ["range"]},
+    )
+    regime = dashboard_data.collect_regime(bot)
+    assert "XRPUSDT" in regime["committed"]
+    assert "OTHERUSDT" not in regime["committed"]
 
 
 def test_collect_recent_trades_reverses_order_and_limits():
