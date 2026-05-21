@@ -86,6 +86,12 @@ trades_pnl_usd_total = Counter(
     "Soma absoluta do PNL de trades fechados. Use com result=win/loss e close_reason=stop_loss/take_profit/etc.",
     ["result", "close_reason"],
 )
+trades_fees_usd_total = Counter(
+    "trading_bot_trades_fees_usd_total",
+    "Soma das taxas (taker + funding etc.) pagas em trades fechados, por estratégia/símbolo. "
+    "Útil pra ver custo total operacional no Grafana.",
+    ["strategy", "symbol"],
+)
 orders_placed_total = Counter(
     "trading_bot_orders_placed_total",
     "Total de ordens enviadas, rotuladas por lado e resultado",
@@ -311,16 +317,25 @@ def record_trade_closed(
     try:
         result_norm = "win" if str(result).lower() == "win" else "loss"
         reason_norm = normalize_close_reason(close_reason)
+        strategy_norm = str(strategy or "unknown")
+        symbol_norm = str(symbol or "UNKNOWN")
         trades_closed_total.labels(
             result=result_norm,
-            strategy=str(strategy or "unknown"),
-            symbol=str(symbol or "UNKNOWN"),
+            strategy=strategy_norm,
+            symbol=symbol_norm,
             close_reason=reason_norm,
         ).inc()
         # Counter precisa de valor positivo — usa abs do pnl
         trades_pnl_usd_total.labels(
             result=result_norm, close_reason=reason_norm
         ).inc(abs(float(pnl_usd)))
+        # Fees são sempre positivas — Counter aceita direto. Acumula ao longo
+        # da vida do processo, pra inspeção no Grafana (rate() sobre janela).
+        fees_value = max(0.0, float(fees_usd or 0.0))
+        if fees_value > 0:
+            trades_fees_usd_total.labels(
+                strategy=strategy_norm, symbol=symbol_norm
+            ).inc(fees_value)
     except Exception as exc:
         logger.debug(f"metrics.record_trade_closed falhou: {exc}")
 

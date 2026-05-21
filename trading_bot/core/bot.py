@@ -233,7 +233,6 @@ class TradingBot:
         self.sentiment_mode_enabled = bool(getattr(config, "USE_MARKET_SENTIMENT_FILTER", False))
         self.sentiment_cache: Dict[str, Dict[str, Any]] = {}
         self.ai_consultive_engine = None
-        self._ai_execution_block_notifications: Dict[str, float] = {}
         self._instance_lock_handle = None
         self._strategy_engines: Dict[str, Any] = {}
         self.strategy_profiles: List[Dict[str, Any]] = []

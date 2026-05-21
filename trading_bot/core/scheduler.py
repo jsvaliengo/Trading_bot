@@ -91,10 +91,6 @@ class LoopScheduler:
             return
         task.next_time = float(when)
 
-    def next_times(self, names: List[str]) -> List[float]:
-        """Retorna timestamps de múltiplas tarefas — útil pra calcular sleep."""
-        return [self.next_time(n) for n in names]
-
 
 # ---------------------------------------------------------------------------
 # Timing profile — derivado do config + número de pares
