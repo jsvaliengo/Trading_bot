@@ -255,19 +255,29 @@ def collect_regime(bot) -> Dict[str, Any]:
 
 
 def collect_portfolio_history(bot, limit: int = 200) -> List[Dict[str, Any]]:
-    """Série de equity para o gráfico — últimos N snapshots."""
+    """Série de equity para o gráfico — últimos N snapshots.
+
+    Cada snapshot expõe `equity = balance + pnl_total` (o gráfico plota esse
+    campo). Em testnet com SIMULATED_BALANCE_USD ativo, `balance` é o cap
+    fixo — sem somar pnl_total, a curva fica eternamente flat em $130 mesmo
+    com trades ganhando ou perdendo. `balance` continua disponível pra
+    debugging/legacy.
+    """
     history = getattr(bot, "portfolio_history", []) or []
     out: List[Dict[str, Any]] = []
     for snap in history[-limit:]:
         if not isinstance(snap, dict):
             continue
+        balance = _safe_float(snap.get("balance"))
+        pnl_total = _safe_float(snap.get("pnl_total"))
         out.append(
             {
                 "timestamp": _iso(snap.get("timestamp")) or snap.get("timestamp"),
-                "balance": _safe_float(snap.get("balance")),
+                "balance": balance,
+                "equity": balance + pnl_total,
                 "pnl_realized": _safe_float(snap.get("pnl_realized")),
                 "pnl_unrealized": _safe_float(snap.get("pnl_unrealized")),
-                "pnl_total": _safe_float(snap.get("pnl_total")),
+                "pnl_total": pnl_total,
                 "closed_trades": int(snap.get("closed_trades", 0) or 0),
             }
         )

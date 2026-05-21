@@ -279,7 +279,13 @@
             .map(snap => {
                 const t = new Date(snap.timestamp);
                 if (isNaN(t.getTime())) return null;
-                return { time: Math.floor(t.getTime() / 1000), value: snap.balance };
+                // Plota equity (balance + pnl_total). Balance puro em simulated
+                // mode fica preso no cap → curva flat. Fallback p/ balance se
+                // equity não estiver presente (snapshots antigos).
+                const v = snap.equity !== undefined && snap.equity !== null
+                    ? snap.equity
+                    : snap.balance;
+                return { time: Math.floor(t.getTime() / 1000), value: v };
             })
             .filter(Boolean);
 
