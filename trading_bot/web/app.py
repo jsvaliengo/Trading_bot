@@ -20,6 +20,7 @@ from typing import Any
 from flask import Flask, jsonify, render_template, request
 from flask_socketio import SocketIO
 
+from ..core.config import config
 from .auth import require_basic_auth
 from .data import collect_snapshot, collect_summary
 
@@ -33,18 +34,17 @@ def create_app(bot) -> tuple[Flask, SocketIO]:
         template_folder="templates",
         static_folder="static",
     )
-    cfg = bot.config
 
     # Validação de configuração — recusa subir sem credenciais.
-    username = str(getattr(cfg, "DASHBOARD_USERNAME", "") or "").strip()
-    password = str(getattr(cfg, "DASHBOARD_PASSWORD", "") or "").strip()
+    username = str(getattr(config, "DASHBOARD_USERNAME", "") or "").strip()
+    password = str(getattr(config, "DASHBOARD_PASSWORD", "") or "").strip()
     if not username or not password:
         raise RuntimeError(
             "Dashboard requer DASHBOARD_USERNAME e DASHBOARD_PASSWORD definidos. "
             "Defina via env vars antes de habilitar DASHBOARD_ENABLED."
         )
 
-    secret_key = str(getattr(cfg, "DASHBOARD_SECRET_KEY", "") or "").strip()
+    secret_key = str(getattr(config, "DASHBOARD_SECRET_KEY", "") or "").strip()
     if not secret_key:
         secret_key = secrets.token_hex(32)
         logger.warning(
@@ -83,11 +83,10 @@ def _register_routes(app: Flask, socketio: SocketIO) -> None:
     @app.route("/")
     @require_basic_auth
     def index():
-        cfg = app.config["BOT"].config
         return render_template(
             "dashboard.html",
-            environment="testnet" if getattr(cfg, "USE_TESTNET", False) else "mainnet",
-            poll_interval=int(getattr(cfg, "DASHBOARD_POLL_INTERVAL_SECONDS", 5)),
+            environment="testnet" if getattr(config, "USE_TESTNET", False) else "mainnet",
+            poll_interval=int(getattr(config, "DASHBOARD_POLL_INTERVAL_SECONDS", 5)),
         )
 
     @app.route("/api/healthz")

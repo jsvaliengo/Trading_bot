@@ -18,7 +18,26 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from trading_bot.core.config import config as global_config
 from trading_bot.web import data as dashboard_data
+
+
+@pytest.fixture(autouse=True)
+def _dashboard_config(monkeypatch):
+    """Aplica DASHBOARD_* defaults no config global pra cada teste.
+
+    USE_TESTNET é @property derivada de ENVIRONMENT — monkeypatcham ENVIRONMENT.
+    """
+    monkeypatch.setattr(global_config, "DASHBOARD_ENABLED", True, raising=False)
+    monkeypatch.setattr(global_config, "DASHBOARD_USERNAME", "admin", raising=False)
+    monkeypatch.setattr(global_config, "DASHBOARD_PASSWORD", "secret", raising=False)
+    monkeypatch.setattr(global_config, "DASHBOARD_SECRET_KEY", "test-secret-key", raising=False)
+    monkeypatch.setattr(global_config, "DASHBOARD_HOST", "127.0.0.1", raising=False)
+    monkeypatch.setattr(global_config, "DASHBOARD_PORT", 5050, raising=False)
+    monkeypatch.setattr(global_config, "DASHBOARD_POLL_INTERVAL_SECONDS", 5, raising=False)
+    monkeypatch.setattr(global_config, "ENVIRONMENT", "testnet", raising=False)
+    monkeypatch.setattr(global_config, "AI_CONSULTIVE_MODE", "off", raising=False)
+    monkeypatch.setattr(global_config, "REGIME_CLASSIFIER_ENABLED", True, raising=False)
 
 
 # ---------- Bot mock factory ----------
@@ -26,21 +45,13 @@ from trading_bot.web import data as dashboard_data
 
 def _make_bot(*, username: str = "admin", password: str = "secret", **overrides) -> SimpleNamespace:
     """Bot mínimo aceito pelo dashboard. Use overrides pra customizar estado."""
-    bot_cfg = SimpleNamespace(
-        DASHBOARD_ENABLED=True,
-        DASHBOARD_USERNAME=username,
-        DASHBOARD_PASSWORD=password,
-        DASHBOARD_SECRET_KEY="test-secret-key",
-        DASHBOARD_HOST="127.0.0.1",
-        DASHBOARD_PORT=5050,
-        DASHBOARD_POLL_INTERVAL_SECONDS=5,
-        USE_TESTNET=True,
-        AI_CONSULTIVE_MODE="off",
-        REGIME_CLASSIFIER_ENABLED=True,
-    )
+    # Aplicar overrides no config global se passados via kwargs
+    if username != "admin":
+        global_config.DASHBOARD_USERNAME = username
+    if password != "secret":
+        global_config.DASHBOARD_PASSWORD = password
 
     bot = SimpleNamespace(
-        config=bot_cfg,
         initial_capital=overrides.get("initial_capital", 100.0),
         last_known_balance=overrides.get("last_known_balance", 110.0),
         total_pnl=overrides.get("total_pnl", 10.0),

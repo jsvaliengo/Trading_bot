@@ -17,6 +17,8 @@ import logging
 import threading
 from typing import Any, Dict, Optional
 
+from ..core.config import config
+
 logger = logging.getLogger(__name__)
 
 
@@ -33,7 +35,7 @@ class DashboardServer:
 
     @property
     def enabled(self) -> bool:
-        return bool(getattr(self._bot.config, "DASHBOARD_ENABLED", False))
+        return bool(getattr(config, "DASHBOARD_ENABLED", False))
 
     def start(self) -> bool:
         """Sobe o Flask numa thread daemon. Retorna True se iniciou, False se skipped."""
@@ -55,9 +57,8 @@ class DashboardServer:
                 logger.exception("📊 Falha inesperada ao criar Flask app — dashboard desabilitado")
                 return False
 
-            cfg = self._bot.config
-            host = str(getattr(cfg, "DASHBOARD_HOST", "127.0.0.1"))
-            port = int(getattr(cfg, "DASHBOARD_PORT", 5050))
+            host = str(getattr(config, "DASHBOARD_HOST", "127.0.0.1"))
+            port = int(getattr(config, "DASHBOARD_PORT", 5050))
 
             def _run():
                 try:

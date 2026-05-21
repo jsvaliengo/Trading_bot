@@ -13,6 +13,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from ..core.config import config
+
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
     try:
@@ -66,8 +68,8 @@ def collect_summary(bot) -> Dict[str, Any]:
         "closed_trades": closed_trades,
         "paused": paused,
         "running": running,
-        "environment": "testnet" if getattr(bot.config, "USE_TESTNET", False) else "mainnet",
-        "ai_mode": str(getattr(bot.config, "AI_CONSULTIVE_MODE", "off") or "off"),
+        "environment": "testnet" if getattr(config, "USE_TESTNET", False) else "mainnet",
+        "ai_mode": str(getattr(config, "AI_CONSULTIVE_MODE", "off") or "off"),
     }
 
 
@@ -148,7 +150,7 @@ def collect_regime(bot) -> Dict[str, Any]:
     return {
         "committed": committed,
         "observations": observations,
-        "enabled": bool(getattr(bot.config, "REGIME_CLASSIFIER_ENABLED", False)),
+        "enabled": bool(getattr(config, "REGIME_CLASSIFIER_ENABLED", False)),
     }
 
 
