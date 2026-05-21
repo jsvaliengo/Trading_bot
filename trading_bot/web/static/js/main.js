@@ -64,6 +64,13 @@
         return '';
     }
 
+    // classList.add('') é SyntaxError no DOM — guarda antes de chamar.
+    function setPnlClass(el, value) {
+        el.classList.remove('pos', 'neg');
+        const cls = classify(value);
+        if (cls) el.classList.add(cls);
+    }
+
     function renderSummary(summary) {
         if (!summary) return;
         $('kpi-balance').textContent = fmt.usd(summary.last_balance);
@@ -71,14 +78,12 @@
 
         const pnlTotal = $('kpi-pnl-total');
         pnlTotal.textContent = fmt.usd(summary.total_pnl, { signed: true });
-        pnlTotal.classList.remove('pos', 'neg');
-        pnlTotal.classList.add(classify(summary.total_pnl));
+        setPnlClass(pnlTotal, summary.total_pnl);
         $('kpi-roi').textContent = 'ROI: ' + fmt.pct(summary.roi_percent);
 
         const pnlDaily = $('kpi-pnl-daily');
         pnlDaily.textContent = fmt.usd(summary.daily_pnl, { signed: true });
-        pnlDaily.classList.remove('pos', 'neg');
-        pnlDaily.classList.add(classify(summary.daily_pnl));
+        setPnlClass(pnlDaily, summary.daily_pnl);
         $('kpi-closed-trades').textContent = 'Trades fechados: ' + summary.closed_trades;
 
         const running = summary.running && !summary.paused;
