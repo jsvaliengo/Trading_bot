@@ -115,7 +115,17 @@
         if (!summary) return;
 
         $('kpi-balance').textContent = fmt.usd(summary.last_balance);
-        $('kpi-initial').textContent = 'Inicial: ' + fmt.usd(summary.initial_capital);
+        $('kpi-initial').textContent = fmt.usd(summary.initial_capital);
+        // Delta atual vs inicial — mostra evolução com sinal e %
+        const delta = (summary.last_balance || 0) - (summary.initial_capital || 0);
+        const deltaPct = summary.initial_capital > 0
+            ? (delta / summary.initial_capital) * 100
+            : 0;
+        const deltaEl = $('kpi-balance-delta');
+        deltaEl.textContent = `${fmt.usd(delta, { signed: true })} (${fmt.pct(deltaPct)})`;
+        deltaEl.classList.remove('pnl-pos', 'pnl-neg');
+        if (delta > 0) deltaEl.classList.add('pnl-pos');
+        else if (delta < 0) deltaEl.classList.add('pnl-neg');
 
         const pnlTotal = $('kpi-pnl-total');
         pnlTotal.textContent = fmt.usd(summary.total_pnl, { signed: true });

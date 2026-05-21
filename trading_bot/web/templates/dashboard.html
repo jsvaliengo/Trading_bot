@@ -64,13 +64,23 @@
 
             <!-- KPIs -->
             <section class="kpi-row">
-                <article class="card kpi">
+                <article class="card kpi kpi-split">
                     <div class="kpi-head">
                         <span class="kpi-icon" style="background:linear-gradient(135deg,#5cf2a8,#00b894)">💰</span>
                         <span class="kpi-label">Saldo</span>
                     </div>
-                    <div class="kpi-value" id="kpi-balance">—</div>
-                    <div class="kpi-sub" id="kpi-initial">Inicial: —</div>
+                    <div class="kpi-pair">
+                        <div class="kpi-pair-col">
+                            <span class="kpi-pair-label">Atual</span>
+                            <span class="kpi-value" id="kpi-balance">—</span>
+                        </div>
+                        <div class="kpi-pair-sep"></div>
+                        <div class="kpi-pair-col">
+                            <span class="kpi-pair-label">Inicial</span>
+                            <span class="kpi-value kpi-value-muted" id="kpi-initial">—</span>
+                        </div>
+                    </div>
+                    <div class="kpi-sub" id="kpi-balance-delta">—</div>
                 </article>
 
                 <article class="card kpi">

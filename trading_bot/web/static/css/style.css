@@ -334,10 +334,38 @@ html, body {
 }
 .kpi-value.pos { color: var(--success); }
 .kpi-value.neg { color: var(--danger); }
+.kpi-value-muted { color: var(--text-dim); font-weight: 600; }
 .kpi-sub {
     font-size: 11px;
     color: var(--text-muted);
 }
+
+/* Saldo card — Atual + Inicial lado a lado */
+.kpi-split { padding-bottom: 16px; }
+.kpi-pair {
+    display: grid;
+    grid-template-columns: 1fr 1px 1fr;
+    gap: 12px;
+    align-items: center;
+}
+.kpi-pair-col {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.kpi-pair-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+    font-weight: 500;
+}
+.kpi-pair-sep {
+    background: var(--border);
+    height: 38px;
+    width: 1px;
+}
+.kpi-pair .kpi-value { font-size: 22px; }
 
 /* ════ Views (router) ════ */
 .view { display: none; flex-direction: column; gap: 20px; }
