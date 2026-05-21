@@ -369,7 +369,14 @@
     }
 
     if (typeof io !== 'undefined') {
-        const socket = io({ transports: ['websocket', 'polling'] });
+        // Default do Socket.IO: polling primeiro, upgrade pra websocket depois.
+        // Forçar transports:['websocket','polling'] trava em "conectando..."
+        // quando o upgrade falha silenciosamente (caso comum: proxy reverso ou
+        // túnel SSH com handshake parcial).
+        const socket = io({
+            transports: ['polling', 'websocket'],
+            reconnectionDelayMax: 10000,
+        });
 
         socket.on('connect', () => {
             setConn('connected');
@@ -408,8 +415,12 @@
         startPolling();
     }
 
-    // Primeira render fallback (caso conexão demore)
+    // Primeira render fallback (caso WebSocket demore demais ou esteja
+    // bloqueado): muda a pill pra "polling" e inicia o ciclo de HTTP.
     setTimeout(() => {
-        if (!state.snapshot) pollOnce();
+        if (!state.snapshot) {
+            setConn('polling');
+            startPolling();
+        }
     }, 1500);
 })();
