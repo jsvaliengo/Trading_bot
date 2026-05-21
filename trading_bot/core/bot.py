@@ -4321,16 +4321,27 @@ class TradingBot:
         
         # Busca dados REAIS da Binance
         account_info = self.exchange.get_account_info()
-        balance = account_info['wallet_balance']  # Saldo total da carteira
+        wallet_balance = account_info['wallet_balance']  # Saldo total da carteira (cappado em testnet)
         total_unrealized = account_info['unrealized_pnl']  # P&L não realizado
-        
+
         # Busca P&L diário REAL da Binance
         daily_pnl_binance = self.exchange.get_daily_pnl_from_binance()
         daily_pnl_real = daily_pnl_binance['total']
-        
+
         # P&L total = P&L realizado do DIA (Binance) + não realizado
         total_pnl = daily_pnl_real + total_unrealized
-        
+
+        # Capital ATUAL = equity efetivo. Em testnet com SIMULATED_BALANCE_USD,
+        # o wallet retorna o cap fixo — adicionamos realized + unrealized pra
+        # refletir o saldo "como se fosse o cap recebendo o P&L". Em mainnet
+        # ou testnet sem cap, wallet_balance já reflete realized; adicionamos
+        # só o unrealized pra ter equity total.
+        sim_cap = float(getattr(config, "SIMULATED_BALANCE_USD", 0.0) or 0.0)
+        if getattr(config, "USE_TESTNET", False) and sim_cap > 0:
+            balance = sim_cap + daily_pnl_real + total_unrealized
+        else:
+            balance = wallet_balance + total_unrealized
+
         pct_change = (total_pnl / self.initial_capital) * 100 if self.initial_capital > 0 else 0
         
         # Prepara dados do histórico para o Telegram (converte para horário do Brasil)
