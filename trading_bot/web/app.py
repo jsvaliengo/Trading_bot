@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import logging
 import secrets
-from typing import Any
 
 from flask import Flask, jsonify, render_template, request
 from flask_socketio import SocketIO

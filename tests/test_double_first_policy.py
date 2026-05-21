@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-import pytest
 
 from trading_bot.core.config import config
 from trading_bot.core.double_first_policy import DoubleFirstPolicy

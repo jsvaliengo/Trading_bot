@@ -10,7 +10,6 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-import pytest
 
 from trading_bot.core.trade_block_reporter import TradeBlockReporter
 

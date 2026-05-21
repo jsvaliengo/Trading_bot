@@ -17,7 +17,6 @@ import time
 import logging
 import signal
 import sys
-import html
 import os
 import fcntl
 import threading

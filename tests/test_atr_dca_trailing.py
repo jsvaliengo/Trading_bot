@@ -8,7 +8,6 @@ Cobre:
   invariante activation >= distance + 0.15% fee_floor, retorna None quando
   desabilitado ou ATR inválido.
 """
-from unittest.mock import patch
 
 import pytest
 
@@ -44,7 +43,7 @@ def test_dca_levels_atr_mode_uses_progressive_multipliers(monkeypatch):
     assert levels[1]["price"] == pytest.approx(97.5, abs=0.01)
     assert levels[2]["price"] == pytest.approx(96.5, abs=0.01)
     # Todos LONG
-    assert all(l["position_side"] == "LONG" for l in levels)
+    assert all(lvl["position_side"] == "LONG" for lvl in levels)
 
 
 def test_dca_levels_atr_mode_short_uses_upper_prices(monkeypatch):
@@ -62,7 +61,7 @@ def test_dca_levels_atr_mode_short_uses_upper_prices(monkeypatch):
         entry_price=100.0, signal=Signal.STRONG_SELL, atr=1.0
     )
 
-    assert all(l["position_side"] == "SHORT" for l in levels)
+    assert all(lvl["position_side"] == "SHORT" for lvl in levels)
     assert levels[0]["price"] == pytest.approx(101.5, abs=0.01)
     assert levels[2]["price"] == pytest.approx(103.5, abs=0.01)
 

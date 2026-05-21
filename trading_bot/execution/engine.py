@@ -358,7 +358,7 @@ class ExecutionEngine:
                     ai_consultive=setup_metadata.get("ai_consultive"),
                 )
 
-                position_key = bot.positions.open(
+                bot.positions.open(
                     symbol=symbol,
                     side="LONG",
                     entry_price=price,
@@ -505,7 +505,7 @@ class ExecutionEngine:
                     ai_consultive=setup_metadata.get("ai_consultive"),
                 )
 
-                position_key = bot.positions.open(
+                bot.positions.open(
                     symbol=symbol,
                     side="SHORT",
                     entry_price=price,

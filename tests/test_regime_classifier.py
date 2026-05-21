@@ -10,10 +10,8 @@ Cobre:
   troca limpa de regime após histórico estável.
 - TradingBot._apply_regime_override: substitui strategy_type + engine.
 """
-from typing import List
 
 import numpy as np
-import pytest
 
 from trading_bot.core.bot import TradingBot
 from trading_bot.core.config import config

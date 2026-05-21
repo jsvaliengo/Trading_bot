@@ -9,7 +9,6 @@ from __future__ import annotations
 import threading
 from types import SimpleNamespace
 
-import pytest
 
 from trading_bot.core.position_tracker import PositionTracker
 
