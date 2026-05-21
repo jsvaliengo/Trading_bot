@@ -87,12 +87,23 @@ class TradeLedger:
         pnl_net: float,
         total_fees: float,
         close_reason: str = "",
+        side: Optional[str] = None,
+        entry_price: Optional[float] = None,
+        exit_price: Optional[float] = None,
+        pnl_gross: Optional[float] = None,
     ) -> Dict[str, Any]:
         """
         Atualiza todos os contadores e dicts de estatísticas pós-trade,
-        emite a métrica Prometheus correspondente, e retorna um resumo
+        emite a métrica Prometheus correspondente, enriquece o registro
+        de abertura correspondente em trade_history com os dados de
+        fechamento (exit_price, pnl, fees, motivo), e retorna um resumo
         (closed_trades_count, win_rate, daily_pnl, total_pnl) que o caller
         usa pra log.
+
+        Se nenhum open record matching (symbol+side, sem exit info) for
+        encontrado em trade_history (caso: bot reiniciado mid-trade, ou
+        posição que existia em reconciliação sem open registrado), um
+        novo record "close-only" é appendado.
         """
         bot = self._bot
 
@@ -100,6 +111,18 @@ class TradeLedger:
         bot.daily_realized_pnl += pnl_net
         bot.total_pnl += pnl_net
         bot.total_fees_paid += total_fees
+
+        self._enrich_open_record_with_close(
+            symbol=symbol,
+            side=side,
+            entry_price=entry_price,
+            exit_price=exit_price,
+            pnl_gross=pnl_gross,
+            pnl_net=pnl_net,
+            total_fees=total_fees,
+            close_reason=close_reason,
+            strategy_name=strategy_name,
+        )
 
         if pnl_net > 0:
             bot.trades_win_count += 1
@@ -137,6 +160,65 @@ class TradeLedger:
             "daily_pnl": bot.daily_realized_pnl,
             "total_pnl": bot.total_pnl,
         }
+
+    def _enrich_open_record_with_close(
+        self,
+        *,
+        symbol: str,
+        side: Optional[str],
+        entry_price: Optional[float],
+        exit_price: Optional[float],
+        pnl_gross: Optional[float],
+        pnl_net: float,
+        total_fees: float,
+        close_reason: str,
+        strategy_name: str,
+    ) -> None:
+        """Procura o open record matching e adiciona campos de fechamento.
+
+        Match: o último (mais recente) record com mesmo symbol+side que
+        AINDA não tem `exit_price` setado. Se nenhum match for encontrado
+        (ex: posição existia em reconciliação sem ter passado pelo open
+        path do engine), appenda um record close-only.
+        """
+        bot = self._bot
+        history = getattr(bot, "trade_history", None)
+        if history is None:
+            return
+
+        close_fields = {
+            "exit_price": exit_price,
+            "exit_time": datetime.now().isoformat(),
+            "pnl_gross": pnl_gross,
+            "pnl_net": pnl_net,
+            "fees": total_fees,
+            "close_reason": close_reason,
+        }
+
+        # Itera do mais recente pro mais antigo, achando open ainda aberto.
+        for i in range(len(history) - 1, -1, -1):
+            entry = history[i]
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("symbol") != symbol:
+                continue
+            if side is not None and entry.get("side") != side:
+                continue
+            if entry.get("exit_price") is not None:
+                continue  # já fechado (loop em trade reaberto no mesmo par+side)
+            entry.update(close_fields)
+            return
+
+        # Não achou — appenda close-only.
+        history.append({
+            "timestamp": datetime.now().isoformat(),
+            "symbol": symbol,
+            "side": side or "",
+            "entry_price": entry_price,
+            "qty": None,
+            "strategy_name": str(strategy_name or "primary"),
+            **close_fields,
+        })
 
     @staticmethod
     def _bump_stats_bucket(

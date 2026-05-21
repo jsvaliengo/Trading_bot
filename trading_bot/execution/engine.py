@@ -636,6 +636,10 @@ class ExecutionEngine:
             pnl_net=pnl_net,
             total_fees=total_fees,
             close_reason=reason,
+            side=side,
+            entry_price=entry_price,
+            exit_price=current_price,
+            pnl_gross=pnl_gross,
         )
 
         logger.info(

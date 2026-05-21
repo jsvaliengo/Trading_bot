@@ -154,20 +154,42 @@
         const tbody = $('trades-table').querySelector('tbody');
         $('trades-count').textContent = trades.length + ' recente(s)';
         if (!trades.length) {
-            tbody.innerHTML = '<tr><td colspan="7" class="empty">Sem trades fechados ainda.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="9" class="empty">Sem trades ainda.</td></tr>';
             return;
         }
         tbody.innerHTML = trades.map(t => {
             const sideClass = t.side === 'LONG' ? 'side-long' : 'side-short';
-            const pnlClass = t.pnl_net > 0 ? 'pnl-pos' : (t.pnl_net < 0 ? 'pnl-neg' : '');
+            const isClosed = t.exit_price !== null && t.exit_price !== undefined && t.exit_price > 0;
+            const muted = '<span style="color:var(--text-muted)">—</span>';
+
+            // Quando ainda aberto: motivo vira "Aberta", restante vira "—".
+            const exitCell = isClosed ? fmt.num(t.exit_price, 4) : muted;
+            const feesCell = isClosed ? '<span class="pnl-neg">' + fmt.usd(t.fees || 0) + '</span>' : muted;
+
+            const pnlGrossClass = (t.pnl_gross || 0) > 0 ? 'pnl-pos' : (t.pnl_gross || 0) < 0 ? 'pnl-neg' : '';
+            const pnlGrossCell = isClosed
+                ? `<span class="${pnlGrossClass}">${fmt.usd(t.pnl_gross, { signed: true })}</span>`
+                : muted;
+
+            const pnlNetClass = (t.pnl_net || 0) > 0 ? 'pnl-pos' : (t.pnl_net || 0) < 0 ? 'pnl-neg' : '';
+            const pnlNetCell = isClosed
+                ? `<span class="${pnlNetClass}"><strong>${fmt.usd(t.pnl_net, { signed: true })}</strong></span>`
+                : muted;
+
+            const reasonCell = isClosed
+                ? `<small>${t.close_reason || '—'}</small>`
+                : '<small style="color:var(--accent)">Aberta</small>';
+
             return `<tr>
                 <td><small>${fmt.dateTime(t.timestamp)}</small></td>
                 <td><strong>${t.symbol}</strong></td>
                 <td><span class="${sideClass}">${t.side}</span></td>
                 <td>${fmt.num(t.entry_price, 4)}</td>
-                <td>${fmt.num(t.exit_price, 4)}</td>
-                <td class="${pnlClass}">${fmt.usd(t.pnl_net, { signed: true })}</td>
-                <td><small>${t.close_reason || '—'}</small></td>
+                <td>${exitCell}</td>
+                <td>${feesCell}</td>
+                <td>${pnlGrossCell}</td>
+                <td>${pnlNetCell}</td>
+                <td>${reasonCell}</td>
             </tr>`;
         }).join('');
     }
