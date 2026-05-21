@@ -212,7 +212,7 @@ class TradingBot:
         self.last_daily_performance_report_date = ""
         self.portfolio_history = []
         self.last_snapshot_time = None
-        self.snapshot_interval_minutes = 30
+        self.snapshot_interval_minutes = 10
         # Drawdown alert state — bucket cruzado mais alto no dia (% do capital).
         # Reseta automaticamente no virar do dia. Em memória só.
         self._drawdown_alert_bucket_pct: float = 0.0
@@ -4232,9 +4232,9 @@ class TradingBot:
         self.portfolio_history.append(snapshot)
         self.last_snapshot_time = now
 
-        # Mantém apenas os últimos 48 snapshots (24h se for a cada 30min)
-        if len(self.portfolio_history) > 48:
-            self.portfolio_history = self.portfolio_history[-48:]
+        # Mantém apenas os últimos 144 snapshots (24h se for a cada 10min)
+        if len(self.portfolio_history) > 144:
+            self.portfolio_history = self.portfolio_history[-144:]
 
         logger.info(f"📸 Snapshot capturado: P&L Total ${snapshot['pnl_total']:.2f}")
 
