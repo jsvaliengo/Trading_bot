@@ -2200,6 +2200,7 @@ def test_switch_environment_rejects_when_positions_are_open(monkeypatch):
     monkeypatch.setattr(config, "ENVIRONMENT", "testnet")
     monkeypatch.setattr(config, "MAINNET_API_KEY", "abc")
     monkeypatch.setattr(config, "MAINNET_API_SECRET", "xyz")
+    monkeypatch.setattr(config, "MAINNET_PROMOTION_GATE_ENABLED", False)
 
     bot.positions = {"ETHUSDT": {"side": "LONG", "quantity": 1.0}}
 
@@ -2208,6 +2209,44 @@ def test_switch_environment_rejects_when_positions_are_open(monkeypatch):
     assert ok is False
     assert "bloqueada" in message.lower()
     assert "ETHUSDT" in message
+
+
+def test_switch_environment_blocks_when_expectancy_below_threshold(monkeypatch):
+    bot = _make_light_bot()
+    monkeypatch.setattr(config, "ENVIRONMENT", "testnet")
+    monkeypatch.setattr(config, "MAINNET_API_KEY", "abc")
+    monkeypatch.setattr(config, "MAINNET_API_SECRET", "xyz")
+    monkeypatch.setattr(config, "MAINNET_PROMOTION_GATE_ENABLED", True)
+    monkeypatch.setattr(config, "MAINNET_PROMOTION_MIN_TRADES", 10)
+    monkeypatch.setattr(config, "MAINNET_PROMOTION_MIN_EXPECTANCY", 0.10)
+
+    # 20 trades, 80% WR mas RR invertido — expectativa quase zero.
+    bot.closed_trades_count = 20
+    bot.trades_win_count = 16
+    bot.trades_loss_count = 4
+    bot.trades_win_total = 16 * 0.10  # avg win 0.10
+    bot.trades_loss_total = -4 * 1.20  # avg loss -1.20  (RR 0.083)
+
+    ok, message = bot.switch_environment("mainnet")
+
+    assert ok is False
+    assert "expectativa" in message.lower()
+
+
+def test_switch_environment_blocks_when_not_enough_trades(monkeypatch):
+    bot = _make_light_bot()
+    monkeypatch.setattr(config, "ENVIRONMENT", "testnet")
+    monkeypatch.setattr(config, "MAINNET_API_KEY", "abc")
+    monkeypatch.setattr(config, "MAINNET_API_SECRET", "xyz")
+    monkeypatch.setattr(config, "MAINNET_PROMOTION_GATE_ENABLED", True)
+    monkeypatch.setattr(config, "MAINNET_PROMOTION_MIN_TRADES", 100)
+
+    bot.closed_trades_count = 5
+
+    ok, message = bot.switch_environment("mainnet")
+
+    assert ok is False
+    assert "5" in message and "100" in message
 
 
 def test_has_credentials_for_returns_correctly(monkeypatch):

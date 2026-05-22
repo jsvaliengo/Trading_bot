@@ -828,6 +828,58 @@ class TradingBot:
             except Exception as exc:
                 logger.warning(f"⚠️ Falha ao subscribe WS {symbol}/{interval}: {exc}")
 
+    def _check_mainnet_promotion_gate(self) -> tuple[bool, str]:
+        """Bloqueia switch pra mainnet enquanto a expectativa por trade no
+        testnet estiver abaixo do mínimo configurado.
+
+        Retorna (True, "") quando os critérios estão satisfeitos, ou
+        (False, mensagem) quando o switch deve ser recusado.
+
+        Critérios:
+          - closed_trades_count ≥ MAINNET_PROMOTION_MIN_TRADES
+          - há wins E losses (precisa de RR estimável)
+          - expectancy = WR*avg_win + (1-WR)*avg_loss ≥ MAINNET_PROMOTION_MIN_EXPECTANCY
+        """
+        min_trades = int(getattr(config, "MAINNET_PROMOTION_MIN_TRADES", 100))
+        min_expectancy = float(getattr(config, "MAINNET_PROMOTION_MIN_EXPECTANCY", 0.10))
+
+        closed = int(getattr(self, "closed_trades_count", 0) or 0)
+        if closed < min_trades:
+            return False, (
+                f"❌ Promoção pra mainnet bloqueada — apenas {closed} trade(s) fechado(s) no testnet, "
+                f"mínimo é {min_trades}. Continue rodando testnet até acumular amostra suficiente. "
+                f"(override: TRADING_BOT_MAINNET_PROMOTION_GATE_ENABLED=0)"
+            )
+
+        win_count = int(getattr(self, "trades_win_count", 0) or 0)
+        loss_count = int(getattr(self, "trades_loss_count", 0) or 0)
+        win_total = float(getattr(self, "trades_win_total", 0.0) or 0.0)
+        loss_total = float(getattr(self, "trades_loss_total", 0.0) or 0.0)
+
+        if win_count <= 0 or loss_count <= 0:
+            return False, (
+                f"❌ Promoção pra mainnet bloqueada — sample insuficiente "
+                f"(wins={win_count}, losses={loss_count}). Precisa de ambos pra estimar expectativa."
+            )
+
+        total = win_count + loss_count
+        avg_win = win_total / win_count
+        avg_loss = loss_total / loss_count  # já negativo
+        wr = win_count / total
+        expectancy = wr * avg_win + (1 - wr) * avg_loss
+
+        if expectancy < min_expectancy:
+            return False, (
+                f"❌ Promoção pra mainnet bloqueada — expectativa por trade "
+                f"${expectancy:+.4f} < mínimo ${min_expectancy:+.4f}.\n"
+                f"   • {total} trades fechados (WR {wr:.0%})\n"
+                f"   • avg win ${avg_win:+.4f}, avg loss ${avg_loss:+.4f} (RR {abs(avg_win/avg_loss):.2f})\n"
+                f"Ajuste a estratégia até a expectativa virar positiva. "
+                f"(override: TRADING_BOT_MAINNET_PROMOTION_GATE_ENABLED=0)"
+            )
+
+        return True, ""
+
     def switch_environment(self, target: str) -> tuple[bool, str]:
         """
         Troca a rede ativa entre mainnet e testnet em runtime.
@@ -856,6 +908,14 @@ class TradingBot:
                 f"❌ Credenciais para {prefix} não configuradas. "
                 f"Defina BINANCE_{prefix}_API_KEY e BINANCE_{prefix}_API_SECRET no .env e reinicie."
             )
+
+        # Gate de promoção pra mainnet — exige expectativa positiva no testnet
+        # antes de subir. Bloqueia o erro clássico de promover estratégia com
+        # WR alto mas RR invertido. Override por env: MAINNET_PROMOTION_GATE_ENABLED=0.
+        if target_norm == "mainnet" and getattr(config, "MAINNET_PROMOTION_GATE_ENABLED", False):
+            ok, message = self._check_mainnet_promotion_gate()
+            if not ok:
+                return False, message
 
         with self._positions_lock:
             open_symbols = [sym for sym, pos in self.positions.items() if pos]
@@ -1511,6 +1571,21 @@ class TradingBot:
         for profile in profiles:
             if normalized_symbol in set(profile.get("pairs", [])):
                 return self._apply_regime_override(profile, regime_override)
+
+        # Símbolo veio da seleção dinâmica (USE_BINANCE_STRATEGY) e não bate
+        # com `pairs` de nenhum perfil. Em vez de construir um contexto vazio
+        # — que descartaria `risk_profile` e jogaria o cálculo de SL/TP no
+        # global STOP_LOSS_PERCENT/TAKE_PROFIT_PERCENT — herdamos do primeiro
+        # perfil habilitado de mesmo strategy_type. Mantém o `risk_profile`
+        # vivo pra pares dinâmicos.
+        first_trend_profile = next(
+            (p for p in profiles if self._normalize_strategy_type(p.get("strategy_type", "trend_signal")) == "trend_signal"),
+            None,
+        )
+        if first_trend_profile is not None:
+            inherited = dict(first_trend_profile)
+            inherited["pairs"] = [normalized_symbol]
+            return self._apply_regime_override(inherited, regime_override)
 
         fallback_strategy = getattr(self, "strategy", None) or HedgeStrategy()
         if not hasattr(self, "strategy"):
@@ -3119,6 +3194,31 @@ class TradingBot:
             should_open_short=should_open_short,
         )
 
+        # Gate de SHORTs contra-tendência: só permite SHORT quando o regime
+        # comitado é "trend" (ADX ≥ REGIME_ADX_TREND_THRESHOLD). A estratégia
+        # já checa direção via EMAs/VWAP — esta camada exige que a tendência
+        # tenha força ADX suficiente. Em "range"/"squeeze"/"neutral" os SHORTs
+        # viram whipsaw. LONG não é gateado.
+        if (
+            should_open_short
+            and getattr(config, "BLOCK_COUNTERTREND_SHORT_ENABLED", False)
+            and getattr(config, "REGIME_CLASSIFIER_ENABLED", False)
+        ):
+            current_regime = self._regime_committed.get(str(symbol).upper())
+            if current_regime != "trend":
+                logger.info(
+                    f"⏸️  {symbol}: SHORT bloqueado — regime '{current_regime or '∅'}' "
+                    "não confirmado como tendência (ADX abaixo do threshold)"
+                )
+                self.block_reporter.notify_blocked(
+                    symbol=symbol,
+                    side="SHORT",
+                    strategy_name=strategy_label,
+                    reason="SHORT contra-tendência bloqueado",
+                    detail=f"Regime atual: {current_regime or 'indefinido'} (precisa de 'trend')",
+                )
+                should_open_short = False
+
         # Se sinal é NEUTRAL ou foi filtrado pelo sentimento, não abre posição.
         if not should_open_long and not should_open_short:
             if getattr(self, "sentiment_mode_enabled", False) and signal_name in ['STRONG_BUY', 'STRONG_SELL']:
@@ -3456,8 +3556,11 @@ class TradingBot:
                     )
                 continue
             
-            # 1. VERIFICA TAKE PROFIT (SEMPRE ATIVO)
-            if profit_pct >= config.TAKE_PROFIT_PERCENT:
+            # 1. VERIFICA TAKE PROFIT GLOBAL
+            # Só dispara quando NÃO há custom_take_profit. Caso contrário o
+            # TP do risk_profile (ex: 1.8%) seria preempted pelo TP_PERCENT
+            # global (1.5%), invalidando o RR configurado.
+            if custom_take_profit is None and profit_pct >= config.TAKE_PROFIT_PERCENT:
                 logger.info(f"🎯 Take Profit atingido! {profit_pct:.2f}% >= {config.TAKE_PROFIT_PERCENT}%")
                 pos['current_price'] = current_price
                 closed = self._close_position_with_notification(
@@ -3496,22 +3599,28 @@ class TradingBot:
                         )
                     continue
             
-            # 3. VERIFICA STOP LOSS INDIVIDUAL (se ativado)
-            if config.USE_INDIVIDUAL_STOP_LOSS:
-                if profit_pct <= -config.STOP_LOSS_PERCENT:
-                    pos['current_price'] = current_price
-                    closed = self._close_position_with_notification(
-                        pos,
-                        f"Stop Loss ({config.STOP_LOSS_PERCENT}%)"
+            # 3. VERIFICA STOP LOSS GLOBAL
+            # Só dispara quando NÃO há custom_stop_loss. Caso contrário o SL
+            # global (default 5%) ignoraria o SL apertado do risk_profile
+            # (ex: 0.6%) e deixaria a posição correr até -5%.
+            if (
+                config.USE_INDIVIDUAL_STOP_LOSS
+                and custom_stop_loss is None
+                and profit_pct <= -config.STOP_LOSS_PERCENT
+            ):
+                pos['current_price'] = current_price
+                closed = self._close_position_with_notification(
+                    pos,
+                    f"Stop Loss ({config.STOP_LOSS_PERCENT}%)"
+                )
+                if closed:
+                    self.positions.close(position_key)
+                else:
+                    logger.warning(
+                        f"⚠️ Fechamento não confirmado para {position_key} via stop loss. "
+                        "Mantendo rastreamento da posição."
                     )
-                    if closed:
-                        self.positions.close(position_key)
-                    else:
-                        logger.warning(
-                            f"⚠️ Fechamento não confirmado para {position_key} via stop loss. "
-                            "Mantendo rastreamento da posição."
-                        )
-                    continue
+                continue
         
         logger.info(f"💵 P&L Total não realizado: ${total_pnl:.2f}")
     

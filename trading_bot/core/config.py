@@ -487,9 +487,13 @@ class TradingConfig:
     USE_ATR_TRAILING: bool = _env_bool("TRADING_BOT_USE_ATR_TRAILING", True)
     TRAILING_ACTIVATION_ATR_MULT: float = _env_float("TRADING_BOT_TRAILING_ACTIVATION_ATR_MULT", 2.0)
     TRAILING_DISTANCE_ATR_MULT: float = _env_float("TRADING_BOT_TRAILING_DISTANCE_ATR_MULT", 1.0)
-    TRAILING_ACTIVATION_MIN_PERCENT: float = _env_float("TRADING_BOT_TRAILING_ACTIVATION_MIN_PERCENT", 0.40)
+    # Pisos ajustados em 2026-05-22 após análise do testnet: dist=0.20 estava
+    # cortando 84% dos trades a 0.20-0.47% do pico (avg win $0.13), enquanto
+    # os SLs caminhavam até 4-5%. RR realizado=0.12. Distance mínima de 0.50
+    # deixa o trade respirar até o TP (1.0-1.8% do risk_profile).
+    TRAILING_ACTIVATION_MIN_PERCENT: float = _env_float("TRADING_BOT_TRAILING_ACTIVATION_MIN_PERCENT", 0.80)
     TRAILING_ACTIVATION_MAX_PERCENT: float = _env_float("TRADING_BOT_TRAILING_ACTIVATION_MAX_PERCENT", 2.50)
-    TRAILING_DISTANCE_MIN_PERCENT: float = _env_float("TRADING_BOT_TRAILING_DISTANCE_MIN_PERCENT", 0.20)
+    TRAILING_DISTANCE_MIN_PERCENT: float = _env_float("TRADING_BOT_TRAILING_DISTANCE_MIN_PERCENT", 0.50)
     TRAILING_DISTANCE_MAX_PERCENT: float = _env_float("TRADING_BOT_TRAILING_DISTANCE_MAX_PERCENT", 1.50)
 
     # --- Regime Classifier (ADX + Bollinger Band Width) ---
@@ -509,6 +513,21 @@ class TradingConfig:
     REGIME_ADX_RANGE_THRESHOLD: float = _env_float("TRADING_BOT_REGIME_ADX_RANGE_THRESHOLD", 20.0)
     REGIME_BBW_SQUEEZE_PERCENT: float = _env_float("TRADING_BOT_REGIME_BBW_SQUEEZE_PERCENT", 4.0)
     REGIME_HYSTERESIS_TICKS: int = _env_int("TRADING_BOT_REGIME_HYSTERESIS_TICKS", 3)
+
+    # Gate de promoção testnet → mainnet: bloqueia switch_environment("mainnet")
+    # até a expectativa por trade no testnet superar MAINNET_PROMOTION_MIN_EXPECTANCY
+    # com pelo menos MAINNET_PROMOTION_MIN_TRADES trades fechados. Evita subir
+    # estratégia perdedora pra mainnet — bug recorrente (2026-04: estratégia
+    # com WR 80% mas expectativa quase-zero por causa de RR invertido).
+    MAINNET_PROMOTION_GATE_ENABLED: bool = _env_bool("TRADING_BOT_MAINNET_PROMOTION_GATE_ENABLED", True)
+    MAINNET_PROMOTION_MIN_TRADES: int = _env_int("TRADING_BOT_MAINNET_PROMOTION_MIN_TRADES", 100)
+    MAINNET_PROMOTION_MIN_EXPECTANCY: float = _env_float("TRADING_BOT_MAINNET_PROMOTION_MIN_EXPECTANCY", 0.10)
+
+    # SHORT só entra quando regime_committed == "trend" (ADX ≥ TREND_THRESHOLD).
+    # Em regime "range"/"squeeze"/"neutral" os SHORTs viraram whipsaw — análise
+    # do testnet (2026-05-22) mostrou que 100% dos stops cheios foram SHORTs
+    # contra retomada de alta. LONG não é gateado: 100% WR no mesmo período.
+    BLOCK_COUNTERTREND_SHORT_ENABLED: bool = _env_bool("TRADING_BOT_BLOCK_COUNTERTREND_SHORT_ENABLED", True)
 
     # --- Dashboard Web (Flask thread no processo do bot) ---
     # Por segurança o dashboard é OPT-IN (default False) — para ligar, defina
