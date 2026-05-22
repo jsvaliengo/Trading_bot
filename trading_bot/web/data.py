@@ -68,12 +68,18 @@ def collect_summary(bot) -> Dict[str, Any]:
     # Fonte de verdade: Binance
     binance_daily_realized = 0.0
     binance_unrealized = 0.0
+    binance_funding_fee = 0.0
+    binance_commission = 0.0
     wallet_balance = _safe_float(getattr(bot, "last_known_balance", 0.0) or 0.0)
     exchange = getattr(bot, "exchange", None)
     if exchange is not None:
         try:
             daily = exchange.get_daily_pnl_from_binance()
             binance_daily_realized = _safe_float(daily.get("total"))
+            # funding_fee é negativo quando paga, positivo quando recebe.
+            # commission é sempre negativo (custo).
+            binance_funding_fee = _safe_float(daily.get("funding_fee"))
+            binance_commission = _safe_float(daily.get("commission"))
         except Exception:
             pass
         try:
@@ -108,6 +114,8 @@ def collect_summary(bot) -> Dict[str, Any]:
         "total_pnl": total_pnl,
         "daily_pnl": binance_daily_realized,
         "unrealized_pnl": binance_unrealized,
+        "funding_fee_today": binance_funding_fee,
+        "commission_today": binance_commission,
         # Debug: contadores internos do bot (estimados, podem divergir)
         "bot_total_pnl": bot_total_pnl,
         "bot_daily_pnl": bot_daily_pnl,
