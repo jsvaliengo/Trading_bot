@@ -356,7 +356,10 @@ class TradingConfig:
     # 1.2% era prematuro demais em pares voláteis, fechava no ruído antes do
     # trade desenvolver. 5% dá espaço pro setup, com trailing stop como
     # mecanismo de saída final quando o lucro materializa.
-    STOP_LOSS_PERCENT: float = _env_float("TRADING_BOT_STOP_LOSS_PERCENT", 5.0)
+    # Default 0.1% — perfil de "muitas perdinhas pequenas, alguns ganhos grandes".
+    # Combina com risk_profile do trend_strong (SL min/max 0.10 abaixo) pra dar
+    # RR ~10:1 com TP 1.0%. Override por env: TRADING_BOT_STOP_LOSS_PERCENT=...
+    STOP_LOSS_PERCENT: float = _env_float("TRADING_BOT_STOP_LOSS_PERCENT", 0.1)
     
     # Stop Loss Global (baseado no capital total)
     # Se o prejuízo total atingir esse % do capital inicial, fecha TUDO e para o bot
@@ -875,13 +878,14 @@ class TradingConfig:
                     # pairs vazio = seleção automática pela Binance (top N por score)
                     "pairs": [],
                     "max_pairs": 10,
-                    # Perfil defensivo: SL mais largo (0.4-0.6%) pra resistir
-                    # a whipsaw; TP modesto (1.0-1.8%) e R:R 1:2. Ajustado em
-                    # 2026-04-22 após o perfil 0.3-0.5/1.4-3.0 acumular losses
-                    # seguidos em regime de oscilação lateral.
+                    # Perfil "lose small, win big" — SL apertado em 0.10% pra
+                    # cortar losses na primeira flutuação contrária. TP em
+                    # 1.0-1.8% mantém potencial de winners grandes (RR ~10:1).
+                    # Math: BE @ RR=10 → WR mínimo ~9%. Ajustado 2026-05-22
+                    # após análise testnet (RR 0.12 estava em break-even).
                     "risk_profile": {
-                        "stop_loss_min_percent": 0.40,
-                        "stop_loss_max_percent": 0.60,
+                        "stop_loss_min_percent": 0.10,
+                        "stop_loss_max_percent": 0.10,
                         "take_profit_min_percent": 1.0,
                         "take_profit_max_percent": 1.8,
                         "risk_reward_target": 2.0,
