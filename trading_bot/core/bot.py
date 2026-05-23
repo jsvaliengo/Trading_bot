@@ -130,7 +130,10 @@ class TradingBot:
         logger.info("🛡️  Inicializando gerenciador de risco...")
         self.risk_manager = RiskManager()
         # Improvement 2: wire real P&L from Binance into RiskManager
-        self.risk_manager._real_daily_pnl_fn = lambda: self.exchange.get_daily_pnl_from_binance().get('total', 0.0)
+        self.risk_manager._real_daily_pnl_fn = lambda: (
+            self.exchange.get_daily_pnl_from_binance().get('total', 0.0)
+            - getattr(self, 'daily_pnl_binance_baseline', 0.0)
+        )
 
         logger.info("📱 Inicializando notificações Telegram...")
         self.telegram = TelegramNotifier(
@@ -204,6 +207,13 @@ class TradingBot:
         self.trades_win_total = 0.0
         self.trades_loss_total = 0.0
         self.total_fees_paid = 0.0
+        # Baseline do PnL diário da Binance no momento do anchor (startup com
+        # state fresco OU início de novo dia UTC). Subtraído nas chamadas de
+        # display pra que /portfolio comece em $0 após /reset, mantendo o
+        # alinhamento entre os contadores internos (zerados) e a API da
+        # Binance (que carrega resíduo do dia até 00:00 UTC).
+        self.daily_pnl_binance_baseline = 0.0
+        self._daily_baseline_date: str | None = None
         self.trades_by_symbol = {}
         self.trades_by_strategy = {}
         self.daily_target_reached = False
@@ -577,6 +587,8 @@ class TradingBot:
             'trades_win_total': self.trades_win_total,
             'trades_loss_total': self.trades_loss_total,
             'total_fees_paid': self.total_fees_paid,
+            'daily_pnl_binance_baseline': float(getattr(self, 'daily_pnl_binance_baseline', 0.0)),
+            'daily_baseline_date': getattr(self, '_daily_baseline_date', None),
             'portfolio_history': portfolio_history_serializable,
             'trade_history': self.trade_history[-500:],
             'peak_prices': self.peak_prices,
@@ -714,6 +726,36 @@ class TradingBot:
                 self.trades_loss_total = 0.0
                 self.total_fees_paid = 0.0  # Reseta taxas também
                 logger.info("📅 Novo dia UTC! P&L diário e estatísticas resetados.")
+
+            # Baseline do PnL diário da Binance:
+            # - Se o state foi resetado manualmente ({}), 'closed_trades_count' chega 0 aqui;
+            # - Se trocou de dia UTC, daily PnL na Binance reset também (=0);
+            # Em ambos os casos, queremos display em $0. Captura o snapshot atual
+            # da Binance como ponto de ancoragem.
+            saved_baseline_date = state.get('daily_baseline_date')
+            saved_baseline_value = state.get('daily_pnl_binance_baseline')
+            fresh_state = (
+                saved_baseline_date != today_utc
+                or saved_baseline_value is None
+                or self.closed_trades_count == 0
+            )
+            if not fresh_state:
+                self.daily_pnl_binance_baseline = float(saved_baseline_value)
+                self._daily_baseline_date = saved_baseline_date
+                logger.info(f"📐 Baseline diário herdado do state: ${self.daily_pnl_binance_baseline:.4f}")
+            else:
+                try:
+                    self.daily_pnl_binance_baseline = float(
+                        self.exchange.get_daily_pnl_from_binance().get('total', 0.0) or 0.0
+                    )
+                except Exception as exc:
+                    logger.warning(f"⚠️ Falha ao ancorar baseline diário: {exc}")
+                    self.daily_pnl_binance_baseline = 0.0
+                self._daily_baseline_date = today_utc
+                logger.info(
+                    f"📐 Baseline diário ancorado: ${self.daily_pnl_binance_baseline:.4f} "
+                    f"(/portfolio agora começa em $0)"
+                )
             
             # Carrega o start_time original
             start_time_str = state.get('start_time')
@@ -4322,10 +4364,11 @@ class TradingBot:
         balance = account_info['wallet_balance']  # Saldo total da carteira
         total_unrealized = account_info['unrealized_pnl']  # P&L não realizado real
         
-        # Busca P&L diário real para o snapshot
+        # Busca P&L diário real para o snapshot — subtrai o baseline (zera o
+        # display após /reset e em rollover de dia UTC).
         daily_pnl_binance = self.exchange.get_daily_pnl_from_binance()
-        daily_pnl_real = daily_pnl_binance['total']
-        
+        daily_pnl_real = daily_pnl_binance['total'] - self.daily_pnl_binance_baseline
+
         # Cria o snapshot com dados reais
         snapshot = {
             'timestamp': now,  # UTC
@@ -4431,11 +4474,13 @@ class TradingBot:
         wallet_balance = account_info['wallet_balance']  # Saldo total da carteira (cappado em testnet)
         total_unrealized = account_info['unrealized_pnl']  # P&L não realizado
 
-        # Busca P&L diário REAL da Binance
+        # Busca P&L diário REAL da Binance — subtrai o baseline ancorado no
+        # /reset ou rollover de dia UTC (mantém alinhado aos contadores
+        # internos zerados após reset).
         daily_pnl_binance = self.exchange.get_daily_pnl_from_binance()
-        daily_pnl_real = daily_pnl_binance['total']
+        daily_pnl_real = daily_pnl_binance['total'] - self.daily_pnl_binance_baseline
 
-        # P&L total = P&L realizado do DIA (Binance) + não realizado
+        # P&L total = P&L realizado do DIA (delta-vs-baseline) + não realizado
         total_pnl = daily_pnl_real + total_unrealized
 
         # Capital ATUAL = equity efetivo. Em testnet com SIMULATED_BALANCE_USD,
