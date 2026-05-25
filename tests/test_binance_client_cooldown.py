@@ -165,3 +165,39 @@ def test_clear_symbol_cooldown_removes_active_cooldown():
     assert client.is_symbol_on_cooldown("ESPUSDT") is False
     # Idempotente
     assert client.clear_symbol_cooldown("ESPUSDT") is False
+
+
+def test_close_position_returns_false_when_order_fails():
+    """
+    Regressão: -1007 (Timeout/Unknown) na ordem de fechamento fazia
+    close_position retornar True mesmo com place_market_order retornando
+    None. Isso causava bookkeeping fantasma e loop de close (TEST/PROD
+    em 2026-05-25, +200 closes fake da mesma posição DOGE em 1 min).
+    """
+    client = _make_client()
+    client.get_open_positions = MagicMock(return_value=[
+        {"symbol": "DOGEUSDT", "side": "LONG", "quantity": 291.0}
+    ])
+    # Simula falha de envio (timeout / rejection) — place_market_order
+    # captura a exceção e retorna None.
+    client.get_symbol_info = MagicMock(return_value={"quantityPrecision": 0})
+    client._api_call = MagicMock(side_effect=_FakeApiError(-1007, "Timeout"))
+
+    from trading_bot.infra.binance_client import BinanceConnection
+
+    result = BinanceConnection.close_position(client, "DOGEUSDT", "LONG")
+    assert result is False
+
+
+def test_close_position_returns_true_when_order_succeeds():
+    client = _make_client()
+    client.get_open_positions = MagicMock(return_value=[
+        {"symbol": "DOGEUSDT", "side": "LONG", "quantity": 291.0}
+    ])
+    client.get_symbol_info = MagicMock(return_value={"quantityPrecision": 0})
+    client._api_call = MagicMock(return_value={"orderId": 1, "status": "FILLED"})
+
+    from trading_bot.infra.binance_client import BinanceConnection
+
+    result = BinanceConnection.close_position(client, "DOGEUSDT", "LONG")
+    assert result is True
