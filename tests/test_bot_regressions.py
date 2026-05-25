@@ -1373,7 +1373,7 @@ def test_hedge_strategy_uses_balanced_risk_profile_with_rr_target():
     stop_loss, take_profit = strategy.calculate_stop_loss_take_profit(
         entry_price=100.0,
         signal=Signal.STRONG_BUY,
-        atr=0.2,  # 3*ATR = 0.6% de risco (dentro da faixa)
+        atr=0.4,  # 1.5*ATR = 0.6% de risco (bate no max do perfil)
         risk_profile=risk_profile,
     )
 

@@ -703,25 +703,31 @@ class HedgeStrategy:
         return Signal.NEUTRAL
     
     def calculate_position_sizes(
-        self, 
-        signal: Signal, 
+        self,
+        signal: Signal,
         available_capital: float,
-        min_notional: float = 5.0
+        min_notional: float = 5.0,
+        sl_pct: Optional[float] = None,
     ) -> Tuple[float, float]:
         """
         Calcula o tamanho das posições LONG e SHORT baseado no sinal.
-        
-        DUAS OPÇÕES (configurável em config.USE_MIN_NOTIONAL_ONLY):
-        
-        1. USE_MIN_NOTIONAL_ONLY = True (padrão):
+
+        TRÊS MODOS (em ordem de precedência):
+
+        1. USE_RISK_BASED_SIZING = True (requer sl_pct > 0):
+           - notional = (capital × RISK_PER_TRADE_PCT/100) / (sl_pct/100)
+           - Mantém perda esperada por trade ≈ RISK_PER_TRADE_PCT da banca,
+             independente de volatilidade. Casa com SL dinâmico ATR.
+           - Floor: min_notional × SAFETY_MARGIN.
+           - Cap: capital × MAX_POSITION_PERCENT × LEVERAGE (margem).
+
+        2. USE_MIN_NOTIONAL_ONLY = True:
            - SEMPRE usa o valor MÍNIMO do par + margem de segurança
-           - Ideal para diversificar em mais pares com capital limitado
            - Ex: Mínimo $5 + 25% = $6.25 por posição
-        
-        2. USE_MIN_NOTIONAL_ONLY = False:
-           - Usa o MAIOR entre X% do capital OU o mínimo do par
-           - Ideal para capitalizar mais em cada trade
-        
+
+        3. USE_MIN_NOTIONAL_ONLY = False:
+           - Usa o MAIOR entre MAX_POSITION_PERCENT do capital OU o mínimo
+
         A Binance exige um valor MÍNIMO POR POSIÇÃO (não pelo total).
         Então para hedge completo: 2 × mínimo da moeda (LONG + SHORT)
         """
@@ -730,7 +736,7 @@ class HedgeStrategy:
         # Margem de segurança de 25% acima do mínimo da Binance
         SAFETY_MARGIN = 1.25
         min_per_position = min_notional * SAFETY_MARGIN
-        
+
         # Primeiro calcula a proporção baseada no sinal
         if signal == Signal.STRONG_BUY:
             long_ratio, short_ratio = 0.7, 0.3
@@ -743,11 +749,28 @@ class HedgeStrategy:
         else:  # NEUTRAL
             long_ratio = self.config.HEDGE_RATIO
             short_ratio = 1 - self.config.HEDGE_RATIO
-        
+
         # ============================================
         # DECIDE O TAMANHO DAS POSIÇÕES
         # ============================================
-        if self.config.USE_MIN_NOTIONAL_ONLY:
+        use_risk_based = bool(getattr(self.config, "USE_RISK_BASED_SIZING", False))
+        if use_risk_based and sl_pct is not None and float(sl_pct) > 0:
+            risk_pct = float(getattr(self.config, "RISK_PER_TRADE_PCT", 0.5))
+            risk_dollars = available_capital * (risk_pct / 100.0)
+            base_notional = risk_dollars / (float(sl_pct) / 100.0)
+            # Cap pela margem disponível com alavancagem (mesma trava do modo legado)
+            max_position_pct = float(getattr(self.config, "MAX_POSITION_PERCENT", 0.08))
+            leverage = float(getattr(self.config, "LEVERAGE", 10))
+            margin_cap = available_capital * max_position_pct * leverage
+            base_notional = min(base_notional, margin_cap)
+            base_notional = max(base_notional, min_per_position)
+            long_size = base_notional
+            short_size = base_notional
+            logger.info(
+                f"📊 Risk-based: risk={risk_pct:.2f}% SL={float(sl_pct):.3f}% "
+                f"→ notional ${base_notional:.2f} (risk_$={risk_dollars:.2f})"
+            )
+        elif self.config.USE_MIN_NOTIONAL_ONLY:
             # SEMPRE usa o mínimo do par (para diversificar mais)
             long_size = min_per_position
             short_size = min_per_position
@@ -755,11 +778,11 @@ class HedgeStrategy:
         else:
             # Usa o MAIOR entre percentual e mínimo
             percent_value = available_capital * self.config.MAX_POSITION_PERCENT
-            
+
             # Calcula os valores iniciais baseados no percentual
             long_size = percent_value * long_ratio
             short_size = percent_value * short_ratio
-            
+
             # Garante que cada posição atenda ao mínimo
             long_size = max(long_size, min_per_position)
             short_size = max(short_size, min_per_position)
@@ -898,7 +921,9 @@ class HedgeStrategy:
             risk_reward_target = max(1.0, float(profile.get("risk_reward_target", 2.0)))
 
             if atr and atr > 0 and entry_price > 0:
-                base_stop_loss_pct = (float(atr) * 3.0 / float(entry_price)) * 100.0
+                # ATR x 1.5 — padrão de scalping institucional (vs 3x do swing).
+                # Evita stop por ruído sem virar bomba em altcoin volátil.
+                base_stop_loss_pct = (float(atr) * 1.5 / float(entry_price)) * 100.0
             else:
                 base_stop_loss_pct = (stop_loss_min + stop_loss_max) / 2.0
 
@@ -973,19 +998,6 @@ class HedgeStrategy:
         if entry_price <= 0:
             return None
 
-        long_size, short_size = self.calculate_position_sizes(
-            candidate_signal,
-            available_capital,
-            min_notional=min_notional,
-        )
-        if long_size == 0 and short_size == 0:
-            logger.info(
-                "⏸️ Pulando %s - sem sizing válido para candidato de IA (%s)",
-                symbol,
-                getattr(self, "_last_sizing_decision", "unknown"),
-            )
-            return None
-
         closes = [self._to_float(k.get("close")) for k in execution_klines]
         highs = [self._to_float(k.get("high")) for k in execution_klines]
         lows = [self._to_float(k.get("low")) for k in execution_klines]
@@ -996,6 +1008,25 @@ class HedgeStrategy:
             atr,
             risk_profile=risk_profile,
         )
+        sl_pct = (
+            abs(float(entry_price) - float(stop_loss)) / float(entry_price) * 100.0
+            if entry_price and stop_loss and entry_price > 0
+            else None
+        )
+
+        long_size, short_size = self.calculate_position_sizes(
+            candidate_signal,
+            available_capital,
+            min_notional=min_notional,
+            sl_pct=sl_pct,
+        )
+        if long_size == 0 and short_size == 0:
+            logger.info(
+                "⏸️ Pulando %s - sem sizing válido para candidato de IA (%s)",
+                symbol,
+                getattr(self, "_last_sizing_decision", "unknown"),
+            )
+            return None
         trailing_params = self.ta.compute_atr_based_trailing(entry_price, atr)
 
         ai_metadata: Dict[str, Any] = {
@@ -1062,14 +1093,31 @@ class HedgeStrategy:
         
         # Preço atual
         entry_price = klines[-1]['close']
-        
+
+        # Calcula ATR primeiro pra alimentar SL/TP dinâmico
+        closes = [k['close'] for k in klines]
+        highs = [k['high'] for k in klines]
+        lows = [k['low'] for k in klines]
+        atr = self.ta.calculate_atr(highs, lows, closes)
+
+        # SL/TP antes do sizing pra suportar risk-based sizing (precisa de sl_pct)
+        stop_loss, take_profit = self.calculate_stop_loss_take_profit(
+            entry_price, signal, atr, risk_profile=risk_profile
+        )
+        sl_pct = (
+            abs(float(entry_price) - float(stop_loss)) / float(entry_price) * 100.0
+            if entry_price and stop_loss and entry_price > 0
+            else None
+        )
+
         # Calcula tamanhos das posições (sistema inteligente com mínimo garantido)
         long_size, short_size = self.calculate_position_sizes(
-            signal, 
+            signal,
             available_capital,
-            min_notional=min_notional
+            min_notional=min_notional,
+            sl_pct=sl_pct,
         )
-        
+
         # Se retornou zero, pode ser falta de capital OU sinal neutro (modo direcional).
         if long_size == 0 and short_size == 0:
             sizing_reason = str(getattr(self, "_last_sizing_decision", "unknown"))
@@ -1080,17 +1128,6 @@ class HedgeStrategy:
             else:
                 logger.info(f"⏸️ Pulando {symbol} - sem sizing válido ({sizing_reason})")
             return None
-        
-        # Calcula ATR para SL/TP dinâmico
-        closes = [k['close'] for k in klines]
-        highs = [k['high'] for k in klines]
-        lows = [k['low'] for k in klines]
-        atr = self.ta.calculate_atr(highs, lows, closes)
-        
-        # Calcula SL e TP
-        stop_loss, take_profit = self.calculate_stop_loss_take_profit(
-            entry_price, signal, atr, risk_profile=risk_profile
-        )
         
         # Calcula níveis de DCA (ATR-based quando USE_ATR_DCA=True)
         dca_levels = self.calculate_dca_levels(entry_price, signal, atr=atr)

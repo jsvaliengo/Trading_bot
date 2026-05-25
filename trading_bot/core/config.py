@@ -265,6 +265,16 @@ class TradingConfig:
     
     # Usar sempre o valor MÍNIMO aceitável de cada par
     USE_MIN_NOTIONAL_ONLY: bool = True
+
+    # Sizing baseado em risco (opt-in). Quando ativado, sobrescreve
+    # USE_MIN_NOTIONAL_ONLY e MAX_POSITION_PERCENT: o notional da posição
+    # é dimensionado pra que um stop-loss completo perca exatamente
+    # RISK_PER_TRADE_PCT % da banca. Fórmula:
+    #     notional = (capital * RISK_PER_TRADE_PCT/100) / (sl_pct/100)
+    # Requer SL/TP já calculados no momento do sizing (passado via sl_pct).
+    # Sem sl_pct disponível, faz fallback pro comportamento padrão.
+    USE_RISK_BASED_SIZING: bool = False
+    RISK_PER_TRADE_PCT: float = 0.5
     
     # ============================================
     # ESTRATÉGIA DE TRADING
@@ -878,16 +888,15 @@ class TradingConfig:
                     # pairs vazio = seleção automática pela Binance (top N por score)
                     "pairs": [],
                     "max_pairs": 10,
-                    # Perfil "lose small, win big" — SL apertado em 0.10% pra
-                    # cortar losses na primeira flutuação contrária. TP em
-                    # 1.0-1.8% mantém potencial de winners grandes (RR ~10:1).
-                    # Math: BE @ RR=10 → WR mínimo ~9%. Ajustado 2026-05-22
-                    # após análise testnet (RR 0.12 estava em break-even).
+                    # SL/TP dinâmicos ancorados em ATR (multiplier 1.5x em
+                    # strategy.calculate_stop_loss_take_profit). Janela do cap
+                    # permite o ATR respirar entre par calmo (BTC) e altcoin
+                    # volátil. RR target 2.0 mantém a média; TP escala junto.
                     "risk_profile": {
-                        "stop_loss_min_percent": 0.10,
-                        "stop_loss_max_percent": 0.10,
-                        "take_profit_min_percent": 1.0,
-                        "take_profit_max_percent": 1.8,
+                        "stop_loss_min_percent": 0.15,
+                        "stop_loss_max_percent": 0.80,
+                        "take_profit_min_percent": 0.30,
+                        "take_profit_max_percent": 2.50,
                         "risk_reward_target": 2.0,
                     },
                 },
@@ -1075,10 +1084,10 @@ class TradingConfig:
                         break
             return float(default)
 
-        stop_loss_min = _to_float("stop_loss_min_percent", "stop_loss_percent_min", default=0.4)
-        stop_loss_max = _to_float("stop_loss_max_percent", "stop_loss_percent_max", default=0.6)
-        take_profit_min = _to_float("take_profit_min_percent", "take_profit_percent_min", default=0.8)
-        take_profit_max = _to_float("take_profit_max_percent", "take_profit_percent_max", default=1.2)
+        stop_loss_min = _to_float("stop_loss_min_percent", "stop_loss_percent_min", default=0.15)
+        stop_loss_max = _to_float("stop_loss_max_percent", "stop_loss_percent_max", default=0.80)
+        take_profit_min = _to_float("take_profit_min_percent", "take_profit_percent_min", default=0.30)
+        take_profit_max = _to_float("take_profit_max_percent", "take_profit_percent_max", default=2.50)
         rr_target = _to_float("risk_reward_target", "risk_reward_ratio", default=2.0)
 
         stop_loss_min = max(0.05, stop_loss_min)
