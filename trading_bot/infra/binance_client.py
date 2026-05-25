@@ -1584,18 +1584,30 @@ class BinanceConnection:
                 if pos['symbol'] == symbol and pos['side'] == position_side:
                     # Define o lado da ordem para fechar
                     close_side = 'SELL' if position_side == 'LONG' else 'BUY'
-                    
-                    # Envia ordem para fechar
-                    self.place_market_order(
+
+                    # Envia ordem para fechar — captura retorno pra detectar
+                    # falha de envio (place_market_order retorna None quando
+                    # a Binance rejeita ou dá -1007 Timeout/Unknown). Sem
+                    # essa verificação o caller bookkeeping um close fake
+                    # e o loop de monitor tenta fechar a mesma posição em
+                    # toda iteração.
+                    order = self.place_market_order(
                         symbol=symbol,
                         side=close_side,
                         position_side=position_side,
                         quantity=pos['quantity']
                     )
-                    
+                    if order is None:
+                        logger.error(
+                            f"❌ Ordem de fechamento falhou: {position_side} {symbol} "
+                            "(place_market_order retornou None — ver erro acima). "
+                            "Posição segue aberta na corretora."
+                        )
+                        return False
+
                     logger.info(f"✅ Posição fechada: {position_side} {symbol}")
                     return True
-            
+
             logger.warning(f"Posição não encontrada: {position_side} {symbol}")
             return False
             
