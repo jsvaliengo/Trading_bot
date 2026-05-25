@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="pt-BR" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trading Bot — {{ environment|upper }}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body data-environment="{{ environment }}" data-poll-interval="{{ poll_interval }}">
+
+    <div class="app-shell">
+
+        <!-- ═══════════════ SIDEBAR ═══════════════ -->
+        <aside class="sidebar">
+            <div class="brand">
+                <span class="brand-mark">⟁</span>
+                <span class="brand-name">Trading Bot</span>
+            </div>
+
+            <div class="env-pill env-{{ environment }}">{{ environment|upper }}</div>
+
+            <nav class="nav">
+                <button class="nav-item active" data-target="dashboard-view">
+                    <span class="nav-icon">⌂</span><span>Dashboard</span>
+                </button>
+                <button class="nav-item" data-target="positions-view">
+                    <span class="nav-icon">▣</span><span>Posições</span>
+                </button>
+                <button class="nav-item" data-target="trades-view">
+                    <span class="nav-icon">⇄</span><span>Trades</span>
+                </button>
+                <button class="nav-item" data-target="regime-view">
+                    <span class="nav-icon">🌀</span><span>Regime</span>
+                </button>
+            </nav>
+
+            <div class="sidebar-footer">
+                <button id="theme-toggle" class="theme-toggle" title="Alternar tema">
+                    <span class="theme-icon-dark">🌙</span>
+                    <span class="theme-icon-light">☀</span>
+                </button>
+                <div class="connection-indicator">
+                    <span class="status-pill" id="status-connection">conectando…</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- ═══════════════ MAIN ═══════════════ -->
+        <main class="main">
+
+            <header class="topbar">
+                <div>
+                    <h1 class="page-title" id="page-title">Dashboard</h1>
+                    <p class="page-sub" id="page-sub">Atualizado: <span id="kpi-last-update">—</span></p>
+                </div>
+                <div class="topbar-actions">
+                    <span class="status-pill" id="status-running">—</span>
+                    <span class="status-pill" id="status-ai">AI: —</span>
+                </div>
+            </header>
+
+            <!-- KPIs -->
+            <section class="kpi-row">
+                <article class="card kpi kpi-split">
+                    <div class="kpi-head">
+                        <span class="kpi-icon" style="background:linear-gradient(135deg,#5cf2a8,#00b894)">💰</span>
+                        <span class="kpi-label">Saldo</span>
+                    </div>
+                    <div class="kpi-pair">
+                        <div class="kpi-pair-col">
+                            <span class="kpi-pair-label">Atual</span>
+                            <span class="kpi-value" id="kpi-balance">—</span>
+                        </div>
+                        <div class="kpi-pair-sep"></div>
+                        <div class="kpi-pair-col">
+                            <span class="kpi-pair-label">Inicial</span>
+                            <span class="kpi-value kpi-value-muted" id="kpi-initial">—</span>
+                        </div>
+                    </div>
+                    <div class="kpi-sub" id="kpi-balance-delta">—</div>
+                </article>
+
+                <article class="card kpi">
+                    <div class="kpi-head">
+                        <span class="kpi-icon" style="background:linear-gradient(135deg,#4fd6ff,#2196f3)">📊</span>
+                        <span class="kpi-label">P&amp;L Total</span>
+                    </div>
+                    <div class="kpi-value" id="kpi-pnl-total">—</div>
+                    <div class="kpi-sub" id="kpi-roi">ROI: —</div>
+                </article>
+
+                <article class="card kpi">
+                    <div class="kpi-head">
+                        <span class="kpi-icon" style="background:linear-gradient(135deg,#ffb84f,#ff8c00)">📆</span>
+                        <span class="kpi-label">P&amp;L Hoje</span>
+                    </div>
+                    <div class="kpi-value" id="kpi-pnl-daily">—</div>
+                    <div class="kpi-sub" id="kpi-closed-trades">Trades fechados: —</div>
+                </article>
+
+                <article class="card kpi">
+                    <div class="kpi-head">
+                        <span class="kpi-icon" style="background:linear-gradient(135deg,#a78bfa,#7c3aed)">⚡</span>
+                        <span class="kpi-label">Funding Fee (hoje)</span>
+                    </div>
+                    <div class="kpi-value" id="kpi-funding">—</div>
+                    <div class="kpi-sub" id="kpi-funding-sub">—</div>
+                </article>
+            </section>
+
+            <!-- DASHBOARD VIEW (default) -->
+            <section class="view active" id="dashboard-view">
+
+                <!-- Equity Chart -->
+                <article class="card chart-card">
+                    <header class="card-head">
+                        <div>
+                            <h2>Equity</h2>
+                            <p class="card-sub" id="chart-range">—</p>
+                        </div>
+                        <div class="chart-tabs">
+                            <button class="chip active" data-range="all">Tudo</button>
+                            <button class="chip" data-range="24h">24h</button>
+                            <button class="chip" data-range="6h">6h</button>
+                            <button class="chip" data-range="1h">1h</button>
+                        </div>
+                    </header>
+                    <div id="equity-chart" class="chart-canvas"></div>
+                </article>
+
+                <!-- Posições compactas + Regime -->
+                <div class="two-col">
+                    <article class="card">
+                        <header class="card-head">
+                            <h2>Posições abertas</h2>
+                            <span class="badge" id="positions-count">0</span>
+                        </header>
+                        <div class="table-scroll compact">
+                            <table class="table" id="positions-table-compact">
+                                <thead>
+                                    <tr><th>Par</th><th>Lado</th><th>Entrada</th><th>P&amp;L</th></tr>
+                                </thead>
+                                <tbody><tr><td colspan="4" class="empty">Sem posições.</td></tr></tbody>
+                            </table>
+                        </div>
+                    </article>
+
+                    <article class="card">
+                        <header class="card-head">
+                            <h2>Regime Classifier</h2>
+                            <span class="card-sub" id="regime-status">—</span>
+                        </header>
+                        <div class="table-scroll compact">
+                            <table class="table" id="regime-table-compact">
+                                <thead><tr><th>Par</th><th>Regime</th></tr></thead>
+                                <tbody><tr><td colspan="2" class="empty">Sem dados ainda.</td></tr></tbody>
+                            </table>
+                        </div>
+                    </article>
+                </div>
+            </section>
+
+            <!-- POSITIONS VIEW (full) -->
+            <section class="view" id="positions-view">
+                <article class="card">
+                    <header class="card-head">
+                        <h2>Posições abertas</h2>
+                        <span class="badge" id="positions-count-full">0</span>
+                    </header>
+                    <div class="table-scroll">
+                        <table class="table" id="positions-table">
+                            <thead>
+                                <tr>
+                                    <th>Par</th><th>Lado</th><th>Entrada</th><th>Atual</th>
+                                    <th>Qtd</th><th>P&amp;L</th><th>Estratégia</th>
+                                    <th>SL</th><th>TP</th><th>Trailing</th>
+                                </tr>
+                            </thead>
+                            <tbody><tr><td colspan="10" class="empty">Sem posições.</td></tr></tbody>
+                        </table>
+                    </div>
+                </article>
+            </section>
+
+            <!-- TRADES VIEW (full) -->
+            <section class="view" id="trades-view">
+                <article class="card">
+                    <header class="card-head">
+                        <h2>Trades recentes</h2>
+                        <span class="badge" id="trades-count">0</span>
+                    </header>
+                    <div class="table-scroll">
+                        <table class="table" id="trades-table">
+                            <thead>
+                                <tr>
+                                    <th>Horário</th><th>Par</th><th>Lado</th><th>Entrada</th>
+                                    <th>Saída</th><th>Taxas</th><th>P&amp;L bruto</th>
+                                    <th>P&amp;L líquido</th><th>Motivo</th>
+                                </tr>
+                            </thead>
+                            <tbody><tr><td colspan="9" class="empty">Sem trades ainda.</td></tr></tbody>
+                        </table>
+                    </div>
+                </article>
+            </section>
+
+            <!-- REGIME VIEW (full) -->
+            <section class="view" id="regime-view">
+                <article class="card">
+                    <header class="card-head">
+                        <h2>Regime Classifier</h2>
+                        <span class="card-sub" id="regime-status-full">—</span>
+                    </header>
+                    <div class="table-scroll">
+                        <table class="table" id="regime-table">
+                            <thead>
+                                <tr><th>Par</th><th>Regime comitado</th><th>Janela (hysteresis)</th></tr>
+                            </thead>
+                            <tbody><tr><td colspan="3" class="empty">Sem dados ainda.</td></tr></tbody>
+                        </table>
+                    </div>
+                </article>
+            </section>
+        </main>
+
+        <!-- ═══════════════ RIGHT PANEL ═══════════════ -->
+        <aside class="rightbar">
+
+            <!-- Hero Equity card (gradient) -->
+            <article class="card hero-card">
+                <div class="hero-bg"></div>
+                <span class="hero-label">Equity total</span>
+                <div class="hero-value" id="hero-balance">—</div>
+                <div class="hero-meta">
+                    <span class="hero-meta-label">Posições abertas</span>
+                    <span class="hero-meta-value" id="hero-positions">—</span>
+                </div>
+            </article>
+
+            <!-- Controles -->
+            <article class="card">
+                <header class="card-head">
+                    <h2>Controles</h2>
+                </header>
+                <div class="controls-grid">
+                    <button class="btn btn-warning" id="btn-pause" data-action="pause">
+                        <span class="btn-icon">⏸</span><span>Pausar</span>
+                    </button>
+                    <button class="btn btn-success" id="btn-resume" data-action="resume">
+                        <span class="btn-icon">▶</span><span>Retomar</span>
+                    </button>
+                    <button class="btn btn-danger btn-full" id="btn-close-all" data-action="close_all">
+                        <span class="btn-icon">🚨</span><span>Fechar Tudo</span>
+                    </button>
+                </div>
+            </article>
+
+            <!-- Atividade compact -->
+            <article class="card">
+                <header class="card-head">
+                    <h2>Atividade</h2>
+                    <span class="card-sub">Últimos trades</span>
+                </header>
+                <div class="activity-list" id="activity-list">
+                    <div class="activity-empty">Sem trades ainda.</div>
+                </div>
+            </article>
+        </aside>
+    </div>
+
+    <!-- Modal de confirmação -->
+    <div class="modal" id="confirm-modal" aria-hidden="true">
+        <div class="modal-card">
+            <h3 id="confirm-title">Confirmar ação</h3>
+            <p id="confirm-message">Tem certeza?</p>
+            <div class="modal-actions">
+                <button class="btn" id="confirm-cancel">Cancelar</button>
+                <button class="btn btn-danger" id="confirm-ok">Confirmar</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"></script>
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html>

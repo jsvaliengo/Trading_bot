@@ -183,6 +183,203 @@ class TechnicalAnalysis:
         return np.mean(true_ranges[-period:])
 
     @staticmethod
+    def calculate_adx(
+        highs: List[float],
+        lows: List[float],
+        closes: List[float],
+        period: int = 14,
+    ) -> float:
+        """
+        Calcula o ADX (Average Directional Index) usando o método de Wilder.
+
+        ADX mede a FORÇA da tendência (não direção):
+        - ADX > 25: tendência forte
+        - ADX < 20: mercado lateral (range)
+        - Entre 20-25: zona ambígua (transição)
+
+        Retorna 0.0 quando dados insuficientes (caller trata como indeterminado).
+        """
+        n = min(len(highs), len(lows), len(closes))
+        if n < period * 2 + 1:
+            return 0.0
+
+        highs_a = np.asarray(highs[-n:], dtype=float)
+        lows_a = np.asarray(lows[-n:], dtype=float)
+        closes_a = np.asarray(closes[-n:], dtype=float)
+
+        up_move = highs_a[1:] - highs_a[:-1]
+        down_move = lows_a[:-1] - lows_a[1:]
+
+        plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
+        minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0.0)
+
+        high_low = highs_a[1:] - lows_a[1:]
+        high_close = np.abs(highs_a[1:] - closes_a[:-1])
+        low_close = np.abs(lows_a[1:] - closes_a[:-1])
+        tr = np.maximum.reduce([high_low, high_close, low_close])
+
+        # Wilder smoothing: seed = soma do período, depois prev*(p-1)/p + atual
+        def _wilder(values: np.ndarray) -> np.ndarray:
+            out = np.zeros_like(values)
+            out[period - 1] = np.sum(values[:period])
+            for i in range(period, len(values)):
+                out[i] = out[i - 1] - (out[i - 1] / period) + values[i]
+            return out
+
+        atr_smooth = _wilder(tr)
+        plus_dm_smooth = _wilder(plus_dm)
+        minus_dm_smooth = _wilder(minus_dm)
+
+        atr_nonzero = np.where(atr_smooth > 0, atr_smooth, 1.0)
+        plus_di = 100.0 * (plus_dm_smooth / atr_nonzero)
+        minus_di = 100.0 * (minus_dm_smooth / atr_nonzero)
+
+        di_sum = plus_di + minus_di
+        di_sum_nonzero = np.where(di_sum > 0, di_sum, 1.0)
+        dx = 100.0 * np.abs(plus_di - minus_di) / di_sum_nonzero
+
+        # Seed do ADX: média dos primeiros 'period' valores válidos de DX
+        adx_seed_slice = dx[period - 1 : 2 * period - 1]
+        if len(adx_seed_slice) < period:
+            return 0.0
+        adx = float(np.mean(adx_seed_slice))
+        for i in range(2 * period - 1, len(dx)):
+            adx = (adx * (period - 1) + dx[i]) / period
+
+        return float(adx)
+
+    @staticmethod
+    def calculate_bb_width_percent(
+        prices: List[float],
+        period: int = 20,
+        std_dev: int = 2,
+    ) -> float:
+        """
+        Largura das Bandas de Bollinger como % do meio: (upper - lower) / mid * 100.
+        BBW baixo (~< 4%) tipicamente precede rompimentos violentos (squeeze).
+        """
+        lower, middle, upper = TechnicalAnalysis.calculate_bollinger_bands(
+            prices, period=period, std_dev=std_dev
+        )
+        if middle <= 0:
+            return 0.0
+        return ((upper - lower) / middle) * 100.0
+
+    @staticmethod
+    def classify_regime(
+        highs: List[float],
+        lows: List[float],
+        closes: List[float],
+    ) -> Dict[str, Any]:
+        """
+        Classifica o regime de mercado combinando ADX e BBW.
+
+        Retorna dict com 'regime' ∈ {"trend", "range", "squeeze", "neutral"},
+        além de 'adx', 'bbw_percent' e 'reason' para log.
+
+        Regras:
+          ADX ≥ TREND_THRESHOLD                       → "trend"
+          ADX ≤ RANGE_THRESHOLD e BBW > SQUEEZE       → "range"
+          ADX ≤ RANGE_THRESHOLD e BBW ≤ SQUEEZE       → "squeeze" (lateral comprimido)
+          Caso contrário (zona entre thresholds)      → "neutral"
+        """
+        adx_period = int(getattr(config, "REGIME_ADX_PERIOD", 14))
+        trend_thr = float(getattr(config, "REGIME_ADX_TREND_THRESHOLD", 25.0))
+        range_thr = float(getattr(config, "REGIME_ADX_RANGE_THRESHOLD", 20.0))
+        squeeze_thr = float(getattr(config, "REGIME_BBW_SQUEEZE_PERCENT", 4.0))
+
+        adx = TechnicalAnalysis.calculate_adx(highs, lows, closes, period=adx_period)
+        bbw = TechnicalAnalysis.calculate_bb_width_percent(closes)
+
+        if adx <= 0:
+            return {
+                "regime": "neutral",
+                "adx": adx,
+                "bbw_percent": bbw,
+                "reason": "ADX indeterminado (dados insuficientes)",
+            }
+
+        if adx >= trend_thr:
+            return {
+                "regime": "trend",
+                "adx": adx,
+                "bbw_percent": bbw,
+                "reason": f"ADX={adx:.1f} ≥ {trend_thr:.0f} (tendência forte)",
+            }
+
+        if adx <= range_thr:
+            if bbw <= squeeze_thr:
+                return {
+                    "regime": "squeeze",
+                    "adx": adx,
+                    "bbw_percent": bbw,
+                    "reason": (
+                        f"ADX={adx:.1f} ≤ {range_thr:.0f} mas BBW={bbw:.2f}% "
+                        f"≤ {squeeze_thr:.1f}% (squeeze — bloqueia range)"
+                    ),
+                }
+            return {
+                "regime": "range",
+                "adx": adx,
+                "bbw_percent": bbw,
+                "reason": (
+                    f"ADX={adx:.1f} ≤ {range_thr:.0f} e BBW={bbw:.2f}% (lateral saudável)"
+                ),
+            }
+
+        return {
+            "regime": "neutral",
+            "adx": adx,
+            "bbw_percent": bbw,
+            "reason": f"ADX={adx:.1f} entre {range_thr:.0f} e {trend_thr:.0f} (zona ambígua)",
+        }
+
+    @staticmethod
+    def compute_atr_based_trailing(
+        entry_price: float,
+        atr: float,
+    ) -> Optional[Tuple[float, float]]:
+        """
+        Retorna (activation_pct, distance_pct) para trailing dinâmico ancorado
+        em ATR%. Retorna None se ATR inválido ou ATR-trailing desabilitado.
+
+        Clamps:
+          - activation ∈ [TRAILING_ACTIVATION_MIN_PERCENT, TRAILING_ACTIVATION_MAX_PERCENT]
+          - distance ∈ [TRAILING_DISTANCE_MIN_PERCENT, TRAILING_DISTANCE_MAX_PERCENT]
+
+        Invariante preservada: activation ≥ distance + 0.15% (fee_floor round-trip).
+        Se o clamp inicial violar isso, a activation é puxada pra cima.
+        """
+        if not getattr(config, "USE_ATR_TRAILING", False):
+            return None
+        if atr is None or atr <= 0 or entry_price is None or entry_price <= 0:
+            return None
+
+        atr_pct = (float(atr) / float(entry_price)) * 100.0
+
+        act_mult = float(getattr(config, "TRAILING_ACTIVATION_ATR_MULT", 2.0))
+        dist_mult = float(getattr(config, "TRAILING_DISTANCE_ATR_MULT", 1.0))
+
+        act_min = float(getattr(config, "TRAILING_ACTIVATION_MIN_PERCENT", 0.40))
+        act_max = float(getattr(config, "TRAILING_ACTIVATION_MAX_PERCENT", 2.50))
+        dist_min = float(getattr(config, "TRAILING_DISTANCE_MIN_PERCENT", 0.20))
+        dist_max = float(getattr(config, "TRAILING_DISTANCE_MAX_PERCENT", 1.50))
+
+        activation = max(act_min, min(atr_pct * act_mult, act_max))
+        distance = max(dist_min, min(atr_pct * dist_mult, dist_max))
+
+        # Invariante de breakeven (mesmo fee_floor usado em validate_params)
+        fee_floor_pct = 0.15
+        min_activation = distance + fee_floor_pct
+        if activation < min_activation:
+            activation = min(min_activation, act_max)
+            # Se o teto da activation não cobre o piso, encolhe a distância
+            if activation < min_activation:
+                distance = max(dist_min, activation - fee_floor_pct)
+
+        return (round(activation, 4), round(distance, 4))
+
+    @staticmethod
     def calculate_vwap(
         highs: List[float],
         lows: List[float],
@@ -506,25 +703,31 @@ class HedgeStrategy:
         return Signal.NEUTRAL
     
     def calculate_position_sizes(
-        self, 
-        signal: Signal, 
+        self,
+        signal: Signal,
         available_capital: float,
-        min_notional: float = 5.0
+        min_notional: float = 5.0,
+        sl_pct: Optional[float] = None,
     ) -> Tuple[float, float]:
         """
         Calcula o tamanho das posições LONG e SHORT baseado no sinal.
-        
-        DUAS OPÇÕES (configurável em config.USE_MIN_NOTIONAL_ONLY):
-        
-        1. USE_MIN_NOTIONAL_ONLY = True (padrão):
+
+        TRÊS MODOS (em ordem de precedência):
+
+        1. USE_RISK_BASED_SIZING = True (requer sl_pct > 0):
+           - notional = (capital × RISK_PER_TRADE_PCT/100) / (sl_pct/100)
+           - Mantém perda esperada por trade ≈ RISK_PER_TRADE_PCT da banca,
+             independente de volatilidade. Casa com SL dinâmico ATR.
+           - Floor: min_notional × SAFETY_MARGIN.
+           - Cap: capital × MAX_POSITION_PERCENT × LEVERAGE (margem).
+
+        2. USE_MIN_NOTIONAL_ONLY = True:
            - SEMPRE usa o valor MÍNIMO do par + margem de segurança
-           - Ideal para diversificar em mais pares com capital limitado
            - Ex: Mínimo $5 + 25% = $6.25 por posição
-        
-        2. USE_MIN_NOTIONAL_ONLY = False:
-           - Usa o MAIOR entre X% do capital OU o mínimo do par
-           - Ideal para capitalizar mais em cada trade
-        
+
+        3. USE_MIN_NOTIONAL_ONLY = False:
+           - Usa o MAIOR entre MAX_POSITION_PERCENT do capital OU o mínimo
+
         A Binance exige um valor MÍNIMO POR POSIÇÃO (não pelo total).
         Então para hedge completo: 2 × mínimo da moeda (LONG + SHORT)
         """
@@ -533,7 +736,7 @@ class HedgeStrategy:
         # Margem de segurança de 25% acima do mínimo da Binance
         SAFETY_MARGIN = 1.25
         min_per_position = min_notional * SAFETY_MARGIN
-        
+
         # Primeiro calcula a proporção baseada no sinal
         if signal == Signal.STRONG_BUY:
             long_ratio, short_ratio = 0.7, 0.3
@@ -546,11 +749,28 @@ class HedgeStrategy:
         else:  # NEUTRAL
             long_ratio = self.config.HEDGE_RATIO
             short_ratio = 1 - self.config.HEDGE_RATIO
-        
+
         # ============================================
         # DECIDE O TAMANHO DAS POSIÇÕES
         # ============================================
-        if self.config.USE_MIN_NOTIONAL_ONLY:
+        use_risk_based = bool(getattr(self.config, "USE_RISK_BASED_SIZING", False))
+        if use_risk_based and sl_pct is not None and float(sl_pct) > 0:
+            risk_pct = float(getattr(self.config, "RISK_PER_TRADE_PCT", 0.5))
+            risk_dollars = available_capital * (risk_pct / 100.0)
+            base_notional = risk_dollars / (float(sl_pct) / 100.0)
+            # Cap pela margem disponível com alavancagem (mesma trava do modo legado)
+            max_position_pct = float(getattr(self.config, "MAX_POSITION_PERCENT", 0.08))
+            leverage = float(getattr(self.config, "LEVERAGE", 10))
+            margin_cap = available_capital * max_position_pct * leverage
+            base_notional = min(base_notional, margin_cap)
+            base_notional = max(base_notional, min_per_position)
+            long_size = base_notional
+            short_size = base_notional
+            logger.info(
+                f"📊 Risk-based: risk={risk_pct:.2f}% SL={float(sl_pct):.3f}% "
+                f"→ notional ${base_notional:.2f} (risk_$={risk_dollars:.2f})"
+            )
+        elif self.config.USE_MIN_NOTIONAL_ONLY:
             # SEMPRE usa o mínimo do par (para diversificar mais)
             long_size = min_per_position
             short_size = min_per_position
@@ -558,11 +778,11 @@ class HedgeStrategy:
         else:
             # Usa o MAIOR entre percentual e mínimo
             percent_value = available_capital * self.config.MAX_POSITION_PERCENT
-            
+
             # Calcula os valores iniciais baseados no percentual
             long_size = percent_value * long_ratio
             short_size = percent_value * short_ratio
-            
+
             # Garante que cada posição atenda ao mínimo
             long_size = max(long_size, min_per_position)
             short_size = max(short_size, min_per_position)
@@ -611,50 +831,67 @@ class HedgeStrategy:
         return (long_size, short_size)
     
     def calculate_dca_levels(
-        self, 
-        entry_price: float, 
-        signal: Signal
+        self,
+        entry_price: float,
+        signal: Signal,
+        atr: Optional[float] = None,
     ) -> List[Dict]:
         """
         Calcula os níveis de DCA (Dollar Cost Averaging).
-        
-        DCA funciona assim:
-        1. Abre posição inicial
-        2. Se o preço cai X%, adiciona mais à posição
-        3. Isso reduz o preço médio de entrada
-        4. Quando o preço volta, lucra mais rápido
-        
+
+        Modo ATR (quando USE_ATR_DCA=True e atr>0): cada nível i fica a
+        (BASE + (i-1)*INCREMENT) × ATR do preço de entrada, em %, clampado a
+        [MIN_STEP_PERCENT, MAX_STEP_PERCENT]. Defaults: 1.5×, 2.5×, 3.5× ATR.
+
+        Modo legado (atr ausente ou ATR-DCA desabilitado): step linear em
+        DCA_STEP_PERCENT × i.
+
         CUIDADO: DCA em posição perdedora pode aumentar muito o risco!
         """
         if not self.config.DCA_ENABLED:
             return []
-        
+
+        use_atr = (
+            getattr(self.config, "USE_ATR_DCA", False)
+            and atr is not None
+            and float(atr) > 0
+            and entry_price > 0
+        )
+        if use_atr:
+            atr_pct = (float(atr) / float(entry_price)) * 100.0
+            base_mult = float(getattr(self.config, "DCA_ATR_MULTIPLIER_BASE", 1.5))
+            step_inc = float(getattr(self.config, "DCA_ATR_STEP_INCREMENT", 1.0))
+            min_step_pct = float(getattr(self.config, "DCA_ATR_MIN_STEP_PERCENT", 0.5))
+            max_step_pct = float(getattr(self.config, "DCA_ATR_MAX_STEP_PERCENT", 8.0))
+
         dca_levels = []
-        current_size = 1.0  # Tamanho base
-        
+        current_size = 1.0
+
         for i in range(1, self.config.DCA_MAX_ORDERS + 1):
-            # Calcula o preço do nível DCA
-            step = self.config.DCA_STEP_PERCENT * i / 100
-            
-            # Para LONG: DCA em preços mais baixos
-            # Para SHORT: DCA em preços mais altos
+            if use_atr:
+                mult = base_mult + (i - 1) * step_inc
+                step_pct = atr_pct * mult
+                step_pct = max(min_step_pct, min(step_pct, max_step_pct))
+                step = step_pct / 100.0
+            else:
+                step = self.config.DCA_STEP_PERCENT * i / 100.0
+
             if signal in [Signal.STRONG_BUY, Signal.BUY, Signal.NEUTRAL]:
                 dca_price = entry_price * (1 - step)
                 position_side = 'LONG'
             else:
                 dca_price = entry_price * (1 + step)
                 position_side = 'SHORT'
-            
-            # Aumenta o tamanho progressivamente (Martingale suave)
+
             current_size *= self.config.DCA_MULTIPLIER
-            
+
             dca_levels.append({
                 'level': i,
                 'price': round(dca_price, 2),
                 'size_multiplier': round(current_size, 2),
-                'position_side': position_side
+                'position_side': position_side,
             })
-        
+
         return dca_levels
     
     def calculate_stop_loss_take_profit(
@@ -684,7 +921,9 @@ class HedgeStrategy:
             risk_reward_target = max(1.0, float(profile.get("risk_reward_target", 2.0)))
 
             if atr and atr > 0 and entry_price > 0:
-                base_stop_loss_pct = (float(atr) * 3.0 / float(entry_price)) * 100.0
+                # ATR x 1.5 — padrão de scalping institucional (vs 3x do swing).
+                # Evita stop por ruído sem virar bomba em altcoin volátil.
+                base_stop_loss_pct = (float(atr) * 1.5 / float(entry_price)) * 100.0
             else:
                 base_stop_loss_pct = (stop_loss_min + stop_loss_max) / 2.0
 
@@ -759,19 +998,6 @@ class HedgeStrategy:
         if entry_price <= 0:
             return None
 
-        long_size, short_size = self.calculate_position_sizes(
-            candidate_signal,
-            available_capital,
-            min_notional=min_notional,
-        )
-        if long_size == 0 and short_size == 0:
-            logger.info(
-                "⏸️ Pulando %s - sem sizing válido para candidato de IA (%s)",
-                symbol,
-                getattr(self, "_last_sizing_decision", "unknown"),
-            )
-            return None
-
         closes = [self._to_float(k.get("close")) for k in execution_klines]
         highs = [self._to_float(k.get("high")) for k in execution_klines]
         lows = [self._to_float(k.get("low")) for k in execution_klines]
@@ -782,6 +1008,44 @@ class HedgeStrategy:
             atr,
             risk_profile=risk_profile,
         )
+        sl_pct = (
+            abs(float(entry_price) - float(stop_loss)) / float(entry_price) * 100.0
+            if entry_price and stop_loss and entry_price > 0
+            else None
+        )
+
+        long_size, short_size = self.calculate_position_sizes(
+            candidate_signal,
+            available_capital,
+            min_notional=min_notional,
+            sl_pct=sl_pct,
+        )
+        if long_size == 0 and short_size == 0:
+            logger.info(
+                "⏸️ Pulando %s - sem sizing válido para candidato de IA (%s)",
+                symbol,
+                getattr(self, "_last_sizing_decision", "unknown"),
+            )
+            return None
+        trailing_params = self.ta.compute_atr_based_trailing(entry_price, atr)
+
+        ai_metadata: Dict[str, Any] = {
+            "strategy_type": "trend_signal",
+            "custom_stop_loss": round(stop_loss, 8),
+            "custom_take_profit": round(take_profit, 8),
+            "signal_timestamp": datetime.now(),
+            "source_signal": Signal.NEUTRAL.name,
+            "ai_override_from_neutral": True,
+            "ai_override_reason": (
+                f"tendência alinhada em {exec_direction} sem gatilho clássico confirmado"
+            ),
+            "trend_candidate_side": exec_direction,
+            "execution_direction": exec_direction,
+            "confirmation_direction": confirm_direction,
+        }
+        if trailing_params is not None:
+            ai_metadata["trailing_activation_pct"] = trailing_params[0]
+            ai_metadata["trailing_distance_pct"] = trailing_params[1]
 
         return TradeSetup(
             symbol=symbol,
@@ -792,20 +1056,7 @@ class HedgeStrategy:
             stop_loss=stop_loss,
             take_profit=take_profit,
             dca_levels=[],
-            metadata={
-                "strategy_type": "trend_signal",
-                "custom_stop_loss": round(stop_loss, 8),
-                "custom_take_profit": round(take_profit, 8),
-                "signal_timestamp": datetime.now(),
-                "source_signal": Signal.NEUTRAL.name,
-                "ai_override_from_neutral": True,
-                "ai_override_reason": (
-                    f"tendência alinhada em {exec_direction} sem gatilho clássico confirmado"
-                ),
-                "trend_candidate_side": exec_direction,
-                "execution_direction": exec_direction,
-                "confirmation_direction": confirm_direction,
-            },
+            metadata=ai_metadata,
         )
 
     def generate_trade_setup(
@@ -842,14 +1093,31 @@ class HedgeStrategy:
         
         # Preço atual
         entry_price = klines[-1]['close']
-        
+
+        # Calcula ATR primeiro pra alimentar SL/TP dinâmico
+        closes = [k['close'] for k in klines]
+        highs = [k['high'] for k in klines]
+        lows = [k['low'] for k in klines]
+        atr = self.ta.calculate_atr(highs, lows, closes)
+
+        # SL/TP antes do sizing pra suportar risk-based sizing (precisa de sl_pct)
+        stop_loss, take_profit = self.calculate_stop_loss_take_profit(
+            entry_price, signal, atr, risk_profile=risk_profile
+        )
+        sl_pct = (
+            abs(float(entry_price) - float(stop_loss)) / float(entry_price) * 100.0
+            if entry_price and stop_loss and entry_price > 0
+            else None
+        )
+
         # Calcula tamanhos das posições (sistema inteligente com mínimo garantido)
         long_size, short_size = self.calculate_position_sizes(
-            signal, 
+            signal,
             available_capital,
-            min_notional=min_notional
+            min_notional=min_notional,
+            sl_pct=sl_pct,
         )
-        
+
         # Se retornou zero, pode ser falta de capital OU sinal neutro (modo direcional).
         if long_size == 0 and short_size == 0:
             sizing_reason = str(getattr(self, "_last_sizing_decision", "unknown"))
@@ -861,19 +1129,10 @@ class HedgeStrategy:
                 logger.info(f"⏸️ Pulando {symbol} - sem sizing válido ({sizing_reason})")
             return None
         
-        # Calcula ATR para SL/TP dinâmico
-        closes = [k['close'] for k in klines]
-        highs = [k['high'] for k in klines]
-        lows = [k['low'] for k in klines]
-        atr = self.ta.calculate_atr(highs, lows, closes)
-        
-        # Calcula SL e TP
-        stop_loss, take_profit = self.calculate_stop_loss_take_profit(
-            entry_price, signal, atr, risk_profile=risk_profile
-        )
-        
-        # Calcula níveis de DCA
-        dca_levels = self.calculate_dca_levels(entry_price, signal)
+        # Calcula níveis de DCA (ATR-based quando USE_ATR_DCA=True)
+        dca_levels = self.calculate_dca_levels(entry_price, signal, atr=atr)
+        # Trailing dinâmico ancorado em ATR (None se desabilitado / atr ruim)
+        trailing_params = self.ta.compute_atr_based_trailing(entry_price, atr)
         
         logger.info(f"""
         📊 Trade Setup para {symbol}:
@@ -886,6 +1145,11 @@ class HedgeStrategy:
         └── DCA Levels: {len(dca_levels)}
         """)
         
+        setup_metadata: Dict[str, Any] = {}
+        if trailing_params is not None:
+            setup_metadata["trailing_activation_pct"] = trailing_params[0]
+            setup_metadata["trailing_distance_pct"] = trailing_params[1]
+
         return TradeSetup(
             symbol=symbol,
             signal=signal,
@@ -894,7 +1158,8 @@ class HedgeStrategy:
             entry_price=entry_price,
             stop_loss=stop_loss,
             take_profit=take_profit,
-            dca_levels=[d['price'] for d in dca_levels]
+            dca_levels=[d['price'] for d in dca_levels],
+            metadata=setup_metadata,
         )
 
 
@@ -1158,6 +1423,28 @@ class RangeScalpingStrategy:
             depth,
         )
 
+        highs_for_atr = [float(k["high"]) for k in klines]
+        lows_for_atr = [float(k["low"]) for k in klines]
+        closes_for_atr = [float(k["close"]) for k in klines]
+        atr_value = TechnicalAnalysis.calculate_atr(highs_for_atr, lows_for_atr, closes_for_atr)
+        trailing_params = TechnicalAnalysis.compute_atr_based_trailing(current_price, atr_value)
+
+        range_metadata: Dict[str, Any] = {
+            "strategy_type": "range_scalping",
+            "range_support": round(support, 8),
+            "range_resistance": round(resistance, 8),
+            "range_mid_price": round(context["mid_price"], 8),
+            "range_amplitude_pct": round(context["amplitude_pct"], 6),
+            "custom_stop_loss": round(stop_loss, 8),
+            "custom_take_profit": round(take_profit, 8),
+            "position_multiplier": round(size_multiplier, 6),
+            "range_window_candles": int(context["window_size"]),
+            "entry_zone": zone_side,
+        }
+        if trailing_params is not None:
+            range_metadata["trailing_activation_pct"] = trailing_params[0]
+            range_metadata["trailing_distance_pct"] = trailing_params[1]
+
         return TradeSetup(
             symbol=symbol,
             signal=signal,
@@ -1167,18 +1454,7 @@ class RangeScalpingStrategy:
             stop_loss=round(stop_loss, 8),
             take_profit=round(take_profit, 8),
             dca_levels=dca_levels,
-            metadata={
-                "strategy_type": "range_scalping",
-                "range_support": round(support, 8),
-                "range_resistance": round(resistance, 8),
-                "range_mid_price": round(context["mid_price"], 8),
-                "range_amplitude_pct": round(context["amplitude_pct"], 6),
-                "custom_stop_loss": round(stop_loss, 8),
-                "custom_take_profit": round(take_profit, 8),
-                "position_multiplier": round(size_multiplier, 6),
-                "range_window_candles": int(context["window_size"]),
-                "entry_zone": zone_side,
-            },
+            metadata=range_metadata,
         )
 
 

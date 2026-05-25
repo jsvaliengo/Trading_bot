@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 
 @dataclass
@@ -90,10 +90,6 @@ class LoopScheduler:
         if task is None:
             return
         task.next_time = float(when)
-
-    def next_times(self, names: List[str]) -> List[float]:
-        """Retorna timestamps de múltiplas tarefas — útil pra calcular sleep."""
-        return [self.next_time(n) for n in names]
 
 
 # ---------------------------------------------------------------------------

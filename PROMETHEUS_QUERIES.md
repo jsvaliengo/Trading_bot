@@ -45,6 +45,35 @@ trading_bot_peak_equity_usd
 trading_bot_fees_paid_total_usd
 ```
 
+## 💸 Custos operacionais (taxas por estratégia/símbolo)
+
+A métrica `trading_bot_trades_fees_usd_total{strategy,symbol}` é Counter — sempre cresce. Use `rate()` ou `increase()` pra janelas, ou consulte direto pra acumulado vitalício do processo.
+
+```promql
+# Taxas totais acumuladas (USD), agregadas por estratégia
+sum by (strategy) (trading_bot_trades_fees_usd_total)
+
+# Taxas pagas na última 1h (USD/h)
+sum by (strategy) (rate(trading_bot_trades_fees_usd_total[1h])) * 3600
+
+# Taxas pagas nas últimas 24h (USD total no período)
+sum(increase(trading_bot_trades_fees_usd_total[24h]))
+
+# Top 10 pares com mais gasto em taxas
+topk(10, sum by (symbol) (trading_bot_trades_fees_usd_total))
+
+# Razão fees / P&L bruto vencedor — "quanto da grana ganha vai pra fee"
+# Valor > 0.5 já é warning; > 1 significa que as taxas comem o que ganha.
+sum(trading_bot_trades_fees_usd_total)
+  /
+clamp_min(sum(trading_bot_trades_pnl_usd_total{result="win"}), 1e-9)
+
+# Fees médias por trade fechado (USD/trade)
+sum(trading_bot_trades_fees_usd_total)
+  /
+clamp_min(sum(trading_bot_trades_closed_total), 1)
+```
+
 ## 🎯 P&L por motivo de fechamento
 
 ```promql

@@ -79,7 +79,7 @@ class ExecutionEngine:
                 f"⏳ {symbol} em cooldown estrutural — entrada {requested_side} cancelada "
                 f"(code={cooldown_info['code']}, {remaining_min}min restantes)"
             )
-            bot._notify_ai_approved_trade_block(
+            bot.block_reporter.notify_blocked(
                 symbol=symbol,
                 side=requested_side,
                 strategy_name=strategy_name,
@@ -104,6 +104,10 @@ class ExecutionEngine:
         custom_stop_loss = _safe_float(setup_metadata.get("custom_stop_loss", setup.stop_loss))
         custom_take_profit = _safe_float(setup_metadata.get("custom_take_profit", setup.take_profit))
         range_mid_price = _safe_float(setup_metadata.get("range_mid_price"))
+        # Trailing dinâmico computado pela strategy a partir do ATR no momento
+        # do setup. None aqui significa "usar config global no _check_trailing_stop".
+        trailing_activation_pct = _safe_float(setup_metadata.get("trailing_activation_pct"))
+        trailing_distance_pct = _safe_float(setup_metadata.get("trailing_distance_pct"))
         exchange_stop_loss_enabled = bool(getattr(config, "USE_INDIVIDUAL_STOP_LOSS", False))
         if not exchange_stop_loss_enabled:
             custom_stop_loss = None
@@ -133,7 +137,7 @@ class ExecutionEngine:
             price = bot.exchange.get_symbol_price(symbol)
             if price <= 0:
                 logger.error(f"❌ Preço inválido para {symbol}: {price} — abortando abertura")
-                bot._notify_ai_approved_trade_block(
+                bot.block_reporter.notify_blocked(
                     symbol=symbol,
                     side=requested_side,
                     strategy_name=strategy_name,
@@ -180,7 +184,7 @@ class ExecutionEngine:
                 )
                 order_size = min_margin_needed
 
-            order_size, double_first_applied, double_first_state_key = bot._apply_double_first_order_size(
+            order_size, double_first_applied, double_first_state_key = bot.double_first_policy.try_double(
                 symbol=symbol,
                 side=trade_side,
                 order_size=order_size,
@@ -196,7 +200,7 @@ class ExecutionEngine:
                         logger.info(
                             f"⏱️ Sinal expirado para {symbol}: {_signal_age:.0f}s > {_max_age:.0f}s — pulando"
                         )
-                        bot._notify_ai_approved_trade_block(
+                        bot.block_reporter.notify_blocked(
                             symbol=symbol,
                             side=requested_side,
                             strategy_name=strategy_name,
@@ -215,7 +219,7 @@ class ExecutionEngine:
                 logger.warning(
                     f"⚠️ Exposição total {_notional_pct:.1f}% excede limite {_max_notional:.0f}%"
                 )
-                bot._notify_ai_approved_trade_block(
+                bot.block_reporter.notify_blocked(
                     symbol=symbol,
                     side=requested_side,
                     strategy_name=strategy_name,
@@ -238,7 +242,7 @@ class ExecutionEngine:
                             f"⚠️ {symbol}: Margem da posição {_conc_pct:.1f}% do saldo "
                             f"excede limite {_max_conc:.0f}%"
                         )
-                        bot._notify_ai_approved_trade_block(
+                        bot.block_reporter.notify_blocked(
                             symbol=symbol,
                             side=requested_side,
                             strategy_name=strategy_name,
@@ -262,7 +266,7 @@ class ExecutionEngine:
                         f"   Mínimo: ${min_notional:.2f}, Notional: ${effective_notional:.2f} "
                         f"(Order Size: ${order_size:.2f} x {leverage:g}x)"
                     )
-                    bot._notify_ai_approved_trade_block(
+                    bot.block_reporter.notify_blocked(
                         symbol=symbol,
                         side="LONG",
                         strategy_name=strategy_name,
@@ -296,7 +300,7 @@ class ExecutionEngine:
                     else:
                         block_reason = "Falha ao abrir posição LONG"
                         block_detail = "A exchange rejeitou ou não retornou a ordem de mercado."
-                    bot._notify_ai_approved_trade_block(
+                    bot.block_reporter.notify_blocked(
                         symbol=symbol,
                         side="LONG",
                         strategy_name=strategy_name,
@@ -307,7 +311,7 @@ class ExecutionEngine:
                     return False
 
                 if double_first_applied:
-                    bot._mark_double_first_used(
+                    bot.double_first_policy.mark_used(
                         state_key=double_first_state_key,
                         symbol=symbol,
                         side="LONG",
@@ -339,43 +343,34 @@ class ExecutionEngine:
                     strategy_name=strategy_name
                 )
 
-                # Registra o trade
-                trade_record = {
-                    'timestamp': datetime.now().isoformat(),
-                    'symbol': symbol,
-                    'signal': signal_name,
-                    'side': 'LONG',
-                    'qty': long_qty,
-                    'value': order_size,
-                    'entry_price': price,
-                    'stop_loss': custom_stop_loss,
-                    'take_profit': custom_take_profit if custom_take_profit else setup.take_profit,
-                    'strategy_name': str(strategy_name or "primary"),
-                    'strategy_type': strategy_type,
-                    'double_first': bool(double_first_applied),
-                    'ai_consultive': dict(setup_metadata.get('ai_consultive', {}) or {}),
-                }
-                bot.trade_history.append(trade_record)
+                bot.ledger.record_trade_opened(
+                    symbol=symbol,
+                    signal=signal_name,
+                    side="LONG",
+                    quantity=long_qty,
+                    order_size=order_size,
+                    entry_price=price,
+                    stop_loss=custom_stop_loss,
+                    take_profit=custom_take_profit if custom_take_profit else setup.take_profit,
+                    strategy_name=strategy_name,
+                    strategy_type=strategy_type,
+                    double_first=double_first_applied,
+                    ai_consultive=setup_metadata.get("ai_consultive"),
+                )
 
-                # Adiciona ao rastreamento de posições conhecidas
-                position_key = f"{symbol}_LONG"
-                _now = datetime.now()
-                bot._set_known_position(
-                    position_key,
-                    {
-                        'symbol': symbol,
-                        'side': 'LONG',
-                        'entry_price': price,
-                        'quantity': long_qty,
-                        'entry_time': _now,
-                        'last_seen': _now,
-                        'strategy_name': str(strategy_name or "primary"),
-                        'strategy_type': strategy_type,
-                        'custom_stop_loss': custom_stop_loss,
-                        'custom_take_profit': custom_take_profit,
-                        'range_mid_price': range_mid_price,
-                        'range_entry_side': "LONG",
-                    },
+                bot.positions.open(
+                    symbol=symbol,
+                    side="LONG",
+                    entry_price=price,
+                    quantity=long_qty,
+                    strategy_name=strategy_name,
+                    strategy_type=strategy_type,
+                    custom_stop_loss=custom_stop_loss,
+                    custom_take_profit=custom_take_profit,
+                    range_mid_price=range_mid_price,
+                    range_entry_side="LONG",
+                    trailing_activation_pct=trailing_activation_pct,
+                    trailing_distance_pct=trailing_distance_pct,
                 )
 
                 logger.info("✅ LONG aberto com sucesso!")
@@ -391,6 +386,16 @@ class ExecutionEngine:
                         f"TP: ${(custom_take_profit if custom_take_profit else setup.take_profit):.4f}"
                     )
 
+                if getattr(bot, "dashboard_server", None):
+                    bot.dashboard_server.emit_position_opened({
+                        "symbol": symbol,
+                        "side": "LONG",
+                        "entry_price": price,
+                        "quantity": long_qty,
+                        "strategy_name": str(strategy_name or "primary"),
+                        "strategy_type": strategy_type,
+                    })
+
                 return True
 
             # ============================================
@@ -405,7 +410,7 @@ class ExecutionEngine:
                         f"   Mínimo: ${min_notional:.2f}, Notional: ${effective_notional:.2f} "
                         f"(Order Size: ${order_size:.2f} x {leverage:g}x)"
                     )
-                    bot._notify_ai_approved_trade_block(
+                    bot.block_reporter.notify_blocked(
                         symbol=symbol,
                         side="SHORT",
                         strategy_name=strategy_name,
@@ -439,7 +444,7 @@ class ExecutionEngine:
                     else:
                         block_reason = "Falha ao abrir posição SHORT"
                         block_detail = "A exchange rejeitou ou não retornou a ordem de mercado."
-                    bot._notify_ai_approved_trade_block(
+                    bot.block_reporter.notify_blocked(
                         symbol=symbol,
                         side="SHORT",
                         strategy_name=strategy_name,
@@ -450,7 +455,7 @@ class ExecutionEngine:
                     return False
 
                 if double_first_applied:
-                    bot._mark_double_first_used(
+                    bot.double_first_policy.mark_used(
                         state_key=double_first_state_key,
                         symbol=symbol,
                         side="SHORT",
@@ -485,43 +490,34 @@ class ExecutionEngine:
                     strategy_name=strategy_name
                 )
 
-                # Registra o trade
-                trade_record = {
-                    'timestamp': datetime.now().isoformat(),
-                    'symbol': symbol,
-                    'signal': signal_name,
-                    'side': 'SHORT',
-                    'qty': short_qty,
-                    'value': order_size,
-                    'entry_price': price,
-                    'stop_loss': custom_stop_loss,
-                    'take_profit': short_tp,
-                    'strategy_name': str(strategy_name or "primary"),
-                    'strategy_type': strategy_type,
-                    'double_first': bool(double_first_applied),
-                    'ai_consultive': dict(setup_metadata.get('ai_consultive', {}) or {}),
-                }
-                bot.trade_history.append(trade_record)
+                bot.ledger.record_trade_opened(
+                    symbol=symbol,
+                    signal=signal_name,
+                    side="SHORT",
+                    quantity=short_qty,
+                    order_size=order_size,
+                    entry_price=price,
+                    stop_loss=custom_stop_loss,
+                    take_profit=short_tp,
+                    strategy_name=strategy_name,
+                    strategy_type=strategy_type,
+                    double_first=double_first_applied,
+                    ai_consultive=setup_metadata.get("ai_consultive"),
+                )
 
-                # Adiciona ao rastreamento de posições conhecidas
-                position_key = f"{symbol}_SHORT"
-                _now = datetime.now()
-                bot._set_known_position(
-                    position_key,
-                    {
-                        'symbol': symbol,
-                        'side': 'SHORT',
-                        'entry_price': price,
-                        'quantity': short_qty,
-                        'entry_time': _now,
-                        'last_seen': _now,
-                        'strategy_name': str(strategy_name or "primary"),
-                        'strategy_type': strategy_type,
-                        'custom_stop_loss': custom_stop_loss,
-                        'custom_take_profit': short_tp,
-                        'range_mid_price': range_mid_price,
-                        'range_entry_side': "SHORT",
-                    },
+                bot.positions.open(
+                    symbol=symbol,
+                    side="SHORT",
+                    entry_price=price,
+                    quantity=short_qty,
+                    strategy_name=strategy_name,
+                    strategy_type=strategy_type,
+                    custom_stop_loss=custom_stop_loss,
+                    custom_take_profit=short_tp,
+                    range_mid_price=range_mid_price,
+                    range_entry_side="SHORT",
+                    trailing_activation_pct=trailing_activation_pct,
+                    trailing_distance_pct=trailing_distance_pct,
                 )
 
                 logger.info("✅ SHORT aberto com sucesso!")
@@ -534,13 +530,23 @@ class ExecutionEngine:
                 else:
                     logger.info(f"   Order Size: ${order_size} | TP: ${short_tp:.4f}")
 
+                if getattr(bot, "dashboard_server", None):
+                    bot.dashboard_server.emit_position_opened({
+                        "symbol": symbol,
+                        "side": "SHORT",
+                        "entry_price": price,
+                        "quantity": short_qty,
+                        "strategy_name": str(strategy_name or "primary"),
+                        "strategy_type": strategy_type,
+                    })
+
                 return True
 
             return False
 
         except Exception as e:
             logger.error(f"❌ Erro ao executar trade: {e}")
-            bot._notify_ai_approved_trade_block(
+            bot.block_reporter.notify_blocked(
                 symbol=symbol,
                 side=requested_side,
                 strategy_name=strategy_name,
@@ -571,7 +577,7 @@ class ExecutionEngine:
         entry_price = pos['entry_price']
         quantity = pos['quantity']
         position_key = f"{symbol}_{side}"
-        pos_meta = bot._get_known_position(position_key)
+        pos_meta = bot.positions.get(position_key)
         strategy_name = pos_meta.get('strategy_name')
         if not strategy_name:
             profile = bot._resolve_strategy_context(symbol)
@@ -619,77 +625,31 @@ class ExecutionEngine:
         logger.info(f"   Quantidade: {quantity:.6f} | Nocional: ${notional_value:.2f}")
         logger.info(f"   Variação: {price_change_pct*100:.2f}% | P&L Bruto: ${pnl_gross:.4f}")
 
-        # ============================================
-        # ATUALIZA CONTADORES (no bot — stats são do bot)
-        # ============================================
-        bot.closed_trades_count += 1
-        bot.daily_realized_pnl += pnl_net
-        bot.total_pnl += pnl_net
+        # Risk manager continua direto — é lógica de risco, não bookkeeping.
         bot.risk_manager.update_pnl(pnl_net)
 
-        if pnl_net > 0:
-            bot.trades_win_count += 1
-            bot.trades_win_total += pnl_net
-        else:
-            bot.trades_loss_count += 1
-            bot.trades_loss_total += pnl_net  # Será negativo
-
-        bot.total_fees_paid += total_fees
-
-        if symbol not in bot.trades_by_symbol:
-            bot.trades_by_symbol[symbol] = {
-                'wins': 0, 'losses': 0, 'win_value': 0.0, 'loss_value': 0.0, 'fees': 0.0,
-            }
-
-        if pnl_net > 0:
-            bot.trades_by_symbol[symbol]['wins'] += 1
-            bot.trades_by_symbol[symbol]['win_value'] += pnl_net
-        else:
-            bot.trades_by_symbol[symbol]['losses'] += 1
-            bot.trades_by_symbol[symbol]['loss_value'] += pnl_net
-        bot.trades_by_symbol[symbol]['fees'] = (
-            bot.trades_by_symbol[symbol].get('fees', 0.0) + total_fees
-        )
-
-        if strategy_name not in bot.trades_by_strategy:
-            bot.trades_by_strategy[strategy_name] = {
-                'wins': 0, 'losses': 0, 'win_value': 0.0, 'loss_value': 0.0, 'fees': 0.0,
-            }
-        if pnl_net > 0:
-            bot.trades_by_strategy[strategy_name]['wins'] += 1
-            bot.trades_by_strategy[strategy_name]['win_value'] += pnl_net
-        else:
-            bot.trades_by_strategy[strategy_name]['losses'] += 1
-            bot.trades_by_strategy[strategy_name]['loss_value'] += pnl_net
-        bot.trades_by_strategy[strategy_name]['fees'] = (
-            bot.trades_by_strategy[strategy_name].get('fees', 0.0) + total_fees
-        )
-
-        metrics.record_trade_closed(
+        # Bookkeeping de stats encapsulado em TradeLedger (counters, dicts
+        # por símbolo/estratégia, métrica Prometheus). Retorna resumo pra log.
+        ledger_summary = bot.ledger.record_trade_closed(
             symbol=symbol,
-            strategy=strategy_name,
-            result="win" if pnl_net > 0 else "loss",
-            pnl_usd=pnl_net,
-            fees_usd=total_fees,
+            strategy_name=strategy_name,
+            pnl_net=pnl_net,
+            total_fees=total_fees,
             close_reason=reason,
+            side=side,
+            entry_price=entry_price,
+            exit_price=current_price,
+            pnl_gross=pnl_gross,
         )
 
-        if symbol in bot.pnl_by_symbol:
-            bot.pnl_by_symbol[symbol] += pnl_net
-        else:
-            bot.pnl_by_symbol[symbol] = pnl_net
-
-        win_rate = (
-            (bot.trades_win_count / bot.closed_trades_count * 100)
-            if bot.closed_trades_count > 0 else 0
-        )
         logger.info(
             f"💰 P&L Bruto: ${pnl_gross:.4f} | Taxas: ${total_fees:.4f} | "
             f"P&L Líquido: ${pnl_net:.4f}"
         )
         logger.info(
-            f"📊 Trade #{bot.closed_trades_count} | Win Rate: {win_rate:.1f}% | "
-            f"P&L Diário: ${bot.daily_realized_pnl:.2f}"
+            f"📊 Trade #{ledger_summary['closed_trades_count']} | "
+            f"Win Rate: {ledger_summary['win_rate']:.1f}% | "
+            f"P&L Diário: ${ledger_summary['daily_pnl']:.2f}"
         )
 
         telegram_sent = bot.telegram.send_position_closed(
@@ -713,6 +673,20 @@ class ExecutionEngine:
             logger.error(
                 f"❌ FALHA ao enviar notificação Telegram para trade #{bot.closed_trades_count}"
             )
+
+        if getattr(bot, "dashboard_server", None):
+            bot.dashboard_server.emit_position_closed({
+                "symbol": symbol,
+                "side": side,
+                "entry_price": entry_price,
+                "exit_price": current_price,
+                "quantity": quantity,
+                "pnl_gross": pnl_gross,
+                "pnl_net": pnl_net,
+                "fees": total_fees,
+                "reason": reason,
+                "strategy_name": strategy_name,
+            })
 
         return True
 
@@ -750,9 +724,7 @@ class ExecutionEngine:
                 logger.info(f"   Fechando {side} {symbol}...")
                 bot.exchange.close_position(symbol, side)
 
-                position_key = f"{symbol}_{side}"
-                bot._clear_trailing_data(position_key)
-                bot._remove_known_position(position_key)
+                bot.positions.close(f"{symbol}_{side}")
             except Exception as e:
                 logger.error(f"   ❌ Erro ao fechar {side} {symbol}: {e}")
 

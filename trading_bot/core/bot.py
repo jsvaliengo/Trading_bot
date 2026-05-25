@@ -17,7 +17,6 @@ import time
 import logging
 import signal
 import sys
-import html
 import os
 import fcntl
 import threading
@@ -25,16 +24,20 @@ import concurrent.futures
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from .config import config
 from .scheduler import LoopScheduler, get_loop_timing_profile, timing_profile_changed
+from .double_first_policy import DoubleFirstPolicy
+from .position_tracker import PositionTracker
 from .state_manager import StateManager
+from .trade_block_reporter import TradeBlockReporter
+from .trade_ledger import TradeLedger
 from ..ai.consultive_engine import ConsultiveEngine
 from ..execution import ExecutionEngine
 from ..infra.binance_client import BinanceConnection
 from ..observability import metrics
-from .strategy import HedgeStrategy, RangeScalpingStrategy, RiskManager
+from .strategy import HedgeStrategy, RangeScalpingStrategy, RiskManager, TechnicalAnalysis
 from ..services.kill_switch import KillSwitchMonitor
 from ..services.notifications import TelegramNotifier
 from ..services.pair_selector import PairSelector
@@ -127,7 +130,10 @@ class TradingBot:
         logger.info("🛡️  Inicializando gerenciador de risco...")
         self.risk_manager = RiskManager()
         # Improvement 2: wire real P&L from Binance into RiskManager
-        self.risk_manager._real_daily_pnl_fn = lambda: self.exchange.get_daily_pnl_from_binance().get('total', 0.0)
+        self.risk_manager._real_daily_pnl_fn = lambda: (
+            self.exchange.get_daily_pnl_from_binance().get('total', 0.0)
+            - getattr(self, 'daily_pnl_binance_baseline', 0.0)
+        )
 
         logger.info("📱 Inicializando notificações Telegram...")
         self.telegram = TelegramNotifier(
@@ -201,6 +207,13 @@ class TradingBot:
         self.trades_win_total = 0.0
         self.trades_loss_total = 0.0
         self.total_fees_paid = 0.0
+        # Baseline do PnL diário da Binance no momento do anchor (startup com
+        # state fresco OU início de novo dia UTC). Subtraído nas chamadas de
+        # display pra que /portfolio comece em $0 após /reset, mantendo o
+        # alinhamento entre os contadores internos (zerados) e a API da
+        # Binance (que carrega resíduo do dia até 00:00 UTC).
+        self.daily_pnl_binance_baseline = 0.0
+        self._daily_baseline_date: str | None = None
         self.trades_by_symbol = {}
         self.trades_by_strategy = {}
         self.daily_target_reached = False
@@ -208,7 +221,7 @@ class TradingBot:
         self.last_daily_performance_report_date = ""
         self.portfolio_history = []
         self.last_snapshot_time = None
-        self.snapshot_interval_minutes = 30
+        self.snapshot_interval_minutes = 10
         # Drawdown alert state — bucket cruzado mais alto no dia (% do capital).
         # Reseta automaticamente no virar do dia. Em memória só.
         self._drawdown_alert_bucket_pct: float = 0.0
@@ -229,10 +242,16 @@ class TradingBot:
         self.sentiment_mode_enabled = bool(getattr(config, "USE_MARKET_SENTIMENT_FILTER", False))
         self.sentiment_cache: Dict[str, Dict[str, Any]] = {}
         self.ai_consultive_engine = None
-        self._ai_execution_block_notifications: Dict[str, float] = {}
         self._instance_lock_handle = None
         self._strategy_engines: Dict[str, Any] = {}
         self.strategy_profiles: List[Dict[str, Any]] = []
+        # Regime classifier — observações por símbolo (janela rolante de
+        # HYSTERESIS_TICKS) e regime atualmente comprometido (após hysteresis).
+        self._regime_observations: Dict[str, List[str]] = {}
+        self._regime_committed: Dict[str, str] = {}
+        # Engines reutilizáveis quando o classifier sobrepõe a estratégia
+        # estática do profile (lazy-init em _get_or_create_regime_engine).
+        self._regime_engine_cache: Dict[str, Any] = {}
         self._runtime_stats_lock = threading.Lock()
         self._runtime_stats_since_report = self._new_runtime_stats()
         self._positions_lock = threading.Lock()
@@ -244,6 +263,26 @@ class TradingBot:
         # Engine de execução (close/emergência). Recebe self — mantém
         # acoplamento de dados pra simplicidade; separação CÓDIGO, não DADOS.
         self.execution_engine = ExecutionEngine(self)
+        # Tracker de posições — encapsula os 3 dicts correlacionados
+        # (known_positions, peak_prices, trailing_activated) atrás de uma
+        # API uniforme. Storage continua nos atributos do bot.
+        self.positions = PositionTracker(self)
+        # Policy do Double First — multiplicador da primeira entrada
+        # quando habilitado. Encapsula scope/state_key/try_double/mark_used.
+        self.double_first_policy = DoubleFirstPolicy(self)
+        # Ledger de bookkeeping pós-trade — encapsula as mutações de
+        # stats/contadores que antes ficavam espalhadas no engine.
+        self.ledger = TradeLedger(self)
+        # Reporter de bloqueios de execução (IA aprovou mas barrou na ordem).
+        # Recebe um getter pro telegram porque self.telegram é setado depois,
+        # no setup_exchange.
+        self.block_reporter = TradeBlockReporter(
+            telegram_provider=lambda: getattr(self, "telegram", None),
+            config=config,
+        )
+        # Dashboard web (opt-in via DASHBOARD_ENABLED). Lazy import pra não
+        # forçar Flask como dependência obrigatória em ambientes minimalistas.
+        self.dashboard_server = None
 
     def _acquire_instance_lock(self) -> bool:
         """
@@ -548,6 +587,8 @@ class TradingBot:
             'trades_win_total': self.trades_win_total,
             'trades_loss_total': self.trades_loss_total,
             'total_fees_paid': self.total_fees_paid,
+            'daily_pnl_binance_baseline': float(getattr(self, 'daily_pnl_binance_baseline', 0.0)),
+            'daily_baseline_date': getattr(self, '_daily_baseline_date', None),
             'portfolio_history': portfolio_history_serializable,
             'trade_history': self.trade_history[-500:],
             'peak_prices': self.peak_prices,
@@ -685,6 +726,36 @@ class TradingBot:
                 self.trades_loss_total = 0.0
                 self.total_fees_paid = 0.0  # Reseta taxas também
                 logger.info("📅 Novo dia UTC! P&L diário e estatísticas resetados.")
+
+            # Baseline do PnL diário da Binance:
+            # - Se o state foi resetado manualmente ({}), 'closed_trades_count' chega 0 aqui;
+            # - Se trocou de dia UTC, daily PnL na Binance reset também (=0);
+            # Em ambos os casos, queremos display em $0. Captura o snapshot atual
+            # da Binance como ponto de ancoragem.
+            saved_baseline_date = state.get('daily_baseline_date')
+            saved_baseline_value = state.get('daily_pnl_binance_baseline')
+            fresh_state = (
+                saved_baseline_date != today_utc
+                or saved_baseline_value is None
+                or self.closed_trades_count == 0
+            )
+            if not fresh_state:
+                self.daily_pnl_binance_baseline = float(saved_baseline_value)
+                self._daily_baseline_date = saved_baseline_date
+                logger.info(f"📐 Baseline diário herdado do state: ${self.daily_pnl_binance_baseline:.4f}")
+            else:
+                try:
+                    self.daily_pnl_binance_baseline = float(
+                        self.exchange.get_daily_pnl_from_binance().get('total', 0.0) or 0.0
+                    )
+                except Exception as exc:
+                    logger.warning(f"⚠️ Falha ao ancorar baseline diário: {exc}")
+                    self.daily_pnl_binance_baseline = 0.0
+                self._daily_baseline_date = today_utc
+                logger.info(
+                    f"📐 Baseline diário ancorado: ${self.daily_pnl_binance_baseline:.4f} "
+                    f"(/portfolio agora começa em $0)"
+                )
             
             # Carrega o start_time original
             start_time_str = state.get('start_time')
@@ -799,6 +870,58 @@ class TradingBot:
             except Exception as exc:
                 logger.warning(f"⚠️ Falha ao subscribe WS {symbol}/{interval}: {exc}")
 
+    def _check_mainnet_promotion_gate(self) -> tuple[bool, str]:
+        """Bloqueia switch pra mainnet enquanto a expectativa por trade no
+        testnet estiver abaixo do mínimo configurado.
+
+        Retorna (True, "") quando os critérios estão satisfeitos, ou
+        (False, mensagem) quando o switch deve ser recusado.
+
+        Critérios:
+          - closed_trades_count ≥ MAINNET_PROMOTION_MIN_TRADES
+          - há wins E losses (precisa de RR estimável)
+          - expectancy = WR*avg_win + (1-WR)*avg_loss ≥ MAINNET_PROMOTION_MIN_EXPECTANCY
+        """
+        min_trades = int(getattr(config, "MAINNET_PROMOTION_MIN_TRADES", 100))
+        min_expectancy = float(getattr(config, "MAINNET_PROMOTION_MIN_EXPECTANCY", 0.10))
+
+        closed = int(getattr(self, "closed_trades_count", 0) or 0)
+        if closed < min_trades:
+            return False, (
+                f"❌ Promoção pra mainnet bloqueada — apenas {closed} trade(s) fechado(s) no testnet, "
+                f"mínimo é {min_trades}. Continue rodando testnet até acumular amostra suficiente. "
+                f"(override: TRADING_BOT_MAINNET_PROMOTION_GATE_ENABLED=0)"
+            )
+
+        win_count = int(getattr(self, "trades_win_count", 0) or 0)
+        loss_count = int(getattr(self, "trades_loss_count", 0) or 0)
+        win_total = float(getattr(self, "trades_win_total", 0.0) or 0.0)
+        loss_total = float(getattr(self, "trades_loss_total", 0.0) or 0.0)
+
+        if win_count <= 0 or loss_count <= 0:
+            return False, (
+                f"❌ Promoção pra mainnet bloqueada — sample insuficiente "
+                f"(wins={win_count}, losses={loss_count}). Precisa de ambos pra estimar expectativa."
+            )
+
+        total = win_count + loss_count
+        avg_win = win_total / win_count
+        avg_loss = loss_total / loss_count  # já negativo
+        wr = win_count / total
+        expectancy = wr * avg_win + (1 - wr) * avg_loss
+
+        if expectancy < min_expectancy:
+            return False, (
+                f"❌ Promoção pra mainnet bloqueada — expectativa por trade "
+                f"${expectancy:+.4f} < mínimo ${min_expectancy:+.4f}.\n"
+                f"   • {total} trades fechados (WR {wr:.0%})\n"
+                f"   • avg win ${avg_win:+.4f}, avg loss ${avg_loss:+.4f} (RR {abs(avg_win/avg_loss):.2f})\n"
+                f"Ajuste a estratégia até a expectativa virar positiva. "
+                f"(override: TRADING_BOT_MAINNET_PROMOTION_GATE_ENABLED=0)"
+            )
+
+        return True, ""
+
     def switch_environment(self, target: str) -> tuple[bool, str]:
         """
         Troca a rede ativa entre mainnet e testnet em runtime.
@@ -827,6 +950,14 @@ class TradingBot:
                 f"❌ Credenciais para {prefix} não configuradas. "
                 f"Defina BINANCE_{prefix}_API_KEY e BINANCE_{prefix}_API_SECRET no .env e reinicie."
             )
+
+        # Gate de promoção pra mainnet — exige expectativa positiva no testnet
+        # antes de subir. Bloqueia o erro clássico de promover estratégia com
+        # WR alto mas RR invertido. Override por env: MAINNET_PROMOTION_GATE_ENABLED=0.
+        if target_norm == "mainnet" and getattr(config, "MAINNET_PROMOTION_GATE_ENABLED", False):
+            ok, message = self._check_mainnet_promotion_gate()
+            if not ok:
+                return False, message
 
         with self._positions_lock:
             open_symbols = [sym for sym, pos in self.positions.items() if pos]
@@ -920,106 +1051,42 @@ class TradingBot:
             )
 
     def _normalize_double_first_state(self, raw_state) -> Dict[str, bool]:
-        """
-        Normaliza o estado da regra Double First carregado do JSON.
-        Aceita dict/list legados e mantém apenas chaves válidas.
-        """
-        normalized: Dict[str, bool] = {}
-
-        if isinstance(raw_state, dict):
-            items = raw_state.items()
-        elif isinstance(raw_state, list):
-            items = [(item, True) for item in raw_state]
-        else:
-            return normalized
-
-        for key, enabled in items:
-            if not enabled:
-                continue
-            normalized_key = str(key).strip().upper()
-            if not normalized_key:
-                continue
-            if normalized_key in {"LONG", "SHORT"}:
-                normalized[normalized_key] = True
-                continue
-            if normalized_key.endswith("_LONG") or normalized_key.endswith("_SHORT"):
-                normalized[normalized_key] = True
-
-        return normalized
+        """Backward-compat: delegate à DoubleFirstPolicy."""
+        return DoubleFirstPolicy.normalize_state(raw_state)
 
     def _set_known_position(self, position_key: str, payload: Dict[str, Any]):
-        """Atualiza o registro de uma posição rastreada com proteção de lock."""
-        with self._positions_lock:
-            self.known_positions[position_key] = dict(payload)
+        """Backward-compat: delegate ao PositionTracker."""
+        self.positions.set(position_key, payload)
 
     def _remove_known_position(self, position_key: str):
-        """Remove posição rastreada com proteção de lock."""
-        with self._positions_lock:
-            self.known_positions.pop(position_key, None)
+        """Backward-compat: delegate ao PositionTracker."""
+        self.positions.remove(position_key)
 
     def _get_known_position(self, position_key: str) -> Dict[str, Any]:
-        """Retorna cópia defensiva dos metadados de posição."""
-        with self._positions_lock:
-            return dict(self.known_positions.get(position_key, {}) or {})
+        """Backward-compat: delegate ao PositionTracker."""
+        return self.positions.get(position_key)
 
     def _double_first_scope(self) -> str:
-        scope = str(getattr(config, "DOUBLE_FIRST_SCOPE", "global") or "global").strip().lower()
-        return scope if scope in {"global", "symbol"} else "global"
+        """Backward-compat: delegate à DoubleFirstPolicy."""
+        return self.double_first_policy.scope()
 
     @staticmethod
     def _normalize_position_side(side: str) -> str:
         return "SHORT" if str(side).upper() == "SHORT" else "LONG"
 
     def _is_double_first_enabled(self, side: str) -> bool:
-        normalized_side = self._normalize_position_side(side)
-        if normalized_side == "LONG":
-            return bool(getattr(config, "DOUBLE_FIRST_LONG_ENABLED", False))
-        return bool(getattr(config, "DOUBLE_FIRST_SHORT_ENABLED", False))
+        """Backward-compat: delegate à DoubleFirstPolicy."""
+        return self.double_first_policy.is_enabled(side)
 
     def _double_first_state_key(self, symbol: str, side: str) -> str:
-        normalized_side = self._normalize_position_side(side)
-        if self._double_first_scope() == "symbol":
-            return f"{str(symbol).upper()}_{normalized_side}"
-        return normalized_side
+        """Backward-compat: delegate à DoubleFirstPolicy."""
+        return self.double_first_policy.state_key(symbol, side)
 
-    def _apply_double_first_order_size(self, symbol: str, side: str, order_size: float) -> Tuple[float, bool, str]:
-        """
-        Aplica o multiplicador de "Double First" quando elegível.
-        Retorna (novo_order_size, aplicado, state_key).
-        A marcação como "usado" deve acontecer apenas após a ordem abrir com sucesso.
-        """
-        try:
-            base_order_size = float(order_size)
-        except Exception:
-            return order_size, False, ""
-
-        if base_order_size <= 0:
-            return base_order_size, False, ""
-
-        if not hasattr(self, "double_first_used") or not isinstance(self.double_first_used, dict):
-            self.double_first_used = {}
-
-        normalized_side = self._normalize_position_side(side)
-        if not self._is_double_first_enabled(normalized_side):
-            return base_order_size, False, ""
-
-        multiplier = float(getattr(config, "DOUBLE_FIRST_MULTIPLIER", 1.0) or 1.0)
-        if multiplier <= 1.0:
-            return base_order_size, False, ""
-
-        state_key = self._double_first_state_key(symbol, normalized_side)
-        if bool(self.double_first_used.get(state_key)):
-            return base_order_size, False, ""
-
-        doubled_order_size = base_order_size * multiplier
-        max_margin = float(getattr(config, "DOUBLE_FIRST_MAX_MARGIN_USDT", 0.0) or 0.0)
-        if max_margin > 0:
-            doubled_order_size = min(doubled_order_size, max_margin)
-
-        if doubled_order_size <= base_order_size:
-            return base_order_size, False, ""
-
-        return doubled_order_size, True, state_key
+    def _apply_double_first_order_size(
+        self, symbol: str, side: str, order_size: float
+    ) -> Tuple[float, bool, str]:
+        """Backward-compat: delegate à DoubleFirstPolicy.try_double()."""
+        return self.double_first_policy.try_double(symbol, side, order_size)
 
     def _mark_double_first_used(
         self,
@@ -1029,19 +1096,9 @@ class TradingBot:
         base_order_size: float,
         applied_order_size: float,
     ) -> None:
-        if not state_key:
-            return
-        if not hasattr(self, "double_first_used") or not isinstance(self.double_first_used, dict):
-            self.double_first_used = {}
-
-        self.double_first_used[state_key] = True
-        logger.info(
-            "🚀 Double First confirmado em %s %s: $%.2f → $%.2f (escopo=%s)",
-            str(symbol).upper(),
-            self._normalize_position_side(side),
-            float(base_order_size),
-            float(applied_order_size),
-            self._double_first_scope(),
+        """Backward-compat: delegate à DoubleFirstPolicy.mark_used()."""
+        self.double_first_policy.mark_used(
+            state_key, symbol, side, base_order_size, applied_order_size
         )
     
     def _signal_handler(self, _signum, _frame):
@@ -1440,42 +1497,168 @@ class TradingBot:
             tasks.append({"symbol": symbol, "strategy_name": "primary"})
         return tasks
 
-    def _resolve_strategy_context(self, symbol: str, strategy_name: str | None = None) -> Dict[str, Any]:
-        """Resolve engine + parâmetros do perfil para um símbolo."""
+    def _get_or_create_regime_engine(self, strategy_type: str):
+        """Engine reutilizável usado quando o classifier sobrepõe a estratégia."""
+        normalized = self._normalize_strategy_type(strategy_type)
+        cached = self._regime_engine_cache.get(normalized)
+        if cached is not None:
+            return cached
+        if normalized == "range_scalping":
+            engine = RangeScalpingStrategy()
+        else:
+            engine = HedgeStrategy()
+        self._regime_engine_cache[normalized] = engine
+        return engine
+
+    def _classify_symbol_regime(self, klines: List[Dict]) -> Dict[str, Any]:
+        """Wrapper sobre TechnicalAnalysis.classify_regime usando klines do tick."""
+        try:
+            highs = [float(k["high"]) for k in klines]
+            lows = [float(k["low"]) for k in klines]
+            closes = [float(k["close"]) for k in klines]
+        except (KeyError, TypeError, ValueError):
+            return {"regime": "neutral", "adx": 0.0, "bbw_percent": 0.0, "reason": "klines inválidos"}
+        return TechnicalAnalysis.classify_regime(highs, lows, closes)
+
+    def _update_regime_history(self, symbol: str, observation: str) -> Optional[str]:
+        """
+        Adiciona uma observação à janela rolante do símbolo e tenta comitar.
+
+        Hysteresis: precisa de N observações IGUAIS consecutivas (N =
+        REGIME_HYSTERESIS_TICKS) para trocar o regime comitado. Observações
+        "neutral" não substituem o regime atual — ficam fora da contagem
+        (mantêm o status quo até um sinal claro aparecer).
+
+        Retorna o regime comitado APÓS esta observação (pode ser igual ao
+        anterior se hysteresis ainda não bateu).
+        """
+        if observation not in ("trend", "range", "squeeze", "neutral"):
+            observation = "neutral"
+
+        window_size = max(1, int(getattr(config, "REGIME_HYSTERESIS_TICKS", 3)))
+        current = self._regime_committed.get(symbol)
+
+        # "neutral" não vota: limpa a janela mas mantém o regime comitado.
+        if observation == "neutral":
+            self._regime_observations[symbol] = []
+            return current
+
+        history = self._regime_observations.setdefault(symbol, [])
+        history.append(observation)
+        if len(history) > window_size:
+            del history[: len(history) - window_size]
+
+        if len(history) >= window_size and all(h == observation for h in history):
+            if current != observation:
+                logger.info(
+                    f"🌀 Regime de {symbol}: {current or '∅'} → {observation} "
+                    f"(hysteresis {window_size} ticks)"
+                )
+                if getattr(self, "dashboard_server", None):
+                    self.dashboard_server.emit_regime_changed({
+                        "symbol": symbol,
+                        "regime": observation,
+                        "previous": current,
+                    })
+            self._regime_committed[symbol] = observation
+            return observation
+
+        return current
+
+    def _strategy_type_for_regime(self, regime: Optional[str]) -> Optional[str]:
+        """Mapeia o regime comitado para o strategy_type. None = sem override."""
+        if regime == "trend":
+            return "trend_signal"
+        if regime == "range":
+            return "range_scalping"
+        # "squeeze" e "neutral": não força override (squeeze é tratado abaixo
+        # bloqueando entradas de range; deixa a estratégia estática rodar
+        # mas tipicamente sem entrar).
+        return None
+
+    def _resolve_strategy_context(
+        self,
+        symbol: str,
+        strategy_name: str | None = None,
+        regime_override: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Resolve engine + parâmetros do perfil para um símbolo.
+
+        `regime_override`, quando passado, sobrescreve o `strategy_type` do
+        profile e troca o engine pelo correspondente (cache em
+        `_regime_engine_cache`). Outros campos do profile (entry_mode,
+        risk_profile, pairs) são preservados.
+        """
         profiles = list(getattr(self, "strategy_profiles", []) or [])
         if not profiles:
             fallback_strategy = getattr(self, "strategy", None)
             if fallback_strategy is not None:
-                return {
+                base = {
                     "name": str(strategy_name or "primary"),
                     "strategy_type": "trend_signal",
                     "entry_mode": "strong_only",
                     "pairs": [str(symbol).upper()],
                     "strategy": fallback_strategy,
                 }
+                return self._apply_regime_override(base, regime_override)
             self._reload_strategy_profiles(reason="analysis-resolve")
             profiles = list(getattr(self, "strategy_profiles", []) or [])
 
         if strategy_name:
             for profile in profiles:
                 if str(profile.get("name")) == str(strategy_name):
-                    return profile
+                    return self._apply_regime_override(profile, regime_override)
 
         normalized_symbol = str(symbol).upper()
         for profile in profiles:
             if normalized_symbol in set(profile.get("pairs", [])):
-                return profile
+                return self._apply_regime_override(profile, regime_override)
+
+        # Símbolo veio da seleção dinâmica (USE_BINANCE_STRATEGY) e não bate
+        # com `pairs` de nenhum perfil. Em vez de construir um contexto vazio
+        # — que descartaria `risk_profile` e jogaria o cálculo de SL/TP no
+        # global STOP_LOSS_PERCENT/TAKE_PROFIT_PERCENT — herdamos do primeiro
+        # perfil habilitado de mesmo strategy_type. Mantém o `risk_profile`
+        # vivo pra pares dinâmicos.
+        first_trend_profile = next(
+            (p for p in profiles if self._normalize_strategy_type(p.get("strategy_type", "trend_signal")) == "trend_signal"),
+            None,
+        )
+        if first_trend_profile is not None:
+            inherited = dict(first_trend_profile)
+            inherited["pairs"] = [normalized_symbol]
+            return self._apply_regime_override(inherited, regime_override)
 
         fallback_strategy = getattr(self, "strategy", None) or HedgeStrategy()
         if not hasattr(self, "strategy"):
             self.strategy = fallback_strategy
-        return {
+        base = {
             "name": str(strategy_name or "primary"),
             "strategy_type": "trend_signal",
             "entry_mode": "strong_only",
             "pairs": [normalized_symbol],
             "strategy": fallback_strategy,
         }
+        return self._apply_regime_override(base, regime_override)
+
+    def _apply_regime_override(
+        self, profile: Dict[str, Any], regime_override: Optional[str]
+    ) -> Dict[str, Any]:
+        """Sobrescreve strategy_type + engine no profile quando regime_override é dado."""
+        if not regime_override:
+            return profile
+        target_strategy_type = self._strategy_type_for_regime(regime_override)
+        if not target_strategy_type:
+            return profile
+        current_type = self._normalize_strategy_type(profile.get("strategy_type", "trend_signal"))
+        if current_type == target_strategy_type:
+            return profile
+        engine = self._get_or_create_regime_engine(target_strategy_type)
+        overridden = dict(profile)
+        overridden["strategy_type"] = target_strategy_type
+        overridden["strategy"] = engine
+        overridden["regime_override_applied"] = regime_override
+        return overridden
 
     def _refresh_binance_coin_universe(self, trigger_reason: str = "runtime") -> list:
         """
@@ -1822,6 +2005,8 @@ class TradingBot:
                 'custom_take_profit': state_entry.get('custom_take_profit'),
                 'range_mid_price': state_entry.get('range_mid_price'),
                 'range_entry_side': state_entry.get('range_entry_side'),
+                'trailing_activation_pct': state_entry.get('trailing_activation_pct'),
+                'trailing_distance_pct': state_entry.get('trailing_distance_pct'),
             }
             if state_entry:
                 logger.info(
@@ -2868,45 +3053,20 @@ class TradingBot:
         detail: str = "",
         setup_metadata: Dict[str, Any] | None = None,
     ) -> bool:
-        """Notifica quando a IA aprovou o setup, mas a ordem foi barrada depois."""
-        telegram = getattr(self, "telegram", None)
-        if telegram is None:
-            return False
+        """Backward-compat: delegate ao TradeBlockReporter.
 
-        if str(getattr(config, "AI_CONSULTIVE_MODE", "off")).strip().lower() != "gated":
-            return False
-
-        ai_metadata = dict((setup_metadata or {}).get("ai_consultive", {}) or {})
-        if not bool(ai_metadata.get("approval")):
-            return False
-
-        now_monotonic = time.monotonic()
-        cache_key = f"{symbol}:{side}:{reason}"
-        last_sent = self._ai_execution_block_notifications.get(cache_key)
-        if last_sent is not None and (now_monotonic - float(last_sent)) < 180.0:
-            return False
-        self._ai_execution_block_notifications[cache_key] = now_monotonic
-
-        confidence = int(ai_metadata.get("confidence", 0) or 0)
-        decision = str(ai_metadata.get("decision", "ENTER_NOW") or "ENTER_NOW")
-        side_label = "Compra" if side == "LONG" else "Venda" if side == "SHORT" else side
-        strategy_label = str(strategy_name or "primary").replace("_", " ")
-        detail_line = f"\n📝 <b>Detalhe:</b> {html.escape(detail)}" if detail else ""
-
-        message = f"""
-⏸️ <b>ENTRADA CANCELADA</b> <i>({datetime.now(timezone(timedelta(hours=-3))).strftime("%H:%M:%S")})</i>
-━━━━━━━━━━━━━━━━━━━━━
-
-📍 <b>Par:</b> {html.escape(symbol.replace("USDT", ""))}/USDT
-🤖 <b>Estratégia:</b> {html.escape(strategy_label)}
-🧭 <b>Direção:</b> {html.escape(side_label)}
-🧠 <b>IA:</b> {html.escape(decision)} ({confidence}/100)
-⚠️ <b>Motivo do bloqueio:</b> {html.escape(reason)}{detail_line}
-
-<i>A IA aprovou o setup, mas a execução foi barrada pelos freios operacionais do bot.</i>
-━━━━━━━━━━━━━━━━━━━━━
-""".strip()
-        return bool(telegram.send_message(message))
+        Mantido pra não quebrar fixtures de teste que monkeypatcham este
+        método. Novos call sites devem usar `self.block_reporter.notify_blocked`
+        direto.
+        """
+        return self.block_reporter.notify_blocked(
+            symbol=symbol,
+            side=side,
+            strategy_name=strategy_name,
+            reason=reason,
+            detail=detail,
+            setup_metadata=setup_metadata,
+        )
 
     def analyze_and_trade(self, symbol: str, strategy_name: str | None = None) -> bool:
         """
@@ -2930,7 +3090,16 @@ class TradingBot:
         except Exception:
             pass
 
-        strategy_context = self._resolve_strategy_context(symbol=symbol, strategy_name=strategy_name)
+        # Override de estratégia pelo regime classifier (committed após hysteresis).
+        # Em tickz iniciais o committed é None — usa o profile estático.
+        regime_committed = (
+            self._regime_committed.get(str(symbol).upper())
+            if getattr(config, "REGIME_CLASSIFIER_ENABLED", False)
+            else None
+        )
+        strategy_context = self._resolve_strategy_context(
+            symbol=symbol, strategy_name=strategy_name, regime_override=regime_committed,
+        )
         strategy_engine = strategy_context.get("strategy", getattr(self, "strategy", None) or HedgeStrategy())
         strategy_label = str(strategy_context.get("name", "primary"))
         strategy_type = self._normalize_strategy_type(strategy_context.get("strategy_type", "trend_signal"))
@@ -2977,7 +3146,25 @@ class TradingBot:
         if is_trend_strong and confirmation_timeframe and not confirmation_klines:
             logger.warning(f"⚠️  Sem dados de confirmação ({confirmation_timeframe}) para {symbol}")
             return False
-        
+
+        # Regime classifier — alimenta observação do tick na janela de hysteresis.
+        # O override (se houver) é aplicado no PRÓXIMO tick — neste, já estamos
+        # rodando a estratégia comitada anteriormente (ou a estática se não há
+        # commit). Squeeze bloqueia entradas de range scalping no tick atual.
+        if getattr(config, "REGIME_CLASSIFIER_ENABLED", False):
+            regime_info = self._classify_symbol_regime(klines)
+            new_commit = self._update_regime_history(symbol, regime_info["regime"])
+            logger.info(
+                f"   🌀 Regime {symbol}: obs={regime_info['regime']} "
+                f"(ADX={regime_info['adx']:.1f}, BBW={regime_info['bbw_percent']:.2f}%) "
+                f"committed={new_commit or '∅'}"
+            )
+            if regime_info["regime"] == "squeeze" and strategy_type == "range_scalping":
+                logger.info(
+                    f"⏸️  {symbol}: squeeze detectado — pulando entrada range_scalping"
+                )
+                return False
+
         # Verifica saldo DISPONÍVEL para novos trades
         available_balance = self.exchange.get_available_balance()
         logger.info(f"💰 Saldo disponível: ${available_balance:.2f}")
@@ -3048,6 +3235,31 @@ class TradingBot:
             should_open_long=should_open_long,
             should_open_short=should_open_short,
         )
+
+        # Gate de SHORTs contra-tendência: só permite SHORT quando o regime
+        # comitado é "trend" (ADX ≥ REGIME_ADX_TREND_THRESHOLD). A estratégia
+        # já checa direção via EMAs/VWAP — esta camada exige que a tendência
+        # tenha força ADX suficiente. Em "range"/"squeeze"/"neutral" os SHORTs
+        # viram whipsaw. LONG não é gateado.
+        if (
+            should_open_short
+            and getattr(config, "BLOCK_COUNTERTREND_SHORT_ENABLED", False)
+            and getattr(config, "REGIME_CLASSIFIER_ENABLED", False)
+        ):
+            current_regime = self._regime_committed.get(str(symbol).upper())
+            if current_regime != "trend":
+                logger.info(
+                    f"⏸️  {symbol}: SHORT bloqueado — regime '{current_regime or '∅'}' "
+                    "não confirmado como tendência (ADX abaixo do threshold)"
+                )
+                self.block_reporter.notify_blocked(
+                    symbol=symbol,
+                    side="SHORT",
+                    strategy_name=strategy_label,
+                    reason="SHORT contra-tendência bloqueado",
+                    detail=f"Regime atual: {current_regime or 'indefinido'} (precisa de 'trend')",
+                )
+                should_open_short = False
 
         # Se sinal é NEUTRAL ou foi filtrado pelo sentimento, não abre posição.
         if not should_open_long and not should_open_short:
@@ -3251,6 +3463,8 @@ class TradingBot:
                     'custom_take_profit': previous.get('custom_take_profit'),
                     'range_mid_price': previous.get('range_mid_price'),
                     'range_entry_side': previous.get('range_entry_side'),
+                    'trailing_activation_pct': previous.get('trailing_activation_pct'),
+                    'trailing_distance_pct': previous.get('trailing_distance_pct'),
                 }
 
             # Verifica se alguma posição conhecida sumiu (snapshot sob lock)
@@ -3267,8 +3481,7 @@ class TradingBot:
             # Busca o P&L real da Binance
             self._process_binance_closed_position(pos_info)
 
-            self._remove_known_position(position_key)
-            self._clear_trailing_data(position_key)
+            self.positions.close(position_key)
         
         if not positions:
             return
@@ -3338,8 +3551,7 @@ class TradingBot:
                     f"Take Profit custom ({float(custom_take_profit):.4f})"
                 )
                 if closed:
-                    self._clear_trailing_data(position_key)
-                    self._remove_known_position(position_key)
+                    self.positions.close(position_key)
                 else:
                     logger.warning(
                         f"⚠️ Fechamento não confirmado para {position_key} em TP custom. "
@@ -3360,8 +3572,7 @@ class TradingBot:
                     f"Stop Loss custom ({float(custom_stop_loss):.4f})"
                 )
                 if closed:
-                    self._clear_trailing_data(position_key)
-                    self._remove_known_position(position_key)
+                    self.positions.close(position_key)
                 else:
                     logger.warning(
                         f"⚠️ Fechamento não confirmado para {position_key} em SL custom. "
@@ -3380,16 +3591,18 @@ class TradingBot:
                     "Saída antecipada por possível breakout de range"
                 )
                 if closed:
-                    self._clear_trailing_data(position_key)
-                    self._remove_known_position(position_key)
+                    self.positions.close(position_key)
                 else:
                     logger.warning(
                         f"⚠️ Fechamento não confirmado para {position_key} em saída antecipada de range."
                     )
                 continue
             
-            # 1. VERIFICA TAKE PROFIT (SEMPRE ATIVO)
-            if profit_pct >= config.TAKE_PROFIT_PERCENT:
+            # 1. VERIFICA TAKE PROFIT GLOBAL
+            # Só dispara quando NÃO há custom_take_profit. Caso contrário o
+            # TP do risk_profile (ex: 1.8%) seria preempted pelo TP_PERCENT
+            # global (1.5%), invalidando o RR configurado.
+            if custom_take_profit is None and profit_pct >= config.TAKE_PROFIT_PERCENT:
                 logger.info(f"🎯 Take Profit atingido! {profit_pct:.2f}% >= {config.TAKE_PROFIT_PERCENT}%")
                 pos['current_price'] = current_price
                 closed = self._close_position_with_notification(
@@ -3397,8 +3610,7 @@ class TradingBot:
                     f"Take Profit ({config.TAKE_PROFIT_PERCENT}%)"
                 )
                 if closed:
-                    self._clear_trailing_data(position_key)
-                    self._remove_known_position(position_key)
+                    self.positions.close(position_key)
                 else:
                     logger.warning(
                         f"⚠️ Fechamento não confirmado para {position_key} em Take Profit. "
@@ -3421,8 +3633,7 @@ class TradingBot:
                     pos['current_price'] = current_price
                     closed = self._close_position_with_notification(pos, reason)
                     if closed:
-                        self._clear_trailing_data(position_key)
-                        self._remove_known_position(position_key)
+                        self.positions.close(position_key)
                     else:
                         logger.warning(
                             f"⚠️ Fechamento não confirmado para {position_key} via trailing. "
@@ -3430,23 +3641,28 @@ class TradingBot:
                         )
                     continue
             
-            # 3. VERIFICA STOP LOSS INDIVIDUAL (se ativado)
-            if config.USE_INDIVIDUAL_STOP_LOSS:
-                if profit_pct <= -config.STOP_LOSS_PERCENT:
-                    pos['current_price'] = current_price
-                    closed = self._close_position_with_notification(
-                        pos,
-                        f"Stop Loss ({config.STOP_LOSS_PERCENT}%)"
+            # 3. VERIFICA STOP LOSS GLOBAL
+            # Só dispara quando NÃO há custom_stop_loss. Caso contrário o SL
+            # global (default 5%) ignoraria o SL apertado do risk_profile
+            # (ex: 0.6%) e deixaria a posição correr até -5%.
+            if (
+                config.USE_INDIVIDUAL_STOP_LOSS
+                and custom_stop_loss is None
+                and profit_pct <= -config.STOP_LOSS_PERCENT
+            ):
+                pos['current_price'] = current_price
+                closed = self._close_position_with_notification(
+                    pos,
+                    f"Stop Loss ({config.STOP_LOSS_PERCENT}%)"
+                )
+                if closed:
+                    self.positions.close(position_key)
+                else:
+                    logger.warning(
+                        f"⚠️ Fechamento não confirmado para {position_key} via stop loss. "
+                        "Mantendo rastreamento da posição."
                     )
-                    if closed:
-                        self._clear_trailing_data(position_key)
-                        self._remove_known_position(position_key)
-                    else:
-                        logger.warning(
-                            f"⚠️ Fechamento não confirmado para {position_key} via stop loss. "
-                            "Mantendo rastreamento da posição."
-                        )
-                    continue
+                continue
         
         logger.info(f"💵 P&L Total não realizado: ${total_pnl:.2f}")
     
@@ -3590,7 +3806,31 @@ class TradingBot:
             f"   • <b>P&L Líquido: <code>${pnl_net:+.4f}</code></b>"
         )
     
-    def _trailing_stop_price(self, side: str, entry_price: float, peak_price: float) -> float:
+    def _get_position_trailing_params(self, position_key: str) -> Tuple[float, float]:
+        """
+        Retorna (activation_pct, distance_pct) para uma posição.
+
+        Prefere os valores armazenados na posição (computados via ATR no open).
+        Cai pra config global quando a posição não tem (reconciliação sem
+        metadata, posições pré-feature, ou USE_ATR_TRAILING desabilitado).
+        """
+        meta = self._get_known_position(position_key)
+        activation = meta.get('trailing_activation_pct')
+        distance = meta.get('trailing_distance_pct')
+        if activation is None or distance is None:
+            return (
+                float(config.TRAILING_ACTIVATION_PERCENT),
+                float(config.TRAILING_DISTANCE_PERCENT),
+            )
+        return (float(activation), float(distance))
+
+    def _trailing_stop_price(
+        self,
+        side: str,
+        entry_price: float,
+        peak_price: float,
+        distance_pct: Optional[float] = None,
+    ) -> float:
         """
         Calcula o preço do trailing stop com piso de breakeven.
 
@@ -3598,8 +3838,12 @@ class TradingBot:
         o trade sai com P&L bruto ≈ 0 e fees transformam em prejuízo
         (ver caso BNBUSDT 2026-04-20 20:00). O piso garante que, depois do
         trailing ativar, o pior cenário de saída é lucro ≥ fees round-trip.
+
+        `distance_pct` (em %) sobrepõe o config global quando passado — usado
+        pelo trailing por posição ancorado em ATR.
         """
-        distance = config.TRAILING_DISTANCE_PERCENT / 100.0
+        effective_pct = distance_pct if distance_pct is not None else config.TRAILING_DISTANCE_PERCENT
+        distance = float(effective_pct) / 100.0
         # Piso: cobre fees round-trip + pequena margem de segurança
         fee_floor = (self.get_taker_fee_rate() * 2.0) + 0.0005
 
@@ -3644,14 +3888,20 @@ class TradingBot:
                 self.peak_prices[position_key] = current_price
         
         peak_price = self.peak_prices[position_key]
-        
+        activation_pct, distance_pct = self._get_position_trailing_params(position_key)
+
         if not self.trailing_activated[position_key]:
-            if profit_pct >= config.TRAILING_ACTIVATION_PERCENT:
+            if profit_pct >= activation_pct:
                 self.trailing_activated[position_key] = True
 
-                trailing_stop_price = self._trailing_stop_price(side, entry_price, peak_price)
-                
-                logger.info(f"🔔 Trailing Stop ATIVADO para {position_key}!")
+                trailing_stop_price = self._trailing_stop_price(
+                    side, entry_price, peak_price, distance_pct=distance_pct,
+                )
+
+                logger.info(
+                    f"🔔 Trailing Stop ATIVADO para {position_key}! "
+                    f"(activation={activation_pct:.2f}% / distance={distance_pct:.2f}%)"
+                )
                 logger.info(f"   Pico: ${peak_price:.4f} | Stop em: ${trailing_stop_price:.4f}")
                 
                 trailing_pos_meta = self._get_known_position(position_key)
@@ -3670,12 +3920,14 @@ class TradingBot:
                 )
         
         if self.trailing_activated[position_key]:
-            trailing_stop_price = self._trailing_stop_price(side, entry_price, peak_price)
+            trailing_stop_price = self._trailing_stop_price(
+                side, entry_price, peak_price, distance_pct=distance_pct,
+            )
             if side == "LONG":
                 price_hit = current_price <= trailing_stop_price
             else:  # SHORT
                 price_hit = current_price >= trailing_stop_price
-            
+
             if price_hit:
                 # Fecha sempre que o stop for atingido. A activation_threshold já garante
                 # que a posição estava lucrativa quando o trailing foi ativado.
@@ -3683,7 +3935,7 @@ class TradingBot:
                 # (ex: order=$3, leverage=10x → profit_usd < $0.20 na ativação) deixando a
                 # posição aberta enquanto o preço continuava caindo.
                 logger.info(f"   🎯 Trailing Stop atingido | lucro ${profit_usd:.4f} ({profit_pct:.3f}%)")
-                return (True, f"Trailing Stop ({config.TRAILING_DISTANCE_PERCENT}% do pico)")
+                return (True, f"Trailing Stop ({distance_pct:.2f}% do pico)")
             
             # Log do status do trailing
             logger.info(f"   🎯 Trailing ativo | Pico: ${peak_price:.4f} | Stop: ${trailing_stop_price:.4f} | Lucro: ${profit_usd:.4f}")
@@ -3691,13 +3943,8 @@ class TradingBot:
         return (False, "")
     
     def _clear_trailing_data(self, position_key: str):
-        """
-        Limpa os dados de trailing para uma posição fechada.
-        """
-        if position_key in self.peak_prices:
-            del self.peak_prices[position_key]
-        if position_key in self.trailing_activated:
-            del self.trailing_activated[position_key]
+        """Backward-compat: delegate ao PositionTracker."""
+        self.positions.clear_trailing(position_key)
     
     def _close_position_with_notification(self, pos: dict, reason: str) -> bool:
         """Delegador — lógica real em ExecutionEngine (preserva API interna)."""
@@ -4117,10 +4364,11 @@ class TradingBot:
         balance = account_info['wallet_balance']  # Saldo total da carteira
         total_unrealized = account_info['unrealized_pnl']  # P&L não realizado real
         
-        # Busca P&L diário real para o snapshot
+        # Busca P&L diário real para o snapshot — subtrai o baseline (zera o
+        # display após /reset e em rollover de dia UTC).
         daily_pnl_binance = self.exchange.get_daily_pnl_from_binance()
-        daily_pnl_real = daily_pnl_binance['total']
-        
+        daily_pnl_real = daily_pnl_binance['total'] - self.daily_pnl_binance_baseline
+
         # Cria o snapshot com dados reais
         snapshot = {
             'timestamp': now,  # UTC
@@ -4134,9 +4382,9 @@ class TradingBot:
         self.portfolio_history.append(snapshot)
         self.last_snapshot_time = now
 
-        # Mantém apenas os últimos 48 snapshots (24h se for a cada 30min)
-        if len(self.portfolio_history) > 48:
-            self.portfolio_history = self.portfolio_history[-48:]
+        # Mantém apenas os últimos 144 snapshots (24h se for a cada 10min)
+        if len(self.portfolio_history) > 144:
+            self.portfolio_history = self.portfolio_history[-144:]
 
         logger.info(f"📸 Snapshot capturado: P&L Total ${snapshot['pnl_total']:.2f}")
 
@@ -4223,16 +4471,29 @@ class TradingBot:
         
         # Busca dados REAIS da Binance
         account_info = self.exchange.get_account_info()
-        balance = account_info['wallet_balance']  # Saldo total da carteira
+        wallet_balance = account_info['wallet_balance']  # Saldo total da carteira (cappado em testnet)
         total_unrealized = account_info['unrealized_pnl']  # P&L não realizado
-        
-        # Busca P&L diário REAL da Binance
+
+        # Busca P&L diário REAL da Binance — subtrai o baseline ancorado no
+        # /reset ou rollover de dia UTC (mantém alinhado aos contadores
+        # internos zerados após reset).
         daily_pnl_binance = self.exchange.get_daily_pnl_from_binance()
-        daily_pnl_real = daily_pnl_binance['total']
-        
-        # P&L total = P&L realizado do DIA (Binance) + não realizado
+        daily_pnl_real = daily_pnl_binance['total'] - self.daily_pnl_binance_baseline
+
+        # P&L total = P&L realizado do DIA (delta-vs-baseline) + não realizado
         total_pnl = daily_pnl_real + total_unrealized
-        
+
+        # Capital ATUAL = equity efetivo. Em testnet com SIMULATED_BALANCE_USD,
+        # o wallet retorna o cap fixo — adicionamos realized + unrealized pra
+        # refletir o saldo "como se fosse o cap recebendo o P&L". Em mainnet
+        # ou testnet sem cap, wallet_balance já reflete realized; adicionamos
+        # só o unrealized pra ter equity total.
+        sim_cap = float(getattr(config, "SIMULATED_BALANCE_USD", 0.0) or 0.0)
+        if getattr(config, "USE_TESTNET", False) and sim_cap > 0:
+            balance = sim_cap + daily_pnl_real + total_unrealized
+        else:
+            balance = wallet_balance + total_unrealized
+
         pct_change = (total_pnl / self.initial_capital) * 100 if self.initial_capital > 0 else 0
         
         # Prepara dados do histórico para o Telegram (converte para horário do Brasil)
@@ -4550,6 +4811,16 @@ class TradingBot:
         self.running = True
         analysis_cycle = 0  # contador exibido no log ao iniciar cada ciclo de análise
 
+        # Sobe o dashboard web (no-op se DASHBOARD_ENABLED=False ou credenciais
+        # ausentes). Falha aqui não bloqueia o bot — apenas loga e segue.
+        try:
+            if getattr(config, "DASHBOARD_ENABLED", False):
+                from ..web import DashboardServer
+                self.dashboard_server = DashboardServer(self)
+                self.dashboard_server.start()
+        except Exception:
+            logger.exception("📊 Falha ao iniciar dashboard — bot segue sem ele")
+
         # Configuração inicial dos dois ciclos (com ajuste dinâmico por faixa)
         timing_profile = get_loop_timing_profile(config, len(config.TRADING_PAIRS))
         monitor_interval = timing_profile['monitor_interval']
@@ -4669,6 +4940,11 @@ class TradingBot:
                                 metrics.update_drawdown(
                                     (self.peak_equity - _current_bal) / self.peak_equity * 100
                                 )
+                            if getattr(self, "dashboard_server", None):
+                                self.dashboard_server.emit_balance_update({
+                                    "balance": _current_bal,
+                                    "peak_equity": self.peak_equity,
+                                })
                     except Exception:
                         pass
 

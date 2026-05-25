@@ -91,6 +91,13 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
+def _env_str(name: str, default: str) -> str:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip()
+
+
 @dataclass
 class TradingConfig:
     """
@@ -258,6 +265,16 @@ class TradingConfig:
     
     # Usar sempre o valor MÍNIMO aceitável de cada par
     USE_MIN_NOTIONAL_ONLY: bool = True
+
+    # Sizing baseado em risco (opt-in). Quando ativado, sobrescreve
+    # USE_MIN_NOTIONAL_ONLY e MAX_POSITION_PERCENT: o notional da posição
+    # é dimensionado pra que um stop-loss completo perca exatamente
+    # RISK_PER_TRADE_PCT % da banca. Fórmula:
+    #     notional = (capital * RISK_PER_TRADE_PCT/100) / (sl_pct/100)
+    # Requer SL/TP já calculados no momento do sizing (passado via sl_pct).
+    # Sem sl_pct disponível, faz fallback pro comportamento padrão.
+    USE_RISK_BASED_SIZING: bool = False
+    RISK_PER_TRADE_PCT: float = 0.5
     
     # ============================================
     # ESTRATÉGIA DE TRADING
@@ -345,7 +362,14 @@ class TradingConfig:
     # Stop Loss Individual (por posição)
     # Se False, as posições não têm SL individual - só fecham por TP ou Trailing Stop
     USE_INDIVIDUAL_STOP_LOSS: bool = True
-    STOP_LOSS_PERCENT: float = 1.2  # SL apertado pro caminho A (entradas tardias)
+    # SL default 5% — afrouxado vs 1.2% após análise de produção (Q2/26):
+    # 1.2% era prematuro demais em pares voláteis, fechava no ruído antes do
+    # trade desenvolver. 5% dá espaço pro setup, com trailing stop como
+    # mecanismo de saída final quando o lucro materializa.
+    # Default 0.1% — perfil de "muitas perdinhas pequenas, alguns ganhos grandes".
+    # Combina com risk_profile do trend_strong (SL min/max 0.10 abaixo) pra dar
+    # RR ~10:1 com TP 1.0%. Override por env: TRADING_BOT_STOP_LOSS_PERCENT=...
+    STOP_LOSS_PERCENT: float = _env_float("TRADING_BOT_STOP_LOSS_PERCENT", 0.1)
     
     # Stop Loss Global (baseado no capital total)
     # Se o prejuízo total atingir esse % do capital inicial, fecha TUDO e para o bot
@@ -457,6 +481,82 @@ class TradingConfig:
     TRAILING_DISTANCE_PERCENT: float = _env_float("TRADING_BOT_TRAILING_DISTANCE_PERCENT", 0.40)
     # TRAILING_MIN_PROFIT_USD removido — gate em USD bloqueava fechamento em posições pequenas
     # (order=$3 × 10x = $30 notional → profit_usd < $0.20 na ativação)
+
+    # --- ATR-based Dynamic Risk ---
+    # DCA distance ao invés de DCA_STEP_PERCENT fixo: cada nível i fica a
+    # multiplier_i × ATR do preço de entrada, com multiplier_i = BASE + (i-1)*STEP.
+    # Defaults: 1.5×, 2.5×, 3.5× ATR. Sempre clampado a [MIN_STEP, MAX_STEP] em
+    # % do preço pra não disparar com ruído (MIN) nem ficar longe demais e nunca
+    # encher o DCA (MAX).
+    USE_ATR_DCA: bool = _env_bool("TRADING_BOT_USE_ATR_DCA", True)
+    DCA_ATR_MULTIPLIER_BASE: float = _env_float("TRADING_BOT_DCA_ATR_MULTIPLIER_BASE", 1.5)
+    DCA_ATR_STEP_INCREMENT: float = _env_float("TRADING_BOT_DCA_ATR_STEP_INCREMENT", 1.0)
+    DCA_ATR_MIN_STEP_PERCENT: float = _env_float("TRADING_BOT_DCA_ATR_MIN_STEP_PERCENT", 0.5)
+    DCA_ATR_MAX_STEP_PERCENT: float = _env_float("TRADING_BOT_DCA_ATR_MAX_STEP_PERCENT", 8.0)
+    # Trailing dinâmico computado uma vez no open e armazenado por posição.
+    # ACTIVATION = mult × ATR%, DISTANCE = mult × ATR%, ambos clampados nos
+    # bounds abaixo. Invariante: ACTIVATION ≥ DISTANCE + fee_floor (0.15%) é
+    # enforced em compute_atr_based_trailing pra preservar o breakeven floor.
+    USE_ATR_TRAILING: bool = _env_bool("TRADING_BOT_USE_ATR_TRAILING", True)
+    TRAILING_ACTIVATION_ATR_MULT: float = _env_float("TRADING_BOT_TRAILING_ACTIVATION_ATR_MULT", 2.0)
+    TRAILING_DISTANCE_ATR_MULT: float = _env_float("TRADING_BOT_TRAILING_DISTANCE_ATR_MULT", 1.0)
+    # Pisos ajustados em 2026-05-22 após análise do testnet: dist=0.20 estava
+    # cortando 84% dos trades a 0.20-0.47% do pico (avg win $0.13), enquanto
+    # os SLs caminhavam até 4-5%. RR realizado=0.12. Distance mínima de 0.50
+    # deixa o trade respirar até o TP (1.0-1.8% do risk_profile).
+    TRAILING_ACTIVATION_MIN_PERCENT: float = _env_float("TRADING_BOT_TRAILING_ACTIVATION_MIN_PERCENT", 0.80)
+    TRAILING_ACTIVATION_MAX_PERCENT: float = _env_float("TRADING_BOT_TRAILING_ACTIVATION_MAX_PERCENT", 2.50)
+    TRAILING_DISTANCE_MIN_PERCENT: float = _env_float("TRADING_BOT_TRAILING_DISTANCE_MIN_PERCENT", 0.50)
+    TRAILING_DISTANCE_MAX_PERCENT: float = _env_float("TRADING_BOT_TRAILING_DISTANCE_MAX_PERCENT", 1.50)
+
+    # --- Regime Classifier (ADX + Bollinger Band Width) ---
+    # Quando habilitado, a cada tick o bot classifica o regime de cada par
+    # via ADX(14) e BBW(20,2) e dinamicamente escolhe entre trend_signal
+    # (HedgeStrategy) e range_scalping (RangeScalpingStrategy). Decisão exige
+    # `HYSTERESIS_TICKS` ticks consecutivos do mesmo regime pra trocar a
+    # estratégia em vigor, evitando flip-flop em zona neutra.
+    #   ADX > TREND_THRESHOLD → "trend" (forte tendência)
+    #   ADX < RANGE_THRESHOLD → "range" (mercado lateral)
+    #   Entre os dois → "neutral" (mantém regime anterior, não conta pra hysteresis)
+    # BBW abaixo de SQUEEZE_PERCENT bloqueia novas entradas de range mesmo
+    # quando ADX está baixo, porque squeeze prevê rompimento violento.
+    REGIME_CLASSIFIER_ENABLED: bool = _env_bool("TRADING_BOT_REGIME_CLASSIFIER_ENABLED", True)
+    REGIME_ADX_PERIOD: int = _env_int("TRADING_BOT_REGIME_ADX_PERIOD", 14)
+    REGIME_ADX_TREND_THRESHOLD: float = _env_float("TRADING_BOT_REGIME_ADX_TREND_THRESHOLD", 25.0)
+    REGIME_ADX_RANGE_THRESHOLD: float = _env_float("TRADING_BOT_REGIME_ADX_RANGE_THRESHOLD", 20.0)
+    REGIME_BBW_SQUEEZE_PERCENT: float = _env_float("TRADING_BOT_REGIME_BBW_SQUEEZE_PERCENT", 4.0)
+    REGIME_HYSTERESIS_TICKS: int = _env_int("TRADING_BOT_REGIME_HYSTERESIS_TICKS", 3)
+
+    # Gate de promoção testnet → mainnet: bloqueia switch_environment("mainnet")
+    # até a expectativa por trade no testnet superar MAINNET_PROMOTION_MIN_EXPECTANCY
+    # com pelo menos MAINNET_PROMOTION_MIN_TRADES trades fechados. Evita subir
+    # estratégia perdedora pra mainnet — bug recorrente (2026-04: estratégia
+    # com WR 80% mas expectativa quase-zero por causa de RR invertido).
+    MAINNET_PROMOTION_GATE_ENABLED: bool = _env_bool("TRADING_BOT_MAINNET_PROMOTION_GATE_ENABLED", True)
+    MAINNET_PROMOTION_MIN_TRADES: int = _env_int("TRADING_BOT_MAINNET_PROMOTION_MIN_TRADES", 100)
+    MAINNET_PROMOTION_MIN_EXPECTANCY: float = _env_float("TRADING_BOT_MAINNET_PROMOTION_MIN_EXPECTANCY", 0.10)
+
+    # SHORT só entra quando regime_committed == "trend" (ADX ≥ TREND_THRESHOLD).
+    # Em regime "range"/"squeeze"/"neutral" os SHORTs viraram whipsaw — análise
+    # do testnet (2026-05-22) mostrou que 100% dos stops cheios foram SHORTs
+    # contra retomada de alta. LONG não é gateado: 100% WR no mesmo período.
+    BLOCK_COUNTERTREND_SHORT_ENABLED: bool = _env_bool("TRADING_BOT_BLOCK_COUNTERTREND_SHORT_ENABLED", True)
+
+    # --- Dashboard Web (Flask thread no processo do bot) ---
+    # Por segurança o dashboard é OPT-IN (default False) — para ligar, defina
+    # DASHBOARD_ENABLED=True E configure DASHBOARD_USERNAME + DASHBOARD_PASSWORD
+    # (sem usuário/senha o app recusa subir). Por default escuta SÓ em 127.0.0.1
+    # — para acessar de fora da OCI use túnel SSH ('ssh -L 5050:localhost:5050 oci-bot').
+    DASHBOARD_ENABLED: bool = _env_bool("TRADING_BOT_DASHBOARD_ENABLED", False)
+    DASHBOARD_HOST: str = _env_str("TRADING_BOT_DASHBOARD_HOST", "127.0.0.1")
+    DASHBOARD_PORT: int = _env_int("TRADING_BOT_DASHBOARD_PORT", 5050)
+    DASHBOARD_USERNAME: str = _env_str("TRADING_BOT_DASHBOARD_USERNAME", "")
+    DASHBOARD_PASSWORD: str = _env_str("TRADING_BOT_DASHBOARD_PASSWORD", "")
+    # Chave secreta para sessões/SocketIO. Auto-gerada na inicialização se vazia
+    # (cada restart invalida sessões — para sessões persistentes, defina via env).
+    DASHBOARD_SECRET_KEY: str = _env_str("TRADING_BOT_DASHBOARD_SECRET_KEY", "")
+    # Intervalo (segundos) do polling fallback no client quando WebSocket cai.
+    DASHBOARD_POLL_INTERVAL_SECONDS: int = _env_int("TRADING_BOT_DASHBOARD_POLL_INTERVAL_SECONDS", 5)
 
     # ============================================
     # FUNDING RATE (Taxa de financiamento)
@@ -788,15 +888,15 @@ class TradingConfig:
                     # pairs vazio = seleção automática pela Binance (top N por score)
                     "pairs": [],
                     "max_pairs": 10,
-                    # Perfil defensivo: SL mais largo (0.4-0.6%) pra resistir
-                    # a whipsaw; TP modesto (1.0-1.8%) e R:R 1:2. Ajustado em
-                    # 2026-04-22 após o perfil 0.3-0.5/1.4-3.0 acumular losses
-                    # seguidos em regime de oscilação lateral.
+                    # SL/TP dinâmicos ancorados em ATR (multiplier 1.5x em
+                    # strategy.calculate_stop_loss_take_profit). Janela do cap
+                    # permite o ATR respirar entre par calmo (BTC) e altcoin
+                    # volátil. RR target 2.0 mantém a média; TP escala junto.
                     "risk_profile": {
-                        "stop_loss_min_percent": 0.40,
-                        "stop_loss_max_percent": 0.60,
-                        "take_profit_min_percent": 1.0,
-                        "take_profit_max_percent": 1.8,
+                        "stop_loss_min_percent": 0.15,
+                        "stop_loss_max_percent": 0.80,
+                        "take_profit_min_percent": 0.30,
+                        "take_profit_max_percent": 2.50,
                         "risk_reward_target": 2.0,
                     },
                 },
@@ -984,10 +1084,10 @@ class TradingConfig:
                         break
             return float(default)
 
-        stop_loss_min = _to_float("stop_loss_min_percent", "stop_loss_percent_min", default=0.4)
-        stop_loss_max = _to_float("stop_loss_max_percent", "stop_loss_percent_max", default=0.6)
-        take_profit_min = _to_float("take_profit_min_percent", "take_profit_percent_min", default=0.8)
-        take_profit_max = _to_float("take_profit_max_percent", "take_profit_percent_max", default=1.2)
+        stop_loss_min = _to_float("stop_loss_min_percent", "stop_loss_percent_min", default=0.15)
+        stop_loss_max = _to_float("stop_loss_max_percent", "stop_loss_percent_max", default=0.80)
+        take_profit_min = _to_float("take_profit_min_percent", "take_profit_percent_min", default=0.30)
+        take_profit_max = _to_float("take_profit_max_percent", "take_profit_percent_max", default=2.50)
         rr_target = _to_float("risk_reward_target", "risk_reward_ratio", default=2.0)
 
         stop_loss_min = max(0.05, stop_loss_min)

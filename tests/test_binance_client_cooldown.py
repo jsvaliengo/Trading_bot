@@ -125,7 +125,6 @@ def test_cooldown_expires_after_duration():
     # Cooldown muito curto pra forçar expiração natural em teste
     client = _make_client(cooldown_seconds=0)  # duração=0 ⇒ não persiste
 
-    from trading_bot.infra.binance_client import BinanceConnection
 
     # Com duração 0 o cooldown não é registrado
     client._set_symbol_cooldown("ESPUSDT", -2027, "max position")
