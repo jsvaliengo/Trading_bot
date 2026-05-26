@@ -5,7 +5,7 @@ import time
 from unittest.mock import MagicMock
 
 
-def _make_client(cooldown_seconds: int = 1800):
+def _make_client(cooldown_seconds: int = 1800, transient_cooldown_seconds: int = 60):
     """Cria um BinanceConnection sem conectar de fato, via __new__."""
     from trading_bot.infra.binance_client import BinanceConnection
 
@@ -14,6 +14,7 @@ def _make_client(cooldown_seconds: int = 1800):
     conn.config.SIMULATED_BALANCE_USD = 0.0
     conn.config.USE_TESTNET = False
     conn.config.SYMBOL_STRUCTURAL_COOLDOWN_SECONDS = cooldown_seconds
+    conn.config.SYMBOL_TRANSIENT_COOLDOWN_SECONDS = transient_cooldown_seconds
     conn.client = MagicMock()
     conn._cache_lock = threading.Lock()
     conn._balance_cache = None
@@ -201,3 +202,42 @@ def test_close_position_returns_true_when_order_succeeds():
 
     result = BinanceConnection.close_position(client, "DOGEUSDT", "LONG")
     assert result is True
+
+
+def test_transient_error_minus_1007_triggers_short_cooldown():
+    """
+    -1007 (Timeout/Send status unknown) deve ativar cooldown curto pra
+    parar de marterar a API. Sem isso, o monitor loop reentra no mesmo
+    símbolo a cada ~5s gerando floods de -1007.
+    """
+    client = _make_client(cooldown_seconds=1800, transient_cooldown_seconds=60)
+    client.get_symbol_info = MagicMock(return_value={"quantityPrecision": 0})
+    client._api_call = MagicMock(side_effect=_FakeApiError(-1007, "Timeout"))
+
+    from trading_bot.infra.binance_client import BinanceConnection
+
+    result = BinanceConnection.place_market_order(
+        client, symbol="DOGEUSDT", side="SELL", position_side="LONG", quantity=291.0
+    )
+
+    assert result is None
+    assert client.is_symbol_on_cooldown("DOGEUSDT") is True
+    info = client.get_symbol_cooldown_info("DOGEUSDT")
+    assert info is not None
+    assert info["code"] == -1007
+    # Janela curta — deve ser <= 60s, bem abaixo do estrutural (1800s)
+    assert info["remaining_seconds"] <= 60
+    assert info["remaining_seconds"] > 0
+
+
+def test_transient_cooldown_duration_differs_from_structural():
+    """Confirma que -1007 e -2027 usam durações distintas (curta vs longa)."""
+    client = _make_client(cooldown_seconds=1800, transient_cooldown_seconds=60)
+
+    # -1007 → transient
+    duration_transient = client._set_symbol_cooldown("DOGEUSDT", -1007, "Timeout")
+    assert duration_transient == 60
+
+    # -2027 → structural
+    duration_structural = client._set_symbol_cooldown("ESPUSDT", -2027, "max position")
+    assert duration_structural == 1800

@@ -28,6 +28,13 @@ logger = logging.getLogger(__name__)
 #   -2027: Exceeded the maximum allowable position at current leverage
 STRUCTURAL_REJECTION_CODES: frozenset = frozenset({-2027})
 
+# Códigos transitórios — geralmente resolvem em segundos/minutos, mas
+# enquanto não resolvem a gente PARA de marterar a API. Cooldown curto
+# (ver SYMBOL_TRANSIENT_COOLDOWN_SECONDS, default 60s).
+#   -1007: Timeout waiting for response from backend. Send status unknown
+#          → ordem PODE ter executado. Tentar de novo arrisca duplicar.
+TRANSIENT_FAILURE_CODES: frozenset = frozenset({-1007})
+
 
 class BinanceConnection:
     """
@@ -396,9 +403,27 @@ class BinanceConnection:
             float(getattr(self.config, "SYMBOL_STRUCTURAL_COOLDOWN_SECONDS", 1800)),
         )
 
+    def _transient_cooldown_seconds(self) -> float:
+        return max(
+            0.0,
+            float(getattr(self.config, "SYMBOL_TRANSIENT_COOLDOWN_SECONDS", 60)),
+        )
+
+    def _cooldown_kind_for_code(self, code: int) -> str:
+        if code in TRANSIENT_FAILURE_CODES:
+            return "transient"
+        return "structural"
+
     def _set_symbol_cooldown(self, symbol: str, code: int, message: str) -> float:
-        """Marca o símbolo em cooldown estrutural. Retorna duração aplicada."""
-        duration = self._structural_cooldown_seconds()
+        """Marca o símbolo em cooldown. Duração depende da natureza do erro:
+        transitório (-1007 etc.) usa janela curta; estrutural (-2027) usa
+        a janela longa. Retorna duração aplicada (0 = desativado por config).
+        """
+        kind = self._cooldown_kind_for_code(int(code))
+        if kind == "transient":
+            duration = self._transient_cooldown_seconds()
+        else:
+            duration = self._structural_cooldown_seconds()
         if duration <= 0:
             return 0.0
         now_mono = time.monotonic()
@@ -408,9 +433,10 @@ class BinanceConnection:
                 "code": int(code),
                 "message": str(message),
                 "set_at_wall": time.time(),
+                "kind": kind,
             }
         logger.warning(
-            f"⏳ Cooldown estrutural ativado para {symbol}: code={code} "
+            f"⏳ Cooldown {kind} ativado para {symbol}: code={code} "
             f"duração={duration:.0f}s motivo={message}"
         )
         return duration
@@ -1507,7 +1533,10 @@ class BinanceConnection:
         except Exception as e:
             logger.error(f"Erro ao enviar ordem: {e}")
             api_code = getattr(e, "code", None)
-            if api_code in STRUCTURAL_REJECTION_CODES:
+            # Cooldown unificado: TRANSIENT_FAILURE_CODES usa janela curta (60s),
+            # STRUCTURAL_REJECTION_CODES usa janela longa (1800s). _set_symbol_cooldown
+            # decide a duração via _cooldown_kind_for_code.
+            if api_code in STRUCTURAL_REJECTION_CODES or api_code in TRANSIENT_FAILURE_CODES:
                 self._set_symbol_cooldown(symbol, api_code, str(e))
             self._record_order_stat(
                 symbol,
