@@ -6,15 +6,20 @@
 # fique down na VM.
 #
 # Uso:
-#   # 1) abrir o tunnel (ver ~/.ssh/config host "oci-bot"):
-#   ssh oci-bot
-#   # 2) em outro terminal:
+#   # 1) abrir o tunnel (requer host "oci-bot" em ~/.ssh/config):
+#   scripts/oci_metrics_tunnel.sh start
+#   # 2) subir o stack:
 #   cd trading_bot/observability
 #   docker compose up -d
 #   open http://127.0.0.1:3000   # login: admin / admin
+#   open http://127.0.0.1:9091   # Prometheus UI (porta 9091 no host)
 #
 # Prometheus scrapa host.docker.internal:9090 → Mac 127.0.0.1:9090 →
 # (SSH tunnel) → OCI 127.0.0.1:9090 (exporter do bot).
+#
+# Troubleshooting:
+#   scripts/oci_metrics_tunnel.sh status   # verifica se o tunnel está vivo
+#   scripts/oci_metrics_tunnel.sh restart  # reabre se caiu
 
 services:
   prometheus:
