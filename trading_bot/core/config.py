@@ -696,6 +696,14 @@ class TradingConfig:
         "TRADING_BOT_SYMBOL_STRUCTURAL_COOLDOWN_SECONDS", 1800
     )
 
+    # Cooldown curto para falhas transitórias da Binance (timeout / status
+    # de envio desconhecido — código -1007). Ordem PODE ter executado, então
+    # retentar imediatamente arrisca duplicar posição. 60s dá tempo do user
+    # stream / get_open_positions refletirem o estado real.
+    SYMBOL_TRANSIENT_COOLDOWN_SECONDS: int = _env_int(
+        "TRADING_BOT_SYMBOL_TRANSIENT_COOLDOWN_SECONDS", 60
+    )
+
     # Relatório diário consolidado para decisão de risco/SL (Telegram)
     DAILY_PERFORMANCE_REPORT_ENABLED: bool = _env_bool("TRADING_BOT_DAILY_REPORT_ENABLED", True)
     DAILY_PERFORMANCE_REPORT_HOUR_BRT: int = _env_int("TRADING_BOT_DAILY_REPORT_HOUR_BRT", 23)
