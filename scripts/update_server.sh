@@ -12,6 +12,8 @@ VENV_DIR="${VENV_DIR:-$PROJECT_DIR/.venv}"
 SCREEN_NAME="${SCREEN_NAME:-bot}"
 BOT_MODULE="${BOT_MODULE:-trading_bot.core.bot}"
 BOT_PROCESS_PATTERN="${BOT_PROCESS_PATTERN:-python.*-m[[:space:]]+${BOT_MODULE//./\\.}}"
+BOT_WRAPPER="${BOT_WRAPPER:-$PROJECT_DIR/scripts/run_bot_loop.sh}"
+WRAPPER_PROCESS_PATTERN="${WRAPPER_PROCESS_PATTERN:-run_bot_loop\\.sh}"
 PYTHON_BIN="${PYTHON_BIN:-$VENV_DIR/bin/python}"
 SKIP_GIT_PULL="${SKIP_GIT_PULL:-0}"
 SKIP_TESTS="${SKIP_TESTS:-0}"
@@ -70,6 +72,13 @@ if screen -list | grep -q "[[:space:]]${SCREEN_NAME}[[:space:]]"; then
   sleep 3
 fi
 
+# Mata o wrapper PRIMEIRO — senão ele relança o bot logo após o pkill abaixo.
+if pgrep -af "$WRAPPER_PROCESS_PATTERN" >/dev/null; then
+  log "Wrapper antigo detectado. Encerrando..."
+  pkill -f "$WRAPPER_PROCESS_PATTERN" || true
+  sleep 1
+fi
+
 # Se ainda existir processo antigo do bot, encerra com SIGTERM.
 if pgrep -af "$BOT_PROCESS_PATTERN" >/dev/null; then
   log "Processo antigo detectado. Enviando SIGTERM..."
@@ -80,14 +89,15 @@ fi
 # Fecha sessão screen anterior (se sobrou) para evitar duplicidade.
 screen -S "$SCREEN_NAME" -X quit >/dev/null 2>&1 || true
 
-log "Subindo nova sessão screen '$SCREEN_NAME'..."
-screen -dmS "$SCREEN_NAME" bash -lc "cd '$PROJECT_DIR' && '$PYTHON_BIN' -m '$BOT_MODULE'"
+log "Subindo nova sessão screen '$SCREEN_NAME' via wrapper de auto-restart..."
+chmod +x "$BOT_WRAPPER" 2>/dev/null || true
+screen -dmS "$SCREEN_NAME" bash -lc "PROJECT_DIR='$PROJECT_DIR' PYTHON_BIN='$PYTHON_BIN' BOT_MODULE='$BOT_MODULE' '$BOT_WRAPPER'"
 
-sleep 1
-if pgrep -af "$BOT_PROCESS_PATTERN" >/dev/null; then
-  log "Bot iniciado com sucesso."
+sleep 2
+if pgrep -af "$WRAPPER_PROCESS_PATTERN" >/dev/null && pgrep -af "$BOT_PROCESS_PATTERN" >/dev/null; then
+  log "Bot iniciado com sucesso (wrapper ativo)."
 else
-  log "Falha ao iniciar bot."
+  log "Falha ao iniciar bot (wrapper ou python não detectado)."
   exit 1
 fi
 
