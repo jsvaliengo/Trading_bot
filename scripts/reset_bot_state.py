@@ -34,6 +34,7 @@ USO:
 """
 
 import argparse
+import fcntl
 import json
 import shutil
 import sys
@@ -77,7 +78,27 @@ def log(*a):
 
 
 def _bot_is_running() -> bool:
-    return Path(config.LOCK_FILE_PATH).exists()
+    """Detecta o bot vivo via probe do flock — não pela existência do arquivo.
+
+    O bot segura o lock com fcntl.flock (advisory). O SO libera o flock
+    quando o processo morre, mas o arquivo permanece no disco (o bot não
+    faz unlink em mortes não-graciosas). Logo, checar `.exists()` daria
+    falso positivo com lock stale. Aqui tentamos adquirir o flock: se
+    conseguirmos, ninguém o segura (arquivo stale) ⇒ bot NÃO está rodando.
+    """
+    lock_path = Path(config.LOCK_FILE_PATH)
+    if not lock_path.exists():
+        return False
+    try:
+        fh = open(lock_path, "a+")
+        try:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+            return False
+        finally:
+            fh.close()
+    except BlockingIOError:
+        return True
 
 
 def _empty_like(value):

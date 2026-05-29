@@ -167,10 +167,15 @@ class TradingBot:
         self._runtime_stats_since_report = self._new_runtime_stats()
         self._positions_lock = threading.Lock()
 
-        # Configura handler para CTRL+C
+        # Configura handler para CTRL+C / parada graceful.
+        # SIGHUP incluso para que `screen -X quit` (ou logout do terminal)
+        # acione o shutdown gracioso e libere/remova o lock — senão o
+        # arquivo de lock fica órfão no disco.
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
-        
+        if hasattr(signal, "SIGHUP"):
+            signal.signal(signal.SIGHUP, self._signal_handler)
+
         self.load_state()
 
         # Inicia exporter Prometheus (opcional, idempotente)
@@ -334,6 +339,15 @@ class TradingBot:
         try:
             self._instance_lock_handle.close()
         except Exception:
+            pass
+
+        # Remove o arquivo de lock pra não deixar resíduo stale no disco.
+        # O flock já é liberado pelo SO no close/morte do processo, mas o
+        # arquivo permanece — e ferramentas que olham só a existência dele
+        # (scripts de manutenção) interpretariam como "bot rodando".
+        try:
+            os.unlink(self._instance_lock_path)
+        except OSError:
             pass
 
         self._instance_lock_handle = None
