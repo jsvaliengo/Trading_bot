@@ -3722,74 +3722,43 @@ class TradingBot:
         logger.info(f"   Taxas: ${total_fees:.4f}")
         logger.info(f"   P&L Líquido: ${pnl_net:.4f}")
 
-        # ATUALIZA CONTADORES (protegido por lock — múltiplas threads)
+        # Motivo do fechamento. Com USE_INDIVIDUAL_STOP_LOSS=True a Binance
+        # executa as ordens SL/TP server-side: gross > 0 ⇒ TP, senão ⇒ SL.
+        reason = "Take Profit (Binance)" if pnl_gross > 0 else "Stop Loss (Binance)"
+
+        # exit_price derivado do gross — o income da Binance não devolve o
+        # preço de saída diretamente, mas precisamos de um valor > 0 pra que
+        # o trade_history (e o dashboard) marque a posição como fechada.
+        if quantity:
+            delta = pnl_gross / quantity
+            exit_price = entry_price + delta if side == "LONG" else entry_price - delta
+        else:
+            exit_price = entry_price
+
+        pos_meta = self._get_known_position(f"{symbol}_{side}")
+        strat_key = pos_meta.get('strategy_name')
+        if not strat_key:
+            strat_key = self._resolve_strategy_context(symbol).get('name', 'primary')
+
+        # Bookkeeping unificado via ledger: contadores + enriquecimento do
+        # trade_history (exit_price/pnl/motivo) + métrica num ponto só. Antes
+        # este path duplicava os contadores inline e NÃO fechava a entrada no
+        # trade_history, deixando trades "Aberta" pra sempre (fantasmas).
         with self._runtime_stats_lock:
-            self.closed_trades_count += 1
-            self.daily_realized_pnl += pnl_net
-            self.total_pnl += pnl_net
             self.risk_manager.update_pnl(pnl_net)
-
-            if pnl_net > 0:
-                self.trades_win_count += 1
-                self.trades_win_total += pnl_net
-                result = "LUCRO 🟢"
-            else:
-                self.trades_loss_count += 1
-                self.trades_loss_total += pnl_net
-                result = "PREJUÍZO 🔴"
-
-            self.total_fees_paid += total_fees
-
-            # Atualiza trades por símbolo (para relatório detalhado)
-            if symbol not in self.trades_by_symbol:
-                self.trades_by_symbol[symbol] = {'wins': 0, 'losses': 0, 'win_value': 0.0, 'loss_value': 0.0, 'fees': 0.0}
-
-            if pnl_net > 0:
-                self.trades_by_symbol[symbol]['wins'] += 1
-                self.trades_by_symbol[symbol]['win_value'] += pnl_net
-            else:
-                self.trades_by_symbol[symbol]['losses'] += 1
-                self.trades_by_symbol[symbol]['loss_value'] += pnl_net
-
-            self.trades_by_symbol[symbol]['fees'] = self.trades_by_symbol[symbol].get('fees', 0.0) + total_fees
-
-            pos_meta = self._get_known_position(f"{symbol}_{side}")
-            strat_key = pos_meta.get('strategy_name')
-            if not strat_key:
-                _sp = self._resolve_strategy_context(symbol)
-                strat_key = _sp.get('name', 'primary')
-            if strat_key not in self.trades_by_strategy:
-                self.trades_by_strategy[strat_key] = {'wins': 0, 'losses': 0, 'win_value': 0.0, 'loss_value': 0.0, 'fees': 0.0}
-            if pnl_net > 0:
-                self.trades_by_strategy[strat_key]['wins'] += 1
-                self.trades_by_strategy[strat_key]['win_value'] += pnl_net
-            else:
-                self.trades_by_strategy[strat_key]['losses'] += 1
-                self.trades_by_strategy[strat_key]['loss_value'] += pnl_net
-            self.trades_by_strategy[strat_key]['fees'] = self.trades_by_strategy[strat_key].get('fees', 0.0) + total_fees
-
-            # Determina motivo pro metric: TP exchange se gross positivo, senão
-            # SL exchange (cenário dominante com USE_INDIVIDUAL_STOP_LOSS=True)
-            _reason_for_metric = "take_profit" if pnl_gross > 0 else "stop_loss"
-            metrics.record_trade_closed(
+            self.ledger.record_trade_closed(
                 symbol=symbol,
-                strategy=strat_key,
-                result="win" if pnl_net > 0 else "loss",
-                pnl_usd=pnl_net,
-                fees_usd=total_fees,
-                close_reason=_reason_for_metric,
+                strategy_name=strat_key,
+                pnl_net=pnl_net,
+                total_fees=total_fees,
+                close_reason=reason,
+                side=side,
+                entry_price=entry_price,
+                exit_price=exit_price,
+                pnl_gross=pnl_gross,
             )
 
-            if symbol in self.pnl_by_symbol:
-                self.pnl_by_symbol[symbol] += pnl_net
-            else:
-                self.pnl_by_symbol[symbol] = pnl_net
-
-        # Determina o motivo (só temos TP na Binance agora)
-        if pnl_gross > 0:
-            reason = "Take Profit (Binance)"
-        else:
-            reason = "Fechamento externo"  # Pode ser manual ou liquidação
+        result = "LUCRO 🟢" if pnl_net > 0 else "PREJUÍZO 🔴"
         
         # Log
         logger.info(f"💰 {result}: ${pnl_net:.4f} | Motivo: {reason}")
