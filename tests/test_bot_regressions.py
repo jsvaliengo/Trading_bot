@@ -2445,3 +2445,61 @@ def test_drawdown_alert_skipped_when_no_initial_capital():
     )
 
     assert sent == []
+
+
+def test_process_binance_closed_position_enriches_trade_history():
+    """Regressão (fantasmas): um SL/TP executado server-side pela Binance
+    (USE_INDIVIDUAL_STOP_LOSS=True) deve FECHAR a entrada aberta no
+    trade_history — antes este path só bumpava contadores e deixava a
+    entrada como 'Aberta' pra sempre, divergindo do closed_trades_count."""
+    bot = _make_light_bot()
+
+    bot.trade_history = [
+        {
+            "timestamp": datetime.now().isoformat(),
+            "symbol": "ETHUSDT",
+            "side": "LONG",
+            "entry_price": 100.0,
+            "qty": 1.0,
+            "strategy_name": "primary",
+        }
+    ]
+    bot.known_positions = {
+        "ETHUSDT_LONG": {
+            "symbol": "ETHUSDT",
+            "side": "LONG",
+            "strategy_name": "primary",
+        }
+    }
+    bot.risk_manager = SimpleNamespace(update_pnl=lambda *_a, **_k: None)
+    bot.telegram = SimpleNamespace(send_message=lambda *_a, **_k: True)
+    bot.get_taker_fee_rate = lambda: 0.0004
+
+    class ExchangeStub:
+        def get_income_history(self, **_kwargs):
+            return [{"income": "1.50"}]  # gross realizado +$1.50
+
+        def get_current_price(self, *_a, **_k):
+            return 101.5
+
+    bot.exchange = ExchangeStub()
+
+    closed_before = bot.closed_trades_count
+    bot._process_binance_closed_position(
+        {
+            "symbol": "ETHUSDT",
+            "side": "LONG",
+            "entry_price": 100.0,
+            "quantity": 1.0,
+            "entry_time": datetime.now(timezone.utc),
+        }
+    )
+
+    entry = bot.trade_history[0]
+    assert entry.get("exit_price") and entry["exit_price"] > 0
+    assert entry.get("exit_time")
+    assert entry.get("close_reason") == "Take Profit (Binance)"
+    assert entry.get("pnl_gross") == pytest.approx(1.50)
+    # Contador sobe exatamente 1 (sem dupla contagem) e não sobra fantasma.
+    assert bot.closed_trades_count == closed_before + 1
+    assert all(t.get("exit_price") for t in bot.trade_history)
