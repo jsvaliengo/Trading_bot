@@ -237,6 +237,62 @@ def test_load_state_restores_known_positions_with_custom_metadata(tmp_path):
     assert isinstance(entry["last_seen"], datetime)
 
 
+def test_load_state_does_not_let_stale_risk_profile_shadow_config(tmp_path):
+    """Regressão: o state não pode congelar o risk_profile (RR/SL/TP).
+
+    Bug 2026-05-30: persistir o strategy_profiles inteiro fazia o RR antigo do
+    state sobrescrever o config.py vivo no startup. Resultado: o tune de RR
+    2.0→3.0 ("corda longa") nunca ativou — o bot rodou RR 2.0 por horas. O load
+    deve restaurar APENAS os `pairs` dinâmicos e manter o risk_profile do config.
+    """
+    import copy
+
+    original_profiles = copy.deepcopy(config.STRATEGY_PROFILES)
+    try:
+        bot = _make_light_bot()
+        state_file = tmp_path / "bot_state.json"
+        bot._state_file_path = str(state_file)
+
+        live_profiles = config.get_enabled_strategy_profiles()
+        trend = next(p for p in live_profiles if p.get("name") == "trend_strong")
+        live_rr = float(trend["risk_profile"]["risk_reward_target"])
+
+        stale_profile = {
+            "name": "trend_strong",
+            "enabled": True,
+            "strategy_type": "trend_signal",
+            "entry_mode": "strong_only",
+            "pairs": ["FOOUSDT", "BARUSDT"],
+            "risk_profile": {
+                "stop_loss_min_percent": 0.15,
+                "stop_loss_max_percent": 0.80,
+                "take_profit_min_percent": 0.30,
+                "take_profit_max_percent": 2.50,
+                # RR DEFASADO — diferente do config vivo de propósito
+                "risk_reward_target": live_rr + 1.0,
+            },
+        }
+        state_file.write_text(
+            json.dumps(
+                {
+                    "daily_date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+                    "strategy_profiles": [stale_profile],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        assert bot.load_state() is True
+
+        loaded = next(
+            p for p in config.STRATEGY_PROFILES if p.get("name") == "trend_strong"
+        )
+        # O RR vem do config vivo, NÃO do state defasado.
+        assert float(loaded["risk_profile"]["risk_reward_target"]) == live_rr
+    finally:
+        config.STRATEGY_PROFILES = original_profiles
+
+
 def test_load_state_tolerates_missing_known_positions(tmp_path):
     """State antigo sem o campo known_positions não pode quebrar o load."""
     bot = _make_light_bot()

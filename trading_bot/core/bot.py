@@ -672,9 +672,32 @@ class TradingBot:
             if saved_binance_coin_list:
                 config.BINANCE_COIN_LIST = config.normalize_pair_list(saved_binance_coin_list)
 
+            # Restaura APENAS os `pairs` dinâmicos persistidos (warm-start da
+            # seleção da Binance). risk_profile, entry_mode, strategy_type,
+            # max_pairs e enabled SEMPRE vêm do config.py vivo. Antes, o state
+            # sobrescrevia o config.STRATEGY_PROFILES inteiro — congelando o
+            # risk_profile na primeira gravação e silenciando QUALQUER ajuste
+            # de risco feito no código (ex.: RR 2.0→3.0 jamais ativou porque o
+            # state colado por cima trazia o RR 2.0 antigo). Fix 2026-05-30.
             saved_strategy_profiles = state.get('strategy_profiles')
-            if saved_strategy_profiles is not None and hasattr(config, "_normalize_strategy_profiles"):
-                config.STRATEGY_PROFILES = config._normalize_strategy_profiles(saved_strategy_profiles)
+            if isinstance(saved_strategy_profiles, list) and saved_strategy_profiles:
+                saved_pairs_by_name = {
+                    str(p.get("name")): list(p.get("pairs", []) or [])
+                    for p in saved_strategy_profiles
+                    if isinstance(p, dict) and p.get("name")
+                }
+                if saved_pairs_by_name:
+                    merged_profiles = []
+                    for profile in (config.STRATEGY_PROFILES or []):
+                        profile = dict(profile)
+                        name = str(profile.get("name"))
+                        if name in saved_pairs_by_name:
+                            profile["pairs"] = saved_pairs_by_name[name]
+                        merged_profiles.append(profile)
+                    if hasattr(config, "_normalize_strategy_profiles"):
+                        config.STRATEGY_PROFILES = config._normalize_strategy_profiles(merged_profiles)
+                    else:
+                        config.STRATEGY_PROFILES = merged_profiles
 
             config.FIXED_PAIRS = config.filter_disabled_pairs(config.FIXED_PAIRS)
             config.TRADING_PAIRS = config.filter_disabled_pairs(config.TRADING_PAIRS)
