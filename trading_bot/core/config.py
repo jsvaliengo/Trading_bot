@@ -504,10 +504,15 @@ class TradingConfig:
     # cortando 84% dos trades a 0.20-0.47% do pico (avg win $0.13), enquanto
     # os SLs caminhavam até 4-5%. RR realizado=0.12. Distance mínima de 0.50
     # deixa o trade respirar até o TP (1.0-1.8% do risk_profile).
-    TRAILING_ACTIVATION_MIN_PERCENT: float = _env_float("TRADING_BOT_TRAILING_ACTIVATION_MIN_PERCENT", 0.80)
-    TRAILING_ACTIVATION_MAX_PERCENT: float = _env_float("TRADING_BOT_TRAILING_ACTIVATION_MAX_PERCENT", 2.50)
-    TRAILING_DISTANCE_MIN_PERCENT: float = _env_float("TRADING_BOT_TRAILING_DISTANCE_MIN_PERCENT", 0.50)
-    TRAILING_DISTANCE_MAX_PERCENT: float = _env_float("TRADING_BOT_TRAILING_DISTANCE_MAX_PERCENT", 1.50)
+    # 2026-05-29 ("corda longa"): RR realizado ainda ficava ~0.5:1 porque o
+    # trailing ativava em +0.8% e perseguia a 0.5%, fechando vencedores bem
+    # antes do TP de 2:1. Subimos activation 0.80→1.50 e distance 0.50→1.20
+    # pra deixar os vencedores correrem até o TP (agora 3:1). Breakeven floor
+    # segue protegendo saída ≥ fees depois de ativar. Reavaliar com dados novos.
+    TRAILING_ACTIVATION_MIN_PERCENT: float = _env_float("TRADING_BOT_TRAILING_ACTIVATION_MIN_PERCENT", 1.50)
+    TRAILING_ACTIVATION_MAX_PERCENT: float = _env_float("TRADING_BOT_TRAILING_ACTIVATION_MAX_PERCENT", 3.50)
+    TRAILING_DISTANCE_MIN_PERCENT: float = _env_float("TRADING_BOT_TRAILING_DISTANCE_MIN_PERCENT", 1.20)
+    TRAILING_DISTANCE_MAX_PERCENT: float = _env_float("TRADING_BOT_TRAILING_DISTANCE_MAX_PERCENT", 2.50)
 
     # --- Regime Classifier (ADX + Bollinger Band Width) ---
     # Quando habilitado, a cada tick o bot classifica o regime de cada par
@@ -899,13 +904,16 @@ class TradingConfig:
                     # SL/TP dinâmicos ancorados em ATR (multiplier 1.5x em
                     # strategy.calculate_stop_loss_take_profit). Janela do cap
                     # permite o ATR respirar entre par calmo (BTC) e altcoin
-                    # volátil. RR target 2.0 mantém a média; TP escala junto.
+                    # volátil. RR target 3.0 ("corda longa", 2026-05-29): casa
+                    # com o trailing largo pra deixar os vencedores correrem
+                    # (TP fixo senta mais longe). TP escala junto; cap 2.50%
+                    # quase nunca clipa (SL_max 0.80 × 3 = 2.40).
                     "risk_profile": {
                         "stop_loss_min_percent": 0.15,
                         "stop_loss_max_percent": 0.80,
                         "take_profit_min_percent": 0.30,
                         "take_profit_max_percent": 2.50,
-                        "risk_reward_target": 2.0,
+                        "risk_reward_target": 3.0,
                     },
                 },
                 {
