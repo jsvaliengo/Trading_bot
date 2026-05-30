@@ -251,6 +251,10 @@ html, body {
     font-size: 12px;
     color: var(--text-muted);
 }
+.next-update {
+    font-variant-numeric: tabular-nums;
+    opacity: 0.8;
+}
 .topbar-actions {
     display: flex;
     align-items: center;

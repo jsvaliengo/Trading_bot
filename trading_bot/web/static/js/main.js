@@ -446,6 +446,7 @@
         renderRegime(snap.regime);
         renderEquity(snap.portfolio_history || []);
         $('kpi-last-update').textContent = fmt.time(snap.server_time);
+        resetRefreshCountdown();
     }
 
     // ───────── Controls ─────────
@@ -503,6 +504,7 @@
     const pillConn = $('status-connection');
     const pollInterval = (parseInt(document.body.dataset.pollInterval, 10) || 5) * 1000;
     let pollTimer = null;
+    let socket = null;
 
     async function pollOnce() {
         try {
@@ -527,13 +529,56 @@
         else { pillConn.textContent = 'desconectado'; pillConn.classList.add('error'); }
     }
 
+    // ───────── Refresh countdown ─────────
+    // Contador regressivo "próxima em Xs" até o próximo refresh. Reseta a cada
+    // snapshot recebido (push ao vivo OU polling). Ao zerar, força um refresh —
+    // garante atualização no máximo a cada REFRESH_SECS mesmo sem evento algum.
+    const REFRESH_SECS = Math.max(1, Math.round(pollInterval / 1000));
+    // Pega o span do template; se o template estiver em cache (sem o span),
+    // cria dinamicamente dentro do #page-sub — assim o contador funciona sem
+    // depender de restart pra recarregar o HTML.
+    let nextUpdateEl = $('kpi-next-update');
+    if (!nextUpdateEl) {
+        const sub = $('page-sub');
+        if (sub) {
+            nextUpdateEl = document.createElement('span');
+            nextUpdateEl.id = 'kpi-next-update';
+            nextUpdateEl.className = 'next-update';
+            sub.appendChild(document.createTextNode(' · '));
+            sub.appendChild(nextUpdateEl);
+        }
+    }
+    let refreshLeft = REFRESH_SECS;
+
+    function renderCountdown() {
+        if (nextUpdateEl) nextUpdateEl.textContent = 'próxima em ' + refreshLeft + 's';
+    }
+    function resetRefreshCountdown() {
+        refreshLeft = REFRESH_SECS;
+        renderCountdown();
+    }
+    function requestRefresh() {
+        if (socket && socket.connected) socket.emit('request_snapshot');
+        else pollOnce();
+    }
+    function tickCountdown() {
+        refreshLeft -= 1;
+        if (refreshLeft <= 0) {
+            requestRefresh();          // dispara; o snapshot que chegar reseta o contador
+            refreshLeft = REFRESH_SECS;
+        }
+        renderCountdown();
+    }
+    renderCountdown();
+    setInterval(tickCountdown, 1000);
+
     // ───────── Boot ─────────
     initTheme();
     initRouter();
     initChartTabs();
 
     if (typeof io !== 'undefined') {
-        const socket = io({
+        socket = io({
             transports: ['polling', 'websocket'],
             reconnectionDelayMax: 10000,
         });
