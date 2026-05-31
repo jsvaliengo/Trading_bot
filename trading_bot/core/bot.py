@@ -2649,7 +2649,7 @@ class TradingBot:
                 oi_score = self.pair_selector.oi_change_to_score(oi_change)
                 if oi_score >= confirm_min and denom > 0:
                     bonus = oi_score * oi_weight / denom
-                    logger.debug(
+                    logger.info(
                         f"   📈 OI confirm {symbol}: ΔOI={oi_change:.2f}% "
                         f"score={oi_score:.0f} +{bonus:.2f}"
                     )
