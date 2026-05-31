@@ -1437,6 +1437,120 @@ def test_hedge_strategy_uses_balanced_risk_profile_with_rr_target():
     assert take_profit == 101.20
 
 
+def _structural_risk_profile():
+    return {
+        "stop_loss_min_percent": 0.15,
+        "stop_loss_max_percent": 0.80,
+        "take_profit_min_percent": 0.30,
+        "take_profit_max_percent": 2.50,
+        "risk_reward_target": 3.0,
+    }
+
+
+def test_structural_stop_anchors_below_recent_low_for_long(monkeypatch):
+    strategy = HedgeStrategy()
+    monkeypatch.setattr(config, "STRUCTURAL_STOP_ENABLED", True)
+    monkeypatch.setattr(config, "STRUCTURAL_STOP_BUFFER_PERCENT", 0.10)
+    monkeypatch.setattr(config, "STRUCTURAL_STOP_MAX_PERCENT", 2.5)
+
+    # fundo a 98.5; SL ancora 0.10% abaixo → 98.4015 (~1.60% de risco)
+    stop_loss, take_profit = strategy.calculate_stop_loss_take_profit(
+        entry_price=100.0,
+        signal=Signal.STRONG_BUY,
+        atr=0.05,  # ATR minúsculo: prova que o stop veio da estrutura, não do ATR
+        risk_profile=_structural_risk_profile(),
+        recent_low=98.5,
+    )
+
+    # SL = 98.4015 → 98.40 ; TP = SL_pct(1.5985) × RR(3.0) = 4.7955% → 104.80
+    assert stop_loss == 98.40
+    assert take_profit == 104.80
+
+
+def test_structural_stop_caps_at_ceiling_when_swing_low_is_far(monkeypatch):
+    strategy = HedgeStrategy()
+    monkeypatch.setattr(config, "STRUCTURAL_STOP_ENABLED", True)
+    monkeypatch.setattr(config, "STRUCTURAL_STOP_BUFFER_PERCENT", 0.10)
+    monkeypatch.setattr(config, "STRUCTURAL_STOP_MAX_PERCENT", 2.5)
+
+    # fundo distante (90) daria ~10% de risco; deve travar no teto de 2.5%
+    stop_loss, take_profit = strategy.calculate_stop_loss_take_profit(
+        entry_price=100.0,
+        signal=Signal.STRONG_BUY,
+        atr=0.05,
+        risk_profile=_structural_risk_profile(),
+        recent_low=90.0,
+    )
+
+    # SL travado em 2.5% → 97.50 ; TP = 2.5 × 3.0 = 7.5% → 107.50
+    assert stop_loss == 97.50
+    assert take_profit == 107.50
+
+
+def test_structural_stop_anchors_above_recent_high_for_short(monkeypatch):
+    strategy = HedgeStrategy()
+    monkeypatch.setattr(config, "STRUCTURAL_STOP_ENABLED", True)
+    monkeypatch.setattr(config, "STRUCTURAL_STOP_BUFFER_PERCENT", 0.10)
+    monkeypatch.setattr(config, "STRUCTURAL_STOP_MAX_PERCENT", 2.5)
+
+    # topo a 101.5; SL ancora 0.10% acima → 101.6015 (~1.60% de risco)
+    stop_loss, take_profit = strategy.calculate_stop_loss_take_profit(
+        entry_price=100.0,
+        signal=Signal.STRONG_SELL,
+        atr=0.05,
+        risk_profile=_structural_risk_profile(),
+        recent_high=101.5,
+    )
+
+    # SL = 101.6015 → 101.60 ; TP = 1.6015 × 3.0 = 4.8045% → 95.20
+    assert stop_loss == 101.60
+    assert take_profit == 95.20
+
+
+def test_structural_stop_falls_back_to_atr_when_no_swing_reference(monkeypatch):
+    strategy = HedgeStrategy()
+    monkeypatch.setattr(config, "STRUCTURAL_STOP_ENABLED", True)
+
+    # Sem recent_low/recent_high → mantém o caminho ATR legado
+    stop_loss, take_profit = strategy.calculate_stop_loss_take_profit(
+        entry_price=100.0,
+        signal=Signal.STRONG_BUY,
+        atr=0.4,
+        risk_profile=_structural_risk_profile(),
+    )
+
+    # ATR×1.5 = 0.6% de risco, dentro de [0.15, 0.80]; TP = 0.6 × 3.0 = 1.8%
+    assert stop_loss == 99.40
+    assert take_profit == 101.80
+
+
+def test_risk_based_sizing_shrinks_position_as_stop_widens(monkeypatch):
+    strategy = HedgeStrategy()
+    monkeypatch.setattr(config, "USE_RISK_BASED_SIZING", True)
+    monkeypatch.setattr(config, "RISK_PER_TRADE_PCT", 1.0)
+    monkeypatch.setattr(config, "USE_SIGNAL_STRATEGY", True)
+    monkeypatch.setattr(config, "MAX_POSITION_PERCENT", 0.08)
+    monkeypatch.setattr(config, "LEVERAGE", 10)
+
+    # risco = 1% de $130 = $1.30 ; notional = 1.30 / (sl_pct/100)
+    long_tight, _ = strategy.calculate_position_sizes(
+        signal=Signal.STRONG_BUY,
+        available_capital=130.0,
+        min_notional=5.0,
+        sl_pct=2.0,
+    )
+    long_wide, _ = strategy.calculate_position_sizes(
+        signal=Signal.STRONG_BUY,
+        available_capital=130.0,
+        min_notional=5.0,
+        sl_pct=4.0,
+    )
+
+    # SL 2% → $65 ; SL 4% → $32.50 (mesmo risco em dólar, posição menor)
+    assert long_tight == 65.0
+    assert long_wide == 32.5
+
+
 def test_calculate_position_sizes_uses_single_leg_capital_in_directional_mode(monkeypatch):
     strategy = HedgeStrategy()
     monkeypatch.setattr(config, "USE_SIGNAL_STRATEGY", True)

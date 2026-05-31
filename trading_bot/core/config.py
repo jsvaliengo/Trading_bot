@@ -276,8 +276,8 @@ class TradingConfig:
     #     notional = (capital * RISK_PER_TRADE_PCT/100) / (sl_pct/100)
     # Requer SL/TP já calculados no momento do sizing (passado via sl_pct).
     # Sem sl_pct disponível, faz fallback pro comportamento padrão.
-    USE_RISK_BASED_SIZING: bool = False
-    RISK_PER_TRADE_PCT: float = 0.5
+    USE_RISK_BASED_SIZING: bool = _env_bool("TRADING_BOT_USE_RISK_BASED_SIZING", True)
+    RISK_PER_TRADE_PCT: float = _env_float("TRADING_BOT_RISK_PER_TRADE_PCT", 1.0)
     
     # ============================================
     # ESTRATÉGIA DE TRADING
@@ -373,7 +373,18 @@ class TradingConfig:
     # Combina com risk_profile do trend_strong (SL min/max 0.10 abaixo) pra dar
     # RR ~10:1 com TP 1.0%. Override por env: TRADING_BOT_STOP_LOSS_PERCENT=...
     STOP_LOSS_PERCENT: float = _env_float("TRADING_BOT_STOP_LOSS_PERCENT", 0.1)
-    
+
+    # Stop estrutural (trend_signal): ancora o SL abaixo do último fundo (LONG)
+    # ou acima do último topo (SHORT) das últimas STRUCTURAL_STOP_LOOKBACK velas,
+    # com um buffer. A distância vira o risco e o sizing (risk-based) encolhe a
+    # posição pra manter RISK_PER_TRADE_PCT. STRUCTURAL_STOP_MAX_PERCENT é o teto:
+    # se o fundo estiver mais longe, o stop é limitado nesse teto (sempre opera).
+    # Floor = stop_loss_min do risk_profile (não cola no ruído de fees).
+    STRUCTURAL_STOP_ENABLED: bool = _env_bool("TRADING_BOT_STRUCTURAL_STOP_ENABLED", True)
+    STRUCTURAL_STOP_LOOKBACK: int = _env_int("TRADING_BOT_STRUCTURAL_STOP_LOOKBACK", 10)
+    STRUCTURAL_STOP_BUFFER_PERCENT: float = _env_float("TRADING_BOT_STRUCTURAL_STOP_BUFFER_PERCENT", 0.10)
+    STRUCTURAL_STOP_MAX_PERCENT: float = _env_float("TRADING_BOT_STRUCTURAL_STOP_MAX_PERCENT", 2.5)
+
     # Stop Loss Global (baseado no capital total)
     # Se o prejuízo total atingir esse % do capital inicial, fecha TUDO e para o bot
     # Exemplo: 90% com capital de $50 = para quando perder $45 (restar $5)
