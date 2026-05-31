@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       reset_state:
-        description: 'Zerar histórico do bot (renomeia bot_state para backup)'
+        description: 'Zerar histórico/stats do bot (preserva config; para o bot antes)'
         required: false
         default: 'false'
         type: choice
@@ -178,27 +178,42 @@ jobs:
 
           ssh -p "$PORT" "$OCI_USER@$OCI_HOST" "REMOTE_PATH='$REMOTE_PATH' bash -s" <<'EOF'
           set -euo pipefail
-          RUNTIME_DIR="$REMOTE_PATH/runtime"
-          if [[ ! -d "$RUNTIME_DIR" ]]; then
-            echo "ℹ️ Pasta runtime não existe em $RUNTIME_DIR. Nada para resetar."
-            exit 0
+          cd "$REMOTE_PATH"
+
+          # 1) Para o bot ANTES de zerar. Senão o autosave (e o save no
+          #    shutdown durante o restart) reescreve o estado com os dados
+          #    antigos em memória — a corrida que fazia o reset "não pegar".
+          SCREEN_NAME="bot"
+          WRAPPER_PATTERN='run_bot_loop\.sh'
+          BOT_PATTERN='python.*-m[[:space:]]+trading_bot\.core\.bot'
+
+          if screen -list | grep -q "[[:space:]]${SCREEN_NAME}[[:space:]]"; then
+            echo "⏸️  Enviando Ctrl+C para a sessão screen '$SCREEN_NAME'..."
+            screen -S "$SCREEN_NAME" -X stuff $'\003' || true
+            sleep 3
           fi
-
-          TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-          mapfile -t STATE_FILES < <(
-            find "$RUNTIME_DIR" -maxdepth 1 -type f \( -name 'bot_state*.json' -o -name 'bot_state*.json.bak' \) ! -name '*.backup-*.json' | sort
-          )
-
-          if [[ ${#STATE_FILES[@]} -eq 0 ]]; then
-            echo "ℹ️ Nenhum arquivo bot_state*.json/.bak encontrado para reset."
-            exit 0
+          # Mata o wrapper PRIMEIRO — senão ele relança o bot logo após o pkill.
+          if pgrep -af "$WRAPPER_PATTERN" >/dev/null; then
+            echo "⏹️  Encerrando wrapper de auto-restart..."
+            pkill -f "$WRAPPER_PATTERN" || true
+            sleep 1
           fi
+          if pgrep -af "$BOT_PATTERN" >/dev/null; then
+            echo "⏹️  Enviando SIGTERM ao processo do bot..."
+            pkill -f "$BOT_PATTERN" || true
+            sleep 2
+          fi
+          screen -S "$SCREEN_NAME" -X quit >/dev/null 2>&1 || true
 
-          for STATE_FILE in "${STATE_FILES[@]}"; do
-            BACKUP_FILE="${STATE_FILE}.backup-${TIMESTAMP}"
-            mv -- "$STATE_FILE" "$BACKUP_FILE"
-            echo "✅ Estado renomeado para backup: $(basename "$BACKUP_FILE")"
-          done
+          # 2) Zera histórico/stats preservando a config. O script faz backup
+          #    atômico e RECUSA rodar se o bot ainda estiver vivo (probe de
+          #    flock) — rede de segurança caso o stop acima não tenha pego.
+          PYTHON_BIN="$REMOTE_PATH/.venv/bin/python"
+          if [[ ! -x "$PYTHON_BIN" ]]; then
+            echo "❌ Python do virtualenv não encontrado em $PYTHON_BIN"
+            exit 1
+          fi
+          "$PYTHON_BIN" scripts/reset_bot_state.py
           EOF
 
       - name: Deploy on server
