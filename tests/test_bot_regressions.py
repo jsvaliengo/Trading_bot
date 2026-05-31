@@ -2745,3 +2745,41 @@ def test_process_binance_closed_position_enriches_trade_history():
     # Contador sobe exatamente 1 (sem dupla contagem) e não sobra fantasma.
     assert bot.closed_trades_count == closed_before + 1
     assert all(t.get("exit_price") for t in bot.trade_history)
+
+
+def test_build_log_file_handler_rotates_when_max_bytes_positive(monkeypatch, tmp_path):
+    from logging.handlers import RotatingFileHandler
+
+    from trading_bot.core.bot import _build_log_file_handler
+
+    log_path = str(tmp_path / "bot.log")
+    monkeypatch.setattr(config, "LOG_FILE_PATH", log_path)
+    monkeypatch.setattr(config, "LOG_MAX_BYTES", 1024)
+    monkeypatch.setattr(config, "LOG_BACKUP_COUNT", 3)
+
+    handler = _build_log_file_handler()
+    try:
+        assert isinstance(handler, RotatingFileHandler)
+        assert handler.maxBytes == 1024
+        assert handler.backupCount == 3
+    finally:
+        handler.close()
+
+
+def test_build_log_file_handler_plain_when_max_bytes_zero(monkeypatch, tmp_path):
+    import logging as _logging
+    from logging.handlers import RotatingFileHandler
+
+    from trading_bot.core.bot import _build_log_file_handler
+
+    log_path = str(tmp_path / "bot.log")
+    monkeypatch.setattr(config, "LOG_FILE_PATH", log_path)
+    monkeypatch.setattr(config, "LOG_MAX_BYTES", 0)
+
+    handler = _build_log_file_handler()
+    try:
+        # Rotação desligada: FileHandler simples (não Rotating).
+        assert isinstance(handler, _logging.FileHandler)
+        assert not isinstance(handler, RotatingFileHandler)
+    finally:
+        handler.close()

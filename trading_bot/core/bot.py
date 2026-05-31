@@ -15,6 +15,7 @@ COMO USAR:
 
 import time
 import logging
+from logging.handlers import RotatingFileHandler
 import signal
 import sys
 import os
@@ -57,13 +58,31 @@ def _format_pair_interval(minutes: int) -> str:
     return f"{m}min"
 
 
+def _build_log_file_handler() -> logging.Handler:
+    """Handler de arquivo com rotação (RotatingFileHandler) pra não crescer
+    sem limite — a VM OCI Micro tem disco pequeno e um log gigante pode
+    encher o disco e derrubar o bot. LOG_MAX_BYTES=0 desliga a rotação e
+    volta ao FileHandler simples.
+    """
+    max_bytes = int(getattr(config, "LOG_MAX_BYTES", 0))
+    backup_count = int(getattr(config, "LOG_BACKUP_COUNT", 0))
+    if max_bytes > 0:
+        return RotatingFileHandler(
+            config.LOG_FILE_PATH,
+            maxBytes=max_bytes,
+            backupCount=backup_count,
+            encoding="utf-8",
+        )
+    return logging.FileHandler(config.LOG_FILE_PATH, encoding="utf-8")
+
+
 def _configure_logging():
     """
     Configura logging com arquivo em runtime/ e nível por ambiente.
     """
     level_name = str(getattr(config, "LOG_LEVEL", "INFO")).upper()
     level = getattr(logging, level_name, logging.INFO)
-    handlers = [logging.FileHandler(config.LOG_FILE_PATH, encoding="utf-8")]
+    handlers: list[logging.Handler] = [_build_log_file_handler()]
 
     if bool(getattr(config, "LOG_TO_STDOUT", True)):
         handlers.append(logging.StreamHandler())

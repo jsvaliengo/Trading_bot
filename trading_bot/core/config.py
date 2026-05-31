@@ -134,6 +134,12 @@ class TradingConfig:
     LOG_LEVEL: str = os.getenv("TRADING_BOT_LOG_LEVEL", "")
     LOG_TO_STDOUT: bool = _env_bool("TRADING_BOT_LOG_TO_STDOUT", True)
 
+    # Rotação do arquivo de log (RotatingFileHandler). Evita crescimento
+    # ilimitado — crítico na VM OCI Micro (disco pequeno). Default: 5 arquivos
+    # de 20 MB (~100 MB no total). 0 desliga a rotação (volta a FileHandler).
+    LOG_MAX_BYTES: int = _env_int("TRADING_BOT_LOG_MAX_BYTES", 20 * 1024 * 1024)
+    LOG_BACKUP_COUNT: int = _env_int("TRADING_BOT_LOG_BACKUP_COUNT", 5)
+
     # Nomes de arquivos em runtime (vazio = padrão por ambiente)
     STATE_FILE_NAME: str = os.getenv("TRADING_BOT_STATE_FILE_NAME", "")
     LOCK_FILE_NAME: str = os.getenv("TRADING_BOT_LOCK_FILE_NAME", "")
