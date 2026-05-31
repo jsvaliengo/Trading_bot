@@ -14,6 +14,10 @@ BOT_MODULE="${BOT_MODULE:-trading_bot.core.bot}"
 BOT_PROCESS_PATTERN="${BOT_PROCESS_PATTERN:-python.*-m[[:space:]]+${BOT_MODULE//./\\.}}"
 BOT_WRAPPER="${BOT_WRAPPER:-$PROJECT_DIR/scripts/run_bot_loop.sh}"
 WRAPPER_PROCESS_PATTERN="${WRAPPER_PROCESS_PATTERN:-run_bot_loop\\.sh}"
+# Órfãos de diagnóstico: one-liners manuais (python -c "...BinanceConnection...")
+# ou scripts pos_diag que às vezes ficam presos consumindo CPU/RAM na VM Micro.
+# Padrão NÃO casa com o bot (-m trading_bot.core.bot) nem com pytest.
+DIAG_PROCESS_PATTERN="${DIAG_PROCESS_PATTERN:-python[0-9]*.*(BinanceConnection|pos_diag)}"
 PYTHON_BIN="${PYTHON_BIN:-$VENV_DIR/bin/python}"
 SKIP_GIT_PULL="${SKIP_GIT_PULL:-0}"
 SKIP_TESTS="${SKIP_TESTS:-0}"
@@ -24,6 +28,43 @@ DEPLOY_ACTOR="${DEPLOY_ACTOR:-manual}"
 
 log() {
   printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
+}
+
+# Encerra todos os processos que casam com um padrão, escalando SIGTERM -> SIGKILL.
+# Verifica que morreram de fato antes de retornar — evita relançar o bot enquanto
+# uma instância antiga ainda segura o lock (causa de duplicidade/crash-loop).
+# Args: <label> <pgrep-pattern> [grace_seconds]
+stop_pattern() {
+  local label="$1"
+  local pattern="$2"
+  local grace="${3:-8}"
+
+  if ! pgrep -f "$pattern" >/dev/null; then
+    return 0
+  fi
+
+  log "$label detectado. Enviando SIGTERM..."
+  pkill -TERM -f "$pattern" || true
+
+  local waited=0
+  while pgrep -f "$pattern" >/dev/null && [[ "$waited" -lt "$grace" ]]; do
+    sleep 1
+    waited=$((waited + 1))
+  done
+
+  if pgrep -f "$pattern" >/dev/null; then
+    log "$label não encerrou em ${grace}s. Forçando SIGKILL..."
+    pkill -KILL -f "$pattern" || true
+    sleep 1
+  fi
+
+  if pgrep -f "$pattern" >/dev/null; then
+    log "ALERTA: $label ainda presente após SIGKILL — verifique manualmente."
+    return 1
+  fi
+
+  log "$label encerrado."
+  return 0
 }
 
 cd "$PROJECT_DIR"
@@ -72,18 +113,19 @@ if screen -list | grep -q "[[:space:]]${SCREEN_NAME}[[:space:]]"; then
   sleep 3
 fi
 
-# Mata o wrapper PRIMEIRO — senão ele relança o bot logo após o pkill abaixo.
-if pgrep -af "$WRAPPER_PROCESS_PATTERN" >/dev/null; then
-  log "Wrapper antigo detectado. Encerrando..."
-  pkill -f "$WRAPPER_PROCESS_PATTERN" || true
-  sleep 1
-fi
+# Mata o wrapper PRIMEIRO — senão ele relança o bot logo após o kill abaixo.
+stop_pattern "Wrapper de auto-restart antigo" "$WRAPPER_PROCESS_PATTERN" 5
 
-# Se ainda existir processo antigo do bot, encerra com SIGTERM.
-if pgrep -af "$BOT_PROCESS_PATTERN" >/dev/null; then
-  log "Processo antigo detectado. Enviando SIGTERM..."
-  pkill -f "$BOT_PROCESS_PATTERN" || true
-  sleep 2
+# Encerra processo(s) antigo(s) do bot com escalonamento até SIGKILL.
+# Sem isso, uma instância presa (event loop morto) sobrevive ao SIGTERM e a
+# nova aborta por lock duplicado — exatamente a falha que derrubou o Telegram.
+stop_pattern "Processo antigo do bot" "$BOT_PROCESS_PATTERN" 8
+
+# Limpa órfãos de diagnóstico (one-liners BinanceConnection / pos_diag presos).
+if pgrep -f "$DIAG_PROCESS_PATTERN" >/dev/null; then
+  log "Órfãos de diagnóstico detectados. Encerrando (SIGKILL)..."
+  pkill -KILL -f "$DIAG_PROCESS_PATTERN" || true
+  sleep 1
 fi
 
 # Fecha sessão screen anterior (se sobrou) para evitar duplicidade.
