@@ -171,6 +171,18 @@ class PairSelector:
             lows = [float(k[3]) for k in klines]
             adx = TechnicalAnalysis.calculate_adx(highs, lows, closes, period=adx_period)
 
+            # 3b. RVOL (volume relativo) — fluxo da última hora vs média recente.
+            # k[7] = quote volume (USD). Usa o candle FECHADO [-2]; [-1] é a hora
+            # em curso (incompleta) e enviesaria o RVOL para baixo.
+            quote_vols = [float(k[7]) for k in klines]
+            if len(quote_vols) >= 3:
+                last_closed_vol = quote_vols[-2]
+                window = quote_vols[-26:-2] if len(quote_vols) >= 26 else quote_vols[:-2]
+                avg_vol = sum(window) / len(window) if window else 0.0
+                rvol = last_closed_vol / avg_vol if avg_vol > 0 else 0.0
+            else:
+                rvol = 0.0
+
             # 4. SPREAD
             best_bid = float(orderbook['bids'][0][0]) if orderbook['bids'] else 0
             best_ask = float(orderbook['asks'][0][0]) if orderbook['asks'] else 0
@@ -187,6 +199,7 @@ class PairSelector:
                 'volume_24h': volume_24h,
                 'volatility': volatility,
                 'adx': adx,
+                'rvol': rvol,
                 'price_change_24h': price_change_24h,
                 'funding_rate': funding_rate,
                 'spread_percent': spread_percent,
@@ -257,6 +270,16 @@ class PairSelector:
             span = max(trend_thr - range_thr, 1e-9)
             trend_score = 50.0 + (adx - range_thr) / span * 50.0
         
+        # 3b. RVOL (fluxo entrando agora; premia volume acima da média horária)
+        # RVOL 1.0 → hora normal (50); 2.0+ → fluxo dobrado (100); <1 desce linear.
+        rvol = metrics.get('rvol', 0.0)
+        if rvol >= 2.0:
+            rvol_score = 100.0
+        elif rvol >= 1.0:
+            rvol_score = 50.0 + (rvol - 1.0) * 50.0
+        else:
+            rvol_score = max(0.0, rvol * 50.0)
+
         # 4. FUNDING RATE (mais próximo de 0 = melhor, negativo = bom para longs)
         # Score maior se funding está baixo ou negativo
         funding = abs(metrics['funding_rate'])
@@ -290,7 +313,8 @@ class PairSelector:
             volume_score * weights['volume'] +
             trend_score * weights['trend'] +
             funding_score * weights['funding'] +
-            spread_score * weights['spread']
+            spread_score * weights['spread'] +
+            rvol_score * weights.get('rvol', 0)
         ) / total_weight
         
         return final_score
@@ -407,6 +431,10 @@ class PairSelector:
             
             # Volatilidade mínima
             if metrics['volatility'] < self.config.MIN_VOLATILITY_PERCENT:
+                continue
+
+            # RVOL mínimo (descarta par sem fluxo na hora atual)
+            if metrics.get('rvol', 0.0) < self.config.RVOL_MIN_THRESHOLD:
                 continue
             
             # Mínimo notional máximo (exclui BTC, ETH, etc)

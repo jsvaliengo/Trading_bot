@@ -338,6 +338,7 @@ def test_pair_selector_accounts_fixed_pairs_capital_before_dynamic_selection():
         MAX_SPREAD_PERCENT=1.0,
         MIN_VOLATILITY_PERCENT=0.0,
         MAX_MIN_NOTIONAL=100.0,
+        RVOL_MIN_THRESHOLD=0.8,
         AUTO_SELECT_PAIRS=True,
         PAIR_UPDATE_INTERVAL_MINUTES=60,
     )
@@ -368,7 +369,7 @@ def test_pair_selector_accounts_fixed_pairs_capital_before_dynamic_selection():
         def get_klines_raw(self, symbol, interval, limit=24):
             rows = []
             for i in range(limit):
-                rows.append([0, 0, 0, 0, 100 + i * 0.1])
+                rows.append([0, 0, 0, 0, 100 + i * 0.1, 1000.0, 0, 1000.0])
             return rows
 
         def get_funding_rate(self, symbol):
@@ -406,6 +407,7 @@ def test_pair_selector_skips_disabled_pairs():
         MAX_SPREAD_PERCENT=1.0,
         MIN_VOLATILITY_PERCENT=0.0,
         MAX_MIN_NOTIONAL=100.0,
+        RVOL_MIN_THRESHOLD=0.8,
         AUTO_SELECT_PAIRS=True,
         PAIR_UPDATE_INTERVAL_MINUTES=60,
     )
@@ -436,7 +438,7 @@ def test_pair_selector_skips_disabled_pairs():
         def get_klines_raw(self, symbol, interval, limit=24):
             rows = []
             for i in range(limit):
-                rows.append([0, 0, 0, 0, 100 + i * 0.1])
+                rows.append([0, 0, 0, 0, 100 + i * 0.1, 1000.0, 0, 1000.0])
             return rows
 
         def get_funding_rate(self, symbol):
@@ -466,11 +468,13 @@ def _pair_selector_trend_config():
             "volatility": 20,
             "trend": 10,
             "funding": 5,
+            "rvol": 10,
         },
         MIN_VOLUME_24H_USD=1.0,
         MAX_SPREAD_PERCENT=1.0,
         MIN_VOLATILITY_PERCENT=0.0,
         MAX_MIN_NOTIONAL=100.0,
+        RVOL_MIN_THRESHOLD=0.8,
         AUTO_SELECT_PAIRS=True,
         PAIR_UPDATE_INTERVAL_MINUTES=60,
         REGIME_ADX_PERIOD=14,
@@ -480,13 +484,15 @@ def _pair_selector_trend_config():
 
 
 def _trend_chop_klines(n=60):
+    # Klines com 8 colunas: [open_t, open, high, low, close, vol, close_t, quote_vol].
+    # quote_vol uniforme (1000) → RVOL=1.0 nos dois, isolando o efeito de ADX.
     # Tendência limpa: alta monotônica, candles direcionais (abre baixo, fecha alto).
-    trend = [[0, 100.0 + i, 101.2 + i, 99.8 + i, 101.0 + i, 1000.0] for i in range(n)]
+    trend = [[0, 100.0 + i, 101.2 + i, 99.8 + i, 101.0 + i, 1000.0, 0, 1000.0] for i in range(n)]
     # Whippy: oscila 100↔105 sem direção líquida (swings grandes, ADX baixo).
     chop, prev = [], 100.0
     for i in range(n):
         close = 105.0 if i % 2 == 0 else 100.0
-        chop.append([0, prev, max(prev, close) + 1.0, min(prev, close) - 1.0, close, 1000.0])
+        chop.append([0, prev, max(prev, close) + 1.0, min(prev, close) - 1.0, close, 1000.0, 0, 1000.0])
         prev = close
     return trend, chop
 
@@ -553,6 +559,70 @@ def test_pair_selector_real_config_ranks_trend_over_whippy():
     m_chop = selector.get_pair_metrics("CHOPUSDT")
 
     assert selector.score_pair(m_trend) > selector.score_pair(m_chop)
+
+
+def test_pair_selector_rvol_score_rewards_fresh_volume():
+    """Isolando os demais componentes, RVOL maior (fluxo entrando) → score maior."""
+    selector = PairSelector(exchange=None, config=_pair_selector_trend_config())
+    base = {
+        "volume_24h": 1_000_000.0,
+        "volatility": 3.0,
+        "adx": 22.0,
+        "funding_rate": 0.0,
+        "spread_percent": 0.01,
+    }
+    fresh = {**base, "rvol": 2.5}
+    stale = {**base, "rvol": 0.4}
+    assert selector.score_pair(fresh) > selector.score_pair(stale)
+
+
+def test_pair_selector_filters_pairs_below_rvol_floor():
+    """Par sem fluxo na hora (RVOL < piso) é descartado na seleção, mesmo
+    passando volume/spread/volatilidade. Guarda o gate híbrido de RVOL."""
+    config = _pair_selector_trend_config()
+    config.RVOL_MIN_THRESHOLD = 1.0
+    config.MAX_TRADING_PAIRS = 5
+
+    # ALIVEUSDT: última hora fechada com volume 3x a média → RVOL alto.
+    # DEADUSDT: última hora fechada bem abaixo da média → RVOL < 1.0.
+    alive = [[0, 100.0 + i, 101.2 + i, 99.8 + i, 101.0 + i, 1000.0, 0, 1000.0] for i in range(60)]
+    alive[-2][7] = 3000.0
+    dead = [[0, 100.0 + i, 101.2 + i, 99.8 + i, 101.0 + i, 1000.0, 0, 1000.0] for i in range(60)]
+    dead[-2][7] = 100.0
+
+    class ExchangeStub:
+        def get_exchange_info(self):
+            return {
+                "symbols": [
+                    {"symbol": "ALIVEUSDT", "contractType": "PERPETUAL", "status": "TRADING"},
+                    {"symbol": "DEADUSDT", "contractType": "PERPETUAL", "status": "TRADING"},
+                ]
+            }
+
+        def get_ticker_24h(self, symbol):
+            return {"quoteVolume": "1000000", "lastPrice": "100"}
+
+        def get_order_book(self, symbol, limit=5):
+            return {"bids": [["100", "1"]], "asks": [["100.1", "1"]]}
+
+        def get_klines_raw(self, symbol, interval, limit=50):
+            rows = alive if symbol == "ALIVEUSDT" else dead
+            return rows[-limit:]
+
+        def get_funding_rate(self, symbol):
+            return {"rate_percent": 0.0}
+
+        def get_symbol_info(self, symbol):
+            return {"minNotional": 5.0}
+
+        def get_available_balance(self):
+            return 1000.0
+
+    selector = PairSelector(exchange=ExchangeStub(), config=config)
+    selected, _scores = selector.select_best_pairs(available_capital=1000.0)
+
+    assert "ALIVEUSDT" in selected
+    assert "DEADUSDT" not in selected
 
 
 def test_stop_force_reports_partial_close_failures():
