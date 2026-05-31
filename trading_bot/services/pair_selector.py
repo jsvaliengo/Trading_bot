@@ -18,6 +18,8 @@ import logging
 from typing import List, Dict, Tuple
 from datetime import datetime, timezone, timedelta
 
+from ..core.strategy import TechnicalAnalysis
+
 logger = logging.getLogger(__name__)
 
 
@@ -121,11 +123,15 @@ class PairSelector:
             # Orderbook para spread — sempre por símbolo (não há bulk)
             orderbook = self.exchange.get_order_book(symbol, limit=5)
 
-            # Klines para volatilidade e tendência — sempre por símbolo
+            # Klines para volatilidade, variação 24h e ADX — sempre por símbolo.
+            # ADX(período) precisa de ≥ 2*período+1 candles; buscamos folga
+            # para a suavização de Wilder estabilizar.
+            adx_period = int(getattr(self.config, "REGIME_ADX_PERIOD", 14))
+            klines_needed = max(50, adx_period * 2 + 5)
             klines = self.exchange.get_klines_raw(
                 symbol=symbol,
                 interval='1h',
-                limit=24
+                limit=klines_needed,
             )
 
             # Funding rate — usa pré-buscado se disponível
@@ -146,22 +152,24 @@ class PairSelector:
             # 1. VOLUME 24H (em USD)
             volume_24h = float(ticker_24h['quoteVolume'])
 
-            # 2. VOLATILIDADE (desvio padrão dos retornos horários)
+            # 2. VOLATILIDADE + VARIAÇÃO 24H (últimas 24 barras horárias)
             closes = [float(k[4]) for k in klines]
-            if len(closes) > 1:
-                returns = [(closes[i] - closes[i-1]) / closes[i-1] * 100
-                           for i in range(1, len(closes))]
+            closes_24h = closes[-24:] if len(closes) >= 24 else closes
+            if len(closes_24h) > 1:
+                returns = [(closes_24h[i] - closes_24h[i-1]) / closes_24h[i-1] * 100
+                           for i in range(1, len(closes_24h))]
                 volatility = self._calculate_std(returns)
+                price_change_24h = (closes_24h[-1] - closes_24h[0]) / closes_24h[0] * 100
             else:
                 volatility = 0
-
-            # 3. TENDÊNCIA (força e direção)
-            if len(closes) >= 2:
-                price_change_24h = (closes[-1] - closes[0]) / closes[0] * 100
-                trend_strength = abs(price_change_24h)
-            else:
                 price_change_24h = 0
-                trend_strength = 0
+
+            # 3. FORÇA DE TENDÊNCIA via ADX — mede direção real, não amplitude.
+            # abs(Δ24h) tratava chop volátil como "tendência forte" e priorizava
+            # pares whippy; ADX baixo em mercado lateral evita isso.
+            highs = [float(k[2]) for k in klines]
+            lows = [float(k[3]) for k in klines]
+            adx = TechnicalAnalysis.calculate_adx(highs, lows, closes, period=adx_period)
 
             # 4. SPREAD
             best_bid = float(orderbook['bids'][0][0]) if orderbook['bids'] else 0
@@ -178,7 +186,7 @@ class PairSelector:
                 'symbol': symbol,
                 'volume_24h': volume_24h,
                 'volatility': volatility,
-                'trend_strength': trend_strength,
+                'adx': adx,
                 'price_change_24h': price_change_24h,
                 'funding_rate': funding_rate,
                 'spread_percent': spread_percent,
@@ -235,15 +243,19 @@ class PairSelector:
         else:
             volume_score = 0  # Abaixo do mínimo
         
-        # 3. TENDÊNCIA (maior força = melhor)
-        # Ideal: 1-3% de movimento
-        trend = metrics['trend_strength']
-        if trend < 0.5:
-            trend_score = trend * 100  # Penaliza muito parado
-        elif trend <= 3:
-            trend_score = 100
+        # 3. TENDÊNCIA (força real via ADX; chop volátil pontua baixo)
+        # ADX ≥ trend_thr → tendência forte (100); ≤ range_thr → lateral
+        # (penaliza); zona ambígua interpola. Alinhado ao regime classifier.
+        adx = metrics.get('adx', 0.0)
+        trend_thr = float(getattr(self.config, "REGIME_ADX_TREND_THRESHOLD", 25.0))
+        range_thr = float(getattr(self.config, "REGIME_ADX_RANGE_THRESHOLD", 20.0))
+        if adx >= trend_thr:
+            trend_score = 100.0
+        elif adx <= range_thr:
+            trend_score = (adx / range_thr) * 50.0 if range_thr > 0 else 0.0
         else:
-            trend_score = max(0, 100 - (trend - 3) * 15)
+            span = max(trend_thr - range_thr, 1e-9)
+            trend_score = 50.0 + (adx - range_thr) / span * 50.0
         
         # 4. FUNDING RATE (mais próximo de 0 = melhor, negativo = bom para longs)
         # Score maior se funding está baixo ou negativo
