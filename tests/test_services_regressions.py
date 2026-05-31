@@ -455,6 +455,106 @@ def test_pair_selector_skips_disabled_pairs():
     assert "DYNUSDT" not in selected
 
 
+def _pair_selector_trend_config():
+    return SimpleNamespace(
+        FIXED_PAIRS=[],
+        DISABLED_PAIRS=[],
+        MAX_TRADING_PAIRS=2,
+        PAIR_SELECTION_WEIGHTS={
+            "spread": 35,
+            "volume": 30,
+            "volatility": 20,
+            "trend": 10,
+            "funding": 5,
+        },
+        MIN_VOLUME_24H_USD=1.0,
+        MAX_SPREAD_PERCENT=1.0,
+        MIN_VOLATILITY_PERCENT=0.0,
+        MAX_MIN_NOTIONAL=100.0,
+        AUTO_SELECT_PAIRS=True,
+        PAIR_UPDATE_INTERVAL_MINUTES=60,
+        REGIME_ADX_PERIOD=14,
+        REGIME_ADX_TREND_THRESHOLD=25.0,
+        REGIME_ADX_RANGE_THRESHOLD=20.0,
+    )
+
+
+def _trend_chop_klines(n=60):
+    # Tendência limpa: alta monotônica, candles direcionais (abre baixo, fecha alto).
+    trend = [[0, 100.0 + i, 101.2 + i, 99.8 + i, 101.0 + i, 1000.0] for i in range(n)]
+    # Whippy: oscila 100↔105 sem direção líquida (swings grandes, ADX baixo).
+    chop, prev = [], 100.0
+    for i in range(n):
+        close = 105.0 if i % 2 == 0 else 100.0
+        chop.append([0, prev, max(prev, close) + 1.0, min(prev, close) - 1.0, close, 1000.0])
+        prev = close
+    return trend, chop
+
+
+def _trend_chop_exchange_stub():
+    trend_klines, chop_klines = _trend_chop_klines()
+
+    class ExchangeStub:
+        def get_ticker_24h(self, symbol):
+            return {"quoteVolume": "1000000", "lastPrice": "100"}
+
+        def get_order_book(self, symbol, limit=5):
+            return {"bids": [["100", "1"]], "asks": [["100.1", "1"]]}
+
+        def get_klines_raw(self, symbol, interval, limit=50):
+            rows = trend_klines if symbol == "TRENDUSDT" else chop_klines
+            return rows[-limit:]
+
+        def get_funding_rate(self, symbol):
+            return {"rate_percent": 0.0}
+
+        def get_symbol_info(self, symbol):
+            return {"minNotional": 5.0}
+
+    return ExchangeStub()
+
+
+def test_pair_selector_uses_adx_not_abs_change_for_trend():
+    """Par em tendência limpa (ADX alto) deve superar par whippy (Δ24h grande,
+    ADX baixo). Antes, abs(Δ24h) tratava o chop volátil como tendência forte."""
+    config = _pair_selector_trend_config()
+    selector = PairSelector(exchange=_trend_chop_exchange_stub(), config=config)
+    m_trend = selector.get_pair_metrics("TRENDUSDT")
+    m_chop = selector.get_pair_metrics("CHOPUSDT")
+
+    # ADX separa tendência de chop, mesmo o chop sendo MAIS volátil.
+    assert m_trend["adx"] >= config.REGIME_ADX_TREND_THRESHOLD
+    assert m_chop["adx"] <= config.REGIME_ADX_RANGE_THRESHOLD
+    assert m_chop["volatility"] > m_trend["volatility"]
+
+
+def test_pair_selector_trend_score_rewards_adx():
+    """Isolando os demais componentes, ADX maior → score maior."""
+    selector = PairSelector(exchange=None, config=_pair_selector_trend_config())
+    base = {
+        "volume_24h": 1_000_000.0,
+        "volatility": 3.0,
+        "funding_rate": 0.0,
+        "spread_percent": 0.01,
+    }
+    strong_trend = {**base, "adx": 30.0}
+    weak_trend = {**base, "adx": 10.0}
+    assert selector.score_pair(strong_trend) > selector.score_pair(weak_trend)
+
+
+def test_pair_selector_real_config_ranks_trend_over_whippy():
+    """Trava o objetivo com os PESOS REAIS de produção: com a métrica de ADX,
+    tendência limpa supera o par whippy no score final (trend=20 > volatility=10).
+    Guarda contra reintrodução do viés que priorizava chop volátil."""
+    from trading_bot.core.config import config as prod_config
+
+    selector = PairSelector(exchange=_trend_chop_exchange_stub(), config=prod_config)
+    m_trend = selector.get_pair_metrics("TRENDUSDT")
+    m_chop = selector.get_pair_metrics("CHOPUSDT")
+
+    assert selector.score_pair(m_trend) > selector.score_pair(m_chop)
+
+
 def test_stop_force_reports_partial_close_failures():
     handler = TelegramCommandHandler(token="token", chat_id="123")
 
