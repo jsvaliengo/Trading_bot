@@ -279,6 +279,13 @@ class TradingConfig:
     OI_CONFIRM_MIN_SCORE: float = _env_float("TRADING_BOT_OI_CONFIRM_MIN_SCORE", 60.0)
     OI_MAX_FINALISTS: int = _env_int("TRADING_BOT_OI_MAX_FINALISTS", 20)
 
+    # Gate de OI na ENTRADA (soft): bloqueia abrir quando o OI está caindo
+    # forte (ΔOI ≤ OI_ENTRY_CONTRADICT_PCT). Queda forte de OI = movimento sem
+    # dinheiro novo entrando (short-covering / liquidação), conviction fraca.
+    # OI estável ou subindo passa. Dado de OI indisponível NÃO bloqueia.
+    OI_ENTRY_GATE_ENABLED: bool = _env_bool("TRADING_BOT_OI_ENTRY_GATE_ENABLED", True)
+    OI_ENTRY_CONTRADICT_PCT: float = _env_float("TRADING_BOT_OI_ENTRY_CONTRADICT_PCT", -5.0)
+
     # Usar sempre o valor MÍNIMO aceitável de cada par
     USE_MIN_NOTIONAL_ONLY: bool = True
 
