@@ -262,6 +262,9 @@ class TradingConfig:
     MAX_SPREAD_PERCENT: float = 0.07          # Spread máximo 0.07%
     MIN_VOLATILITY_PERCENT: float = 1.5       # Volatilidade mínima 1.5%
     MAX_MIN_NOTIONAL: float = 10.0            # Mínimo notional máximo $10 (exclui BTC $100, ETH $20)
+    # RVOL = volume da última hora fechada ÷ média horária recente. Piso baixo
+    # só para descartar par sem fluxo na hora; o score premia RVOL alto de forma suave.
+    RVOL_MIN_THRESHOLD: float = _env_float("TRADING_BOT_RVOL_MIN_THRESHOLD", 0.8)
     
     # Usar sempre o valor MÍNIMO aceitável de cada par
     USE_MIN_NOTIONAL_ONLY: bool = True
@@ -934,11 +937,12 @@ class TradingConfig:
         # Pesos para seleção de pares (ordem de prioridade)
         if self.PAIR_SELECTION_WEIGHTS is None:
             self.PAIR_SELECTION_WEIGHTS = {
-                'spread': 35,        # 35% - Spread baixo (custo de execução)
-                'volume': 30,        # 30% - Volume 24h (liquidez)
-                'volatility': 10,    # 10% - Volatilidade (evita excesso de ruído)
-                'trend': 20,         # 20% - Força da tendência (prioriza continuidade)
-                'funding': 5,        # 5%  - Funding (quase irrelevante no scalp)
+                'spread': 35,        # Spread baixo (custo de execução)
+                'volume': 30,        # Volume 24h (liquidez)
+                'volatility': 10,    # Volatilidade (evita excesso de ruído)
+                'trend': 20,         # Força da tendência via ADX (prioriza continuidade)
+                'funding': 5,        # Funding (quase irrelevante no scalp)
+                'rvol': 10,          # Volume relativo (fluxo entrando agora)
             }
     
     # ============================================
