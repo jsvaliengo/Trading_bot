@@ -2066,6 +2066,7 @@ def test_sort_binance_coins_by_score_uses_dynamic_binance_universe(monkeypatch):
     monkeypatch.setattr(config, "DISABLED_PAIRS", ["ETHUSDT"])
     monkeypatch.setattr(config, "BINANCE_COIN_LIST", ["OLDUSDT"])
     monkeypatch.setattr(config, "MIN_VOLUME_24H_USD", 0)
+    monkeypatch.setattr(config, "OI_ENABLED", False)
 
     score_map = {
         "ADAUSDT": 90.0,
@@ -2105,6 +2106,7 @@ def test_sort_binance_coins_by_score_keeps_previous_universe_on_refresh_failure(
     monkeypatch.setattr(config, "DISABLED_PAIRS", [])
     monkeypatch.setattr(config, "BINANCE_COIN_LIST", ["BNBUSDT", "XRPUSDT"])
     monkeypatch.setattr(config, "MIN_VOLUME_24H_USD", 0)
+    monkeypatch.setattr(config, "OI_ENABLED", False)
 
     score_map = {"BNBUSDT": 80.0, "XRPUSDT": 60.0}
 

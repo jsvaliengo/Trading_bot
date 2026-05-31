@@ -2628,9 +2628,43 @@ class TradingBot:
                         f"   ⏳ Progresso: {completed}/{total_candidates} ({pct}%) — faltam {remaining} moedas"
                     )
 
-        # ── 4. ORDENA E RETORNA ───────────────────────────────────────────────
+        # ── 4. ORDENA ──────────────────────────────────────────────────────────
         coins_with_scores.sort(key=lambda x: x[1], reverse=True)
 
+        # ── 4b. OPEN INTEREST (confirmador futures-aware, só nos finalistas) ─────
+        # OI subindo = dinheiro novo no par. Aplica um bônus ADITIVO no score
+        # (nunca penaliza) apenas quando oi_change_score ≥ OI_CONFIRM_MIN_SCORE.
+        # Busca OI só para o topo do ranking (1 chamada/par) pra não saturar a API.
+        if getattr(config, "OI_ENABLED", False) and coins_with_scores:
+            oi_weight = float(getattr(config, "OPEN_INTEREST_WEIGHT", 8.0))
+            confirm_min = float(getattr(config, "OI_CONFIRM_MIN_SCORE", 60.0))
+            max_finalists = int(getattr(config, "OI_MAX_FINALISTS", 20))
+            core_total = sum(config.PAIR_SELECTION_WEIGHTS.values())
+            denom = core_total + oi_weight
+            finalists = coins_with_scores[:max_finalists]
+
+            def _apply_oi(item):
+                symbol, base = item
+                oi_change = self.pair_selector.get_oi_change_percent(symbol)
+                oi_score = self.pair_selector.oi_change_to_score(oi_change)
+                if oi_score >= confirm_min and denom > 0:
+                    bonus = oi_score * oi_weight / denom
+                    logger.debug(
+                        f"   📈 OI confirm {symbol}: ΔOI={oi_change:.2f}% "
+                        f"score={oi_score:.0f} +{bonus:.2f}"
+                    )
+                    return (symbol, base + bonus)
+                return (symbol, base)
+
+            oi_workers = min(8, len(finalists))
+            with concurrent.futures.ThreadPoolExecutor(max_workers=oi_workers) as _oi_ex:
+                rescored = dict(_oi_ex.map(_apply_oi, finalists))
+            coins_with_scores = [
+                (sym, rescored.get(sym, sc)) for sym, sc in coins_with_scores
+            ]
+            coins_with_scores.sort(key=lambda x: x[1], reverse=True)
+
+        # ── 4c. RETORNA ──────────────────────────────────────────────────────────
         logger.info(f"🏆 Top {num_coins} moedas por score:")
         for i, (symbol, score) in enumerate(coins_with_scores[:num_coins], 1):
             logger.info(f"   {i}. {symbol.replace('USDT', '')}: {score:.2f}")

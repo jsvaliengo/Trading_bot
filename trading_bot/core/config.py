@@ -265,7 +265,20 @@ class TradingConfig:
     # RVOL = volume da última hora fechada ÷ média horária recente. Piso baixo
     # só para descartar par sem fluxo na hora; o score premia RVOL alto de forma suave.
     RVOL_MIN_THRESHOLD: float = _env_float("TRADING_BOT_RVOL_MIN_THRESHOLD", 0.8)
-    
+
+    # Open Interest (futures-aware): OI subindo = dinheiro novo entrando no par.
+    # Entra como CONFIRMADOR aditivo no score (nunca penaliza), só nos finalistas
+    # do ranking (1 chamada por par). A série de OI vem da MAINNET pública mesmo
+    # em testnet — OI de testnet é ruído; o endpoint /futures/data é só mainnet.
+    # OPEN_INTEREST_WEIGHT é peso AVULSO (não entra em PAIR_SELECTION_WEIGHTS, pra
+    # não diluir o score base que divide por sum(weights)).
+    OI_ENABLED: bool = _env_bool("TRADING_BOT_OI_ENABLED", True)
+    OPEN_INTEREST_WEIGHT: float = _env_float("TRADING_BOT_OPEN_INTEREST_WEIGHT", 8.0)
+    OI_PERIOD: str = os.getenv("TRADING_BOT_OI_PERIOD", "5m").strip() or "5m"
+    OI_LOOKBACK_SAMPLES: int = _env_int("TRADING_BOT_OI_LOOKBACK_SAMPLES", 6)  # 6×5m = 30m
+    OI_CONFIRM_MIN_SCORE: float = _env_float("TRADING_BOT_OI_CONFIRM_MIN_SCORE", 60.0)
+    OI_MAX_FINALISTS: int = _env_int("TRADING_BOT_OI_MAX_FINALISTS", 20)
+
     # Usar sempre o valor MÍNIMO aceitável de cada par
     USE_MIN_NOTIONAL_ONLY: bool = True
 

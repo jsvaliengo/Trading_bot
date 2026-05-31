@@ -15,7 +15,7 @@ Autor: Trading Bot
 """
 
 import logging
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional
 from datetime import datetime, timezone, timedelta
 
 from ..core.strategy import TechnicalAnalysis
@@ -41,6 +41,7 @@ class PairSelector:
         self.config = config
         self.last_update = None
         self.pair_scores = {}  # Cache dos scores
+        self._oi_public_client = None  # Cliente público mainnet p/ Open Interest (lazy)
         
         # Lista de pares a ignorar (stablecoins, etc)
         self.IGNORE_PAIRS = [
@@ -318,7 +319,70 @@ class PairSelector:
         ) / total_weight
         
         return final_score
-    
+
+    def _get_oi_public_client(self):
+        """
+        Cliente python-binance público (sem chaves, mainnet) só para Open
+        Interest. O endpoint /futures/data/openInterestHist é público e só
+        existe na mainnet — o cliente do bot em testnet o retorna vazio.
+        OI de testnet seria ruído; o sinal relevante é o do mercado real.
+        """
+        if self._oi_public_client is None:
+            try:
+                from binance.client import Client
+                self._oi_public_client = Client()
+            except Exception as e:
+                logger.warning(f"⚠️ Falha ao criar cliente público de OI: {e}")
+                self._oi_public_client = None
+        return self._oi_public_client
+
+    def get_oi_change_percent(self, symbol: str) -> Optional[float]:
+        """
+        Variação % do Open Interest nas últimas OI_LOOKBACK_SAMPLES barras
+        (OI_PERIOD). Positivo = dinheiro novo entrando. Retorna None se OI
+        desligado, sem cliente, ou sem dados suficientes (tratado como neutro).
+        """
+        if not bool(getattr(self.config, "OI_ENABLED", False)):
+            return None
+        client = self._get_oi_public_client()
+        if client is None:
+            return None
+        period = str(getattr(self.config, "OI_PERIOD", "5m"))
+        samples = int(getattr(self.config, "OI_LOOKBACK_SAMPLES", 6))
+        try:
+            hist = client.futures_open_interest_hist(
+                symbol=symbol, period=period, limit=samples + 1
+            )
+        except Exception as e:
+            logger.debug(f"OI hist falhou para {symbol}: {e}")
+            return None
+        if not hist or len(hist) < 2:
+            return None
+        try:
+            oi_old = float(hist[0]["sumOpenInterest"])
+            oi_new = float(hist[-1]["sumOpenInterest"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        if oi_old <= 0:
+            return None
+        return (oi_new - oi_old) / oi_old * 100.0
+
+    @staticmethod
+    def oi_change_to_score(oi_change: Optional[float]) -> float:
+        """
+        Converte a variação de OI em score 0-100 (só OI subindo pontua).
+        <0%→0 | 0-3%→30 | 3-8%→60 | 8-15%→85 | >15%→100.
+        """
+        if oi_change is None or oi_change < 0:
+            return 0.0
+        if oi_change < 3.0:
+            return 30.0
+        if oi_change < 8.0:
+            return 60.0
+        if oi_change < 15.0:
+            return 85.0
+        return 100.0
+
     def calculate_pair_capital_needed(self, min_notional: float) -> float:
         """
         Calcula quanto capital é necessário para operar um par em hedge.

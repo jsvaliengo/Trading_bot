@@ -625,6 +625,60 @@ def test_pair_selector_filters_pairs_below_rvol_floor():
     assert "DEADUSDT" not in selected
 
 
+def test_oi_change_to_score_buckets():
+    """Buckets da spec: <0→0, [0,3)→30, [3,8)→60, [8,15)→85, ≥15→100."""
+    f = PairSelector.oi_change_to_score
+    assert f(None) == 0.0
+    assert f(-1.0) == 0.0
+    assert f(0.0) == 30.0
+    assert f(2.9) == 30.0
+    assert f(3.0) == 60.0
+    assert f(7.9) == 60.0
+    assert f(8.0) == 85.0
+    assert f(14.9) == 85.0
+    assert f(15.0) == 100.0
+    assert f(40.0) == 100.0
+
+
+def _oi_config(enabled=True):
+    return SimpleNamespace(
+        OI_ENABLED=enabled,
+        OI_PERIOD="5m",
+        OI_LOOKBACK_SAMPLES=6,
+    )
+
+
+def test_get_oi_change_percent_computes_from_hist():
+    """ΔOI = (OI_novo - OI_antigo) / OI_antigo × 100, do primeiro ao último sample."""
+    selector = PairSelector(exchange=None, config=_oi_config())
+
+    class OIClientStub:
+        def futures_open_interest_hist(self, symbol, period, limit):
+            return [{"sumOpenInterest": str(v)} for v in (100.0, 102, 104, 106, 108, 110, 112)]
+
+    selector._oi_public_client = OIClientStub()
+    change = selector.get_oi_change_percent("FOOUSDT")
+    assert change is not None
+    assert round(change, 4) == 12.0  # (112-100)/100*100
+
+
+def test_get_oi_change_percent_returns_none_when_disabled_or_short():
+    # Desligado → None (não chama API)
+    sel_off = PairSelector(exchange=None, config=_oi_config(enabled=False))
+    sel_off._oi_public_client = object()  # não deve ser usado
+    assert sel_off.get_oi_change_percent("FOOUSDT") is None
+
+    # Dados insuficientes → None (neutro, não quebra)
+    sel = PairSelector(exchange=None, config=_oi_config())
+
+    class ShortStub:
+        def futures_open_interest_hist(self, symbol, period, limit):
+            return [{"sumOpenInterest": "100"}]
+
+    sel._oi_public_client = ShortStub()
+    assert sel.get_oi_change_percent("FOOUSDT") is None
+
+
 def test_stop_force_reports_partial_close_failures():
     handler = TelegramCommandHandler(token="token", chat_id="123")
 
