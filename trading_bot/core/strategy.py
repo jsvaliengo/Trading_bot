@@ -895,11 +895,13 @@ class HedgeStrategy:
         return dca_levels
     
     def calculate_stop_loss_take_profit(
-        self, 
-        entry_price: float, 
+        self,
+        entry_price: float,
         signal: Signal,
         atr: float = None,
         risk_profile: Optional[Dict[str, Any]] = None,
+        recent_low: Optional[float] = None,
+        recent_high: Optional[float] = None,
     ) -> Tuple[float, float]:
         """
         Calcula Stop Loss e Take Profit.
@@ -919,6 +921,34 @@ class HedgeStrategy:
             take_profit_min = float(profile.get("take_profit_min_percent", 0.5))
             take_profit_max = float(profile.get("take_profit_max_percent", 1.5))
             risk_reward_target = max(1.0, float(profile.get("risk_reward_target", 2.0)))
+
+            is_long = signal in [Signal.STRONG_BUY, Signal.BUY, Signal.NEUTRAL]
+
+            # Stop estrutural: ancora o SL abaixo do último fundo (LONG) / acima
+            # do último topo (SHORT). A distância define o risco; o sizing
+            # risk-based encolhe a posição pra manter RISK_PER_TRADE_PCT.
+            structural_enabled = bool(getattr(self.config, "STRUCTURAL_STOP_ENABLED", False))
+            struct_ref = recent_low if is_long else recent_high
+            if structural_enabled and struct_ref and struct_ref > 0 and entry_price > 0:
+                buffer = float(getattr(self.config, "STRUCTURAL_STOP_BUFFER_PERCENT", 0.10)) / 100.0
+                cap = float(getattr(self.config, "STRUCTURAL_STOP_MAX_PERCENT", 2.5))
+                if is_long:
+                    struct_sl_price = struct_ref * (1.0 - buffer)
+                    raw_sl_pct = (entry_price - struct_sl_price) / entry_price * 100.0
+                else:
+                    struct_sl_price = struct_ref * (1.0 + buffer)
+                    raw_sl_pct = (struct_sl_price - entry_price) / entry_price * 100.0
+                # Floor no mínimo do profile (não cola no ruído de fees); teto no cap.
+                stop_loss_pct = max(stop_loss_min, min(raw_sl_pct, cap))
+                # TP = SL × RR (sem teto superior, pra preservar o risk/reward).
+                take_profit_pct = max(take_profit_min, stop_loss_pct * risk_reward_target)
+                if is_long:
+                    stop_loss = entry_price * (1 - stop_loss_pct / 100.0)
+                    take_profit = entry_price * (1 + take_profit_pct / 100.0)
+                else:
+                    stop_loss = entry_price * (1 + stop_loss_pct / 100.0)
+                    take_profit = entry_price * (1 - take_profit_pct / 100.0)
+                return (_round_price(stop_loss), _round_price(take_profit))
 
             if atr and atr > 0 and entry_price > 0:
                 # ATR x 1.5 — padrão de scalping institucional (vs 3x do swing).
@@ -1002,11 +1032,16 @@ class HedgeStrategy:
         highs = [self._to_float(k.get("high")) for k in execution_klines]
         lows = [self._to_float(k.get("low")) for k in execution_klines]
         atr = self.ta.calculate_atr(highs, lows, closes)
+        struct_lookback = int(getattr(self.config, "STRUCTURAL_STOP_LOOKBACK", 10))
+        recent_low = min(lows[-struct_lookback:]) if lows else None
+        recent_high = max(highs[-struct_lookback:]) if highs else None
         stop_loss, take_profit = self.calculate_stop_loss_take_profit(
             entry_price,
             candidate_signal,
             atr,
             risk_profile=risk_profile,
+            recent_low=recent_low,
+            recent_high=recent_high,
         )
         sl_pct = (
             abs(float(entry_price) - float(stop_loss)) / float(entry_price) * 100.0
@@ -1100,9 +1135,15 @@ class HedgeStrategy:
         lows = [k['low'] for k in klines]
         atr = self.ta.calculate_atr(highs, lows, closes)
 
+        # Último fundo/topo pra ancorar o stop estrutural.
+        struct_lookback = int(getattr(self.config, "STRUCTURAL_STOP_LOOKBACK", 10))
+        recent_low = min(lows[-struct_lookback:]) if lows else None
+        recent_high = max(highs[-struct_lookback:]) if highs else None
+
         # SL/TP antes do sizing pra suportar risk-based sizing (precisa de sl_pct)
         stop_loss, take_profit = self.calculate_stop_loss_take_profit(
-            entry_price, signal, atr, risk_profile=risk_profile
+            entry_price, signal, atr, risk_profile=risk_profile,
+            recent_low=recent_low, recent_high=recent_high,
         )
         sl_pct = (
             abs(float(entry_price) - float(stop_loss)) / float(entry_price) * 100.0
