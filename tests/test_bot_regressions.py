@@ -1298,6 +1298,76 @@ def test_analyze_and_trade_allows_execution_when_ai_gated_review_is_positive(mon
     bot.execute_signal_trade.assert_called_once()
 
 
+def _make_oi_gate_bot(monkeypatch, oi_change):
+    """Bot pronto pra executar um STRONG_BUY clássico, com pair_selector
+    stubado pra devolver `oi_change` (% de variação de OI)."""
+    bot = _make_light_bot()
+
+    monkeypatch.setattr(config, "USE_DAILY_TARGETS", False)
+    monkeypatch.setattr(config, "TIMEFRAME", "5m")
+    monkeypatch.setattr(config, "CANDLES_LOOKBACK", 50)
+    monkeypatch.setattr(config, "AI_CONSULTIVE_MODE", "off")
+    monkeypatch.setattr(config, "OI_ENABLED", True)
+    monkeypatch.setattr(config, "OI_ENTRY_GATE_ENABLED", True)
+    monkeypatch.setattr(config, "OI_ENTRY_CONTRADICT_PCT", -5.0)
+
+    setup = TradeSetup(
+        symbol="ETHUSDT",
+        signal=Signal.STRONG_BUY,
+        long_size=5.0,
+        short_size=5.0,
+        entry_price=100.0,
+        stop_loss=99.0,
+        take_profit=102.0,
+        dca_levels=[],
+    )
+
+    bot.exchange = SimpleNamespace(
+        get_klines=lambda **_kwargs: [{"open": 99.0, "high": 101.0, "low": 98.5, "close": 100.0, "volume": 10.0}],
+        get_available_balance=lambda: 1000.0,
+        get_symbol_info=lambda _symbol: {"minNotional": 5.0},
+        get_open_positions=lambda *a, **kw: [],
+    )
+    bot.strategy = SimpleNamespace(generate_trade_setup=lambda **_kwargs: setup)
+    bot.risk_manager = SimpleNamespace(can_open_position=lambda _total: True)
+    bot.sentiment_mode_enabled = False
+    bot.ai_consultive_engine = None
+    bot.pair_selector = SimpleNamespace(get_oi_change_percent=lambda _symbol: oi_change)
+    bot.telegram = SimpleNamespace(send_message=MagicMock())
+    bot.execute_signal_trade = MagicMock(return_value=True)
+    return bot
+
+
+def test_analyze_and_trade_oi_gate_blocks_long_when_oi_falling_hard(monkeypatch):
+    # ΔOI=-10% ≤ -5% ⇒ movimento sem dinheiro novo ⇒ bloqueia a entrada.
+    bot = _make_oi_gate_bot(monkeypatch, oi_change=-10.0)
+
+    result = bot.analyze_and_trade("ETHUSDT")
+
+    assert result is False
+    bot.execute_signal_trade.assert_not_called()
+
+
+def test_analyze_and_trade_oi_gate_allows_when_oi_not_falling_hard(monkeypatch):
+    # ΔOI=+2% (estável/subindo) ⇒ não contradiz ⇒ entrada segue.
+    bot = _make_oi_gate_bot(monkeypatch, oi_change=2.0)
+
+    result = bot.analyze_and_trade("ETHUSDT")
+
+    assert result is True
+    bot.execute_signal_trade.assert_called_once()
+
+
+def test_analyze_and_trade_oi_gate_allows_when_oi_unavailable(monkeypatch):
+    # Sem dado de OI (None) ⇒ gate soft NÃO bloqueia ⇒ entrada segue.
+    bot = _make_oi_gate_bot(monkeypatch, oi_change=None)
+
+    result = bot.analyze_and_trade("ETHUSDT")
+
+    assert result is True
+    bot.execute_signal_trade.assert_called_once()
+
+
 def test_analyze_and_trade_allows_gated_ai_override_when_trend_strong_setup_is_neutral(monkeypatch):
     bot = _make_light_bot()
 

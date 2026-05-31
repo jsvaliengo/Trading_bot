@@ -3332,6 +3332,36 @@ class TradingBot:
                 )
                 should_open_short = False
 
+        # Gate de Open Interest na entrada (soft). Bloqueia abrir quando o OI
+        # está caindo forte (ΔOI ≤ OI_ENTRY_CONTRADICT_PCT): movimento sem
+        # dinheiro novo (short-covering / liquidação), conviction fraca. OI
+        # estável ou subindo passa. Dado de OI indisponível NÃO bloqueia — é
+        # confirmador, não filtro absoluto (e a API de OI é externa/keyless).
+        if (
+            (should_open_long or should_open_short)
+            and getattr(config, "OI_ENABLED", False)
+            and getattr(config, "OI_ENTRY_GATE_ENABLED", False)
+            and getattr(self, "pair_selector", None) is not None
+        ):
+            contradict_pct = float(getattr(config, "OI_ENTRY_CONTRADICT_PCT", -5.0))
+            oi_change = self.pair_selector.get_oi_change_percent(symbol)
+            if oi_change is not None and oi_change <= contradict_pct:
+                side_lbl = "LONG" if should_open_long else "SHORT"
+                logger.info(
+                    f"⏸️  {symbol}: {side_lbl} bloqueado por OI — "
+                    f"ΔOI={oi_change:.2f}% ≤ {contradict_pct:.1f}% "
+                    "(movimento sem dinheiro novo)"
+                )
+                self.block_reporter.notify_blocked(
+                    symbol=symbol,
+                    side=side_lbl,
+                    strategy_name=strategy_label,
+                    reason="Entrada bloqueada por OI caindo forte",
+                    detail=f"ΔOI={oi_change:.2f}% (limiar {contradict_pct:.1f}%)",
+                )
+                should_open_long = False
+                should_open_short = False
+
         # Se sinal é NEUTRAL ou foi filtrado pelo sentimento, não abre posição.
         if not should_open_long and not should_open_short:
             if getattr(self, "sentiment_mode_enabled", False) and signal_name in ['STRONG_BUY', 'STRONG_SELL']:
