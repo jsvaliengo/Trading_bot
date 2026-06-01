@@ -34,6 +34,7 @@ from .position_tracker import PositionTracker
 from .state_manager import StateManager
 from .trade_block_reporter import TradeBlockReporter
 from .trade_ledger import TradeLedger
+from .trade_store import TradeStore
 from ..ai.consultive_engine import ConsultiveEngine
 from ..execution import ExecutionEngine
 from ..infra.binance_client import BinanceConnection
@@ -284,6 +285,10 @@ class TradingBot:
         # Criado aqui (dentro de _init_runtime_state) pra que testes que usam
         # TradingBot.__new__() + _init_runtime_state() também tenham acesso.
         self.state_manager = StateManager(lock=self._state_io_lock)
+        # Store durável de trades/equity (SQLite). Mantém histórico COMPLETO
+        # fora do state JSON (que só carrega janela recente). Defensivo:
+        # falha ao abrir => None, e o bot segue sem histórico durável.
+        self.trade_store = self._open_trade_store()
         # Engine de execução (close/emergência). Recebe self — mantém
         # acoplamento de dados pra simplicidade; separação CÓDIGO, não DADOS.
         self.execution_engine = ExecutionEngine(self)
@@ -307,6 +312,25 @@ class TradingBot:
         # Dashboard web (opt-in via DASHBOARD_ENABLED). Lazy import pra não
         # forçar Flask como dependência obrigatória em ambientes minimalistas.
         self.dashboard_server = None
+
+    def _open_trade_store(self):
+        """Abre (ou reabre) o TradeStore SQLite no path do ambiente atual.
+
+        Fecha um store anterior se existir (caso de troca de rede via /env).
+        Defensivo: qualquer falha retorna None e o bot segue — o histórico
+        durável é best-effort, nunca pode bloquear o trading.
+        """
+        old = getattr(self, "trade_store", None)
+        if old is not None:
+            old.close()
+        db_path = getattr(config, "TRADE_DB_PATH", "") or ""
+        if not db_path:
+            return None
+        try:
+            return TradeStore(db_path)
+        except Exception:
+            logger.exception("🗃️ Falha ao abrir TradeStore — seguindo sem histórico durável")
+            return None
 
     def _acquire_instance_lock(self) -> bool:
         """
@@ -593,20 +617,14 @@ class TradingBot:
         return out
 
     def _build_state_payload(self) -> Dict[str, Any]:
-        """Monta payload serializável para persistência de estado."""
-        portfolio_history_serializable = []
-        for snap in self.portfolio_history:
-            portfolio_history_serializable.append({
-                'timestamp': snap['timestamp'].isoformat() if isinstance(snap['timestamp'], datetime) else snap['timestamp'],
-                'balance': snap['balance'],
-                'pnl_realized': snap['pnl_realized'],
-                'pnl_unrealized': snap['pnl_unrealized'],
-                'pnl_total': snap['pnl_total'],
-                'closed_trades': snap['closed_trades']
-            })
+        """Monta payload serializável para persistência de estado.
 
+        `trade_history` e `portfolio_history` NÃO entram mais aqui — moram no
+        TradeStore (SQLite), que guarda o histórico COMPLETO. O state JSON só
+        carrega estado quente (contadores, posições, peaks). Ver trade_store.py.
+        """
         return {
-            'version': '1.8',  # Persistência atômica com fallback de backup
+            'version': '1.9',  # trade_history/portfolio_history movidos p/ SQLite (trade_store)
             'saved_at': datetime.now().isoformat(),
             'start_time': self.start_time.isoformat() if isinstance(self.start_time, datetime) else self.start_time,
             'initial_capital': self.initial_capital,
@@ -622,8 +640,6 @@ class TradingBot:
             'total_fees_paid': self.total_fees_paid,
             'daily_pnl_binance_baseline': float(getattr(self, 'daily_pnl_binance_baseline', 0.0)),
             'daily_baseline_date': getattr(self, '_daily_baseline_date', None),
-            'portfolio_history': portfolio_history_serializable,
-            'trade_history': self.trade_history[-500:],
             'peak_prices': self.peak_prices,
             'trailing_activated': self.trailing_activated,
             # known_positions persistido pra não perder custom_tp/sl, strategy e
@@ -836,7 +852,18 @@ class TradingBot:
                     'pnl_total': snap['pnl_total'],
                     'closed_trades': snap['closed_trades']
                 })
-            
+
+            # Histórico durável (SQLite): os arrays acima vêm do state legado
+            # (vazios em saves novos, pois deixaram de ser persistidos no JSON).
+            # 1) migra one-shot pro store se ele estiver vazio;
+            # 2) reidrata a janela recente A PARTIR do store, que passa a ser a
+            #    fonte de verdade do histórico (completo, sem o cap de 500/144).
+            store = getattr(self, 'trade_store', None)
+            if store is not None:
+                store.migrate_from_state(self.trade_history, self.portfolio_history)
+                self.trade_history = store.recent_trades(500)
+                self.portfolio_history = store.recent_equity(144)
+
             # Garante que todos os símbolos configurados estejam no pnl_by_symbol
             for symbol in config.TRADING_PAIRS:
                 if symbol not in self.pnl_by_symbol:
@@ -1046,8 +1073,10 @@ class TradingBot:
             runtime_dir = Path(config.RUNTIME_DIR)
             config.STATE_FILE_NAME = f"bot_state.{env_suffix}.json"
             config.LOCK_FILE_NAME = f"trading_bot.{env_suffix}.lock"
+            config.TRADE_DB_NAME = f"trades.{env_suffix}.db"
             config.STATE_FILE_PATH = str(runtime_dir / config.STATE_FILE_NAME)
             config.LOCK_FILE_PATH = str(runtime_dir / config.LOCK_FILE_NAME)
+            config.TRADE_DB_PATH = str(runtime_dir / config.TRADE_DB_NAME)
             self._state_file_path = config.STATE_FILE_PATH
             self._instance_lock_path = config.LOCK_FILE_PATH
 
@@ -4471,6 +4500,10 @@ class TradingBot:
         self.portfolio_history.append(snapshot)
         self.last_snapshot_time = now
 
+        # Persiste o snapshot no store durável (série completa de equity).
+        if getattr(self, "trade_store", None) is not None:
+            self.trade_store.record_equity(snapshot)
+
         # Mantém apenas os últimos 144 snapshots (24h se for a cada 10min)
         if len(self.portfolio_history) > 144:
             self.portfolio_history = self.portfolio_history[-144:]
@@ -5176,7 +5209,10 @@ class TradingBot:
 
         # Loop finalizado (parada normal/comando/sinal): libera lock
         self._release_instance_lock()
-    
+        # Fecha o store durável (checkpoint do WAL). Best-effort.
+        if getattr(self, "trade_store", None) is not None:
+            self.trade_store.close()
+
     def stop(self):
         """
         Para o bot de forma segura.

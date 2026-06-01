@@ -144,12 +144,14 @@ class TradingConfig:
     STATE_FILE_NAME: str = os.getenv("TRADING_BOT_STATE_FILE_NAME", "")
     LOCK_FILE_NAME: str = os.getenv("TRADING_BOT_LOCK_FILE_NAME", "")
     LOG_FILE_NAME: str = os.getenv("TRADING_BOT_LOG_FILE_NAME", "")
+    TRADE_DB_NAME: str = os.getenv("TRADING_BOT_TRADE_DB_NAME", "")
 
     # Caminhos resolvidos no __post_init__
     PROJECT_ROOT: str = ""
     STATE_FILE_PATH: str = ""
     LOCK_FILE_PATH: str = ""
     LOG_FILE_PATH: str = ""
+    TRADE_DB_PATH: str = ""
     ACTIVE_ENV_FILE_PATH: str = ""
     
     # ============================================
@@ -853,12 +855,15 @@ class TradingConfig:
             self.LOCK_FILE_NAME = f"trading_bot.{env_suffix}.lock"
         if not self.LOG_FILE_NAME:
             self.LOG_FILE_NAME = f"trading_bot.{env_suffix}.log"
+        if not self.TRADE_DB_NAME:
+            self.TRADE_DB_NAME = f"trades.{env_suffix}.db"
 
         self.PROJECT_ROOT = str(project_root)
         self.RUNTIME_DIR = str(runtime_dir)
         self.STATE_FILE_PATH = str(runtime_dir / self.STATE_FILE_NAME)
         self.LOCK_FILE_PATH = str(runtime_dir / self.LOCK_FILE_NAME)
         self.LOG_FILE_PATH = str(runtime_dir / self.LOG_FILE_NAME)
+        self.TRADE_DB_PATH = str(runtime_dir / self.TRADE_DB_NAME)
         self.ACTIVE_ENV_FILE_PATH = str(active_env_file)
 
         # Pares FIXOS - VAZIO = todos serão dinâmicos
