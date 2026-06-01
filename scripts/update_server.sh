@@ -113,13 +113,32 @@ if screen -list | grep -q "[[:space:]]${SCREEN_NAME}[[:space:]]"; then
   sleep 3
 fi
 
+# Premissa operacional: UM bot por VM. BOT_PROCESS_PATTERN casa com QUALQUER
+# instância de trading_bot.core.bot — a rede (testnet/mainnet) vem do .env, não
+# da linha de comando. Se houver >1 instância (ex.: testnet e mainnet rodando ao
+# mesmo tempo), abortamos ANTES de matar qualquer coisa para não derrubar o
+# ambiente errado. O `|| true` é necessário: sob `set -o pipefail`, o pgrep sem
+# match retorna 1 e abortaria a atribuição.
+bot_instances="$(pgrep -f "$BOT_PROCESS_PATTERN" | wc -l | tr -d ' ' || true)"
+if [[ "${bot_instances:-0}" -gt 1 ]]; then
+  log "ALERTA: $bot_instances instâncias de '$BOT_MODULE' rodando — esperado no máximo 1 (um bot por VM)."
+  log "Abortando deploy para não encerrar o ambiente errado. Investigue: pgrep -af \"$BOT_PROCESS_PATTERN\""
+  exit 1
+fi
+
 # Mata o wrapper PRIMEIRO — senão ele relança o bot logo após o kill abaixo.
-stop_pattern "Wrapper de auto-restart antigo" "$WRAPPER_PROCESS_PATTERN" 5
+# `|| log ...` evita que o set -e derrube o deploy se stop_pattern retornar !=0
+# (straggler imortal): preferimos seguir e relançar a deixar o bot fora do ar.
+stop_pattern "Wrapper de auto-restart antigo" "$WRAPPER_PROCESS_PATTERN" 5 \
+  || log "AVISO: wrapper sobreviveu ao SIGKILL — seguindo com o deploy mesmo assim."
 
 # Encerra processo(s) antigo(s) do bot com escalonamento até SIGKILL.
 # Sem isso, uma instância presa (event loop morto) sobrevive ao SIGTERM e a
 # nova aborta por lock duplicado — exatamente a falha que derrubou o Telegram.
-stop_pattern "Processo antigo do bot" "$BOT_PROCESS_PATTERN" 8
+# Idem: não deixamos um straggler imortal abortar o deploy (o wrapper já foi
+# morto acima, então abortar aqui significaria bot 100% fora do ar).
+stop_pattern "Processo antigo do bot" "$BOT_PROCESS_PATTERN" 8 \
+  || log "AVISO: instância antiga sobreviveu ao SIGKILL — seguindo mesmo assim; bot novo pode entrar em crash-loop por lock duplicado até o straggler morrer (wrapper reinicia com backoff)."
 
 # Limpa órfãos de diagnóstico (one-liners BinanceConnection / pos_diag presos).
 if pgrep -f "$DIAG_PROCESS_PATTERN" >/dev/null; then
@@ -135,11 +154,29 @@ log "Subindo nova sessão screen '$SCREEN_NAME' via wrapper de auto-restart..."
 chmod +x "$BOT_WRAPPER" 2>/dev/null || true
 screen -dmS "$SCREEN_NAME" bash -lc "PROJECT_DIR='$PROJECT_DIR' PYTHON_BIN='$PYTHON_BIN' BOT_MODULE='$BOT_MODULE' '$BOT_WRAPPER'"
 
-sleep 2
+# Health check com polling. Em VM Micro o import do Python (logo após
+# pip install/pytest) costuma levar mais que 2s, então esperar uma checagem
+# única gera falso "Falha ao iniciar bot". Faz polling até o timeout.
+HEALTHCHECK_TIMEOUT="${HEALTHCHECK_TIMEOUT:-20}"
+# Blinda contra valor não-numérico: senão `[[ -lt ]]` o trata como 0, pula o
+# polling e regride pro bug (checagem única) que estamos consertando.
+if ! [[ "$HEALTHCHECK_TIMEOUT" =~ ^[0-9]+$ ]]; then
+  log "HEALTHCHECK_TIMEOUT inválido ('$HEALTHCHECK_TIMEOUT') — usando 20s."
+  HEALTHCHECK_TIMEOUT=20
+fi
+hc_waited=0
+while [[ "$hc_waited" -lt "$HEALTHCHECK_TIMEOUT" ]]; do
+  if pgrep -af "$WRAPPER_PROCESS_PATTERN" >/dev/null && pgrep -af "$BOT_PROCESS_PATTERN" >/dev/null; then
+    break
+  fi
+  sleep 1
+  hc_waited=$((hc_waited + 1))
+done
+
 if pgrep -af "$WRAPPER_PROCESS_PATTERN" >/dev/null && pgrep -af "$BOT_PROCESS_PATTERN" >/dev/null; then
-  log "Bot iniciado com sucesso (wrapper ativo)."
+  log "Bot iniciado com sucesso (wrapper ativo após ${hc_waited}s)."
 else
-  log "Falha ao iniciar bot (wrapper ou python não detectado)."
+  log "Falha ao iniciar bot (wrapper ou python não detectado em ${HEALTHCHECK_TIMEOUT}s)."
   exit 1
 fi
 

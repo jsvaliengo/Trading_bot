@@ -31,11 +31,19 @@ fi
 
 while true; do
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] Iniciando bot (backoff=${backoff}s)" >> "$RESTART_LOG"
+    start_ts=$(date +%s)
     "$PYTHON_BIN" -m "$BOT_MODULE"
     exit_code=$?
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Bot saiu code=$exit_code. Reinicio em ${backoff}s." >> "$RESTART_LOG"
+    run_secs=$(( $(date +%s) - start_ts ))
+    # Se o bot rodou > 60s era uma instância estável (não crash-loop): reseta o
+    # backoff pra base, pra próxima recuperação ser rápida. Senão dobra até o
+    # teto, evitando loop quente quando o erro é persistente (import/config bad).
+    if [ "$run_secs" -gt 60 ]; then
+        backoff=$BACKOFF_BASE
+    else
+        backoff=$((backoff * 2))
+        if [ "$backoff" -gt "$BACKOFF_MAX" ]; then backoff=$BACKOFF_MAX; fi
+    fi
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Bot saiu code=$exit_code após ${run_secs}s. Reinício em ${backoff}s." >> "$RESTART_LOG"
     sleep "$backoff"
-    # Backoff exponencial — reseta pra base se o bot rodou > 60s
-    backoff=$((backoff * 2))
-    if [ "$backoff" -gt "$BACKOFF_MAX" ]; then backoff=$BACKOFF_MAX; fi
 done
