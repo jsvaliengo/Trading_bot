@@ -331,7 +331,7 @@ def test_deserialize_known_positions_handles_malformed_entries():
         "NOT_A_DICT": "oops",
     }
 
-    result = bot._deserialize_known_positions(raw)
+    result = bot.state_persistence.deserialize_known_positions(raw)
 
     assert "GOOD_LONG" in result
     assert isinstance(result["GOOD_LONG"]["last_seen"], datetime)

@@ -93,7 +93,8 @@ class PositionTracker:
         chamada, e retorna o position_key resultante.
 
         ATENÇÃO: o schema aqui DEVE ficar em sincronia com:
-        - state_manager._serialize_known_positions / _deserialize_known_positions
+        - bot_state_serde.BotStatePersistence.serialize_known_positions /
+          deserialize_known_positions
         - bot.py reconciliação (setup_exchange e monitor_positions)
         - dashboard collect_positions
         Mudar campos aqui exige atualizar esses outros lugares também.

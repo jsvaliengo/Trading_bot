@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from .config import config
+from .bot_state_serde import BotStatePersistence
 from .scheduler import LoopScheduler, get_loop_timing_profile, timing_profile_changed
 from .double_first_policy import DoubleFirstPolicy
 from .position_tracker import PositionTracker
@@ -285,6 +286,8 @@ class TradingBot:
         # Criado aqui (dentro de _init_runtime_state) pra que testes que usam
         # TradingBot.__new__() + _init_runtime_state() também tenham acesso.
         self.state_manager = StateManager(lock=self._state_io_lock)
+        # (De)serialização do estado <-> payload JSON (mapeamento puro, sem I/O).
+        self.state_persistence = BotStatePersistence(self)
         # Store durável de trades/equity (SQLite). Mantém histórico COMPLETO
         # fora do state JSON (que só carrega janela recente). Defensivo:
         # falha ao abrir => None, e o bot segue sem histórico durável.
@@ -582,87 +585,6 @@ class TradingBot:
             logger.warning(f"⚠️ Falha ao arquivar state antes do reset: {exc}")
             return ""
 
-    def _serialize_known_positions(self) -> Dict[str, Any]:
-        """
-        Converte known_positions para forma serializável em JSON.
-        O único campo não-JSON-nativo é last_seen (datetime) → ISO string.
-        """
-        out: Dict[str, Any] = {}
-        for key, payload in (self.known_positions or {}).items():
-            if not isinstance(payload, dict):
-                continue
-            entry = dict(payload)
-            last_seen = entry.get('last_seen')
-            if isinstance(last_seen, datetime):
-                entry['last_seen'] = last_seen.isoformat()
-            out[key] = entry
-        return out
-
-    def _deserialize_known_positions(self, raw: Any) -> Dict[str, Any]:
-        """Desserializa known_positions do state (last_seen ISO → datetime)."""
-        if not isinstance(raw, dict):
-            return {}
-        out: Dict[str, Any] = {}
-        for key, payload in raw.items():
-            if not isinstance(payload, dict):
-                continue
-            entry = dict(payload)
-            last_seen = entry.get('last_seen')
-            if isinstance(last_seen, str):
-                try:
-                    entry['last_seen'] = datetime.fromisoformat(last_seen)
-                except ValueError:
-                    entry['last_seen'] = datetime.now()
-            out[key] = entry
-        return out
-
-    def _build_state_payload(self) -> Dict[str, Any]:
-        """Monta payload serializável para persistência de estado.
-
-        `trade_history` e `portfolio_history` NÃO entram mais aqui — moram no
-        TradeStore (SQLite), que guarda o histórico COMPLETO. O state JSON só
-        carrega estado quente (contadores, posições, peaks). Ver trade_store.py.
-        """
-        return {
-            'version': '1.9',  # trade_history/portfolio_history movidos p/ SQLite (trade_store)
-            'saved_at': datetime.now().isoformat(),
-            'start_time': self.start_time.isoformat() if isinstance(self.start_time, datetime) else self.start_time,
-            'initial_capital': self.initial_capital,
-            'closed_trades_count': self.closed_trades_count,
-            'total_pnl': self.total_pnl,
-            'daily_realized_pnl': self.daily_realized_pnl,
-            'daily_date': datetime.now(timezone.utc).strftime('%Y-%m-%d'),
-            'pnl_by_symbol': self.pnl_by_symbol,
-            'trades_win_count': self.trades_win_count,
-            'trades_loss_count': self.trades_loss_count,
-            'trades_win_total': self.trades_win_total,
-            'trades_loss_total': self.trades_loss_total,
-            'total_fees_paid': self.total_fees_paid,
-            'daily_pnl_binance_baseline': float(getattr(self, 'daily_pnl_binance_baseline', 0.0)),
-            'daily_baseline_date': getattr(self, '_daily_baseline_date', None),
-            'peak_prices': self.peak_prices,
-            'trailing_activated': self.trailing_activated,
-            # known_positions persistido pra não perder custom_tp/sl, strategy e
-            # range_mid_price no restart — antes, restart recriava entries só com
-            # campos básicos vindos da API, zerando a proteção customizada.
-            'known_positions': self._serialize_known_positions(),
-            'double_first_used': self.double_first_used,
-            'kill_switch': self.kill_switch.to_state() if getattr(self, 'kill_switch', None) else {},
-            'max_drawdown_from_peak_percent': float(
-                getattr(config, 'MAX_DRAWDOWN_FROM_PEAK_PERCENT', 0.0) or 0.0
-            ),
-            'sentiment_mode_enabled': bool(self.sentiment_mode_enabled),
-            'invert_signals': bool(self.invert_signals),
-            'last_daily_performance_report_date': self.last_daily_performance_report_date,
-            'last_transfer_check_ts_ms': int(self.last_transfer_check_ts_ms or 0),
-            'processed_transfer_ids': self.processed_transfer_ids[
-                -max(100, int(config.CAPITAL_TRANSFER_TRACKED_IDS_LIMIT)):
-            ],
-            'disabled_pairs': list(getattr(config, 'DISABLED_PAIRS', []) or []),
-            'binance_coin_list': list(getattr(config, 'BINANCE_COIN_LIST', []) or []),
-            'strategy_profiles': list(getattr(config, 'STRATEGY_PROFILES', []) or []),
-        }
-
     def save_state(self):
         """
         Salva o estado atual do bot em um arquivo JSON.
@@ -671,7 +593,7 @@ class TradingBot:
         Delega I/O atômico pro StateManager; aqui só prepara o payload.
         """
         try:
-            payload = self._build_state_payload()
+            payload = self.state_persistence.build_payload()
         except Exception as e:
             logger.error(f"❌ Erro ao montar payload de estado: {e}")
             return False
@@ -750,7 +672,7 @@ class TradingBot:
             self.trade_history = state.get('trade_history', [])[-500:]  # Mantém apenas os últimos 500
             self.peak_prices = state.get('peak_prices', {})
             self.trailing_activated = state.get('trailing_activated', {})
-            self.known_positions = self._deserialize_known_positions(
+            self.known_positions = self.state_persistence.deserialize_known_positions(
                 state.get('known_positions', {})
             )
             self.double_first_used = self._normalize_double_first_state(
