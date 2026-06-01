@@ -77,6 +77,9 @@ class TradeLedger:
             "ai_consultive": dict(ai_consultive or {}),
         }
         bot.trade_history.append(record)
+        store = getattr(bot, "trade_store", None)
+        if store is not None:
+            store.record_open(record)
         return record
 
     def record_trade_closed(
@@ -123,6 +126,23 @@ class TradeLedger:
             close_reason=close_reason,
             strategy_name=strategy_name,
         )
+
+        # Espelha o fechamento no store durável (SQLite). Lookup indexado do
+        # open correspondente; close-only se não houver. Best-effort.
+        store = getattr(bot, "trade_store", None)
+        if store is not None:
+            store.record_close(
+                symbol=symbol,
+                side=side,
+                entry_price=entry_price,
+                exit_price=exit_price,
+                exit_at=None,
+                pnl_gross=pnl_gross,
+                pnl_net=pnl_net,
+                fees=total_fees,
+                close_reason=close_reason,
+                strategy_name=strategy_name,
+            )
 
         if pnl_net > 0:
             bot.trades_win_count += 1
