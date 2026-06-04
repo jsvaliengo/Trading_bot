@@ -3632,12 +3632,18 @@ class TradingBot:
                     'trailing_distance_pct': previous.get('trailing_distance_pct'),
                 }
 
-            # Verifica se alguma posição conhecida sumiu (snapshot sob lock)
-            closed_by_binance = [
-                (pk, dict(self.known_positions[pk]))
-                for pk in list(self.known_positions.keys())
-                if pk not in current_position_keys
-            ]
+            # Verifica se alguma posição conhecida sumiu (snapshot sob lock).
+            # CLAIM ATÔMICO: remove de known_positions JÁ aqui, dentro do lock.
+            # Antes a remoção era depois do processamento (fora do lock); um
+            # restart na janela entre registrar o fechamento e remover faria o
+            # monitor re-disparar o mesmo close no reboot (double-count). Ao
+            # remover no snapshot, o "visto como fechado" vira one-shot. A
+            # limpeza de trailing (positions.close) ainda roda após processar.
+            closed_by_binance = []
+            for pk in list(self.known_positions.keys()):
+                if pk not in current_position_keys:
+                    closed_by_binance.append((pk, dict(self.known_positions[pk])))
+                    self.known_positions.pop(pk, None)
 
         # Processa posições fechadas pela Binance (fora do lock — pode fazer chamadas de API)
         for position_key, pos_info in closed_by_binance:
@@ -3646,6 +3652,8 @@ class TradingBot:
             # Busca o P&L real da Binance
             self._process_binance_closed_position(pos_info)
 
+            # known_positions já foi removido no claim acima; isto limpa o
+            # trailing/peak e é no-op no remove (pop com default).
             self.positions.close(position_key)
         
         if not positions:

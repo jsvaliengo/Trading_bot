@@ -110,6 +110,31 @@ class TradeLedger:
         """
         bot = self._bot
 
+        # Guarda de idempotência: um restart na janela entre registrar o
+        # fechamento e remover de known_positions faz o monitor re-disparar o
+        # mesmo close. Checado AQUI (antes dos contadores) para barrar tanto o
+        # double-count quanto a linha duplicada. Fonte de verdade é o store
+        # persistido. Fail-open dentro de is_duplicate_close (não perde close).
+        store = getattr(bot, "trade_store", None)
+        if store is not None and store.is_duplicate_close(
+            symbol=symbol, side=side, entry_price=entry_price
+        ):
+            logger.warning(
+                f"🔁 Fechamento duplicado ignorado: {symbol} {side} @ {entry_price} "
+                "(já registrado — provável re-processamento pós-restart)"
+            )
+            win_rate = (
+                (bot.trades_win_count / bot.closed_trades_count * 100.0)
+                if bot.closed_trades_count > 0
+                else 0.0
+            )
+            return {
+                "closed_trades_count": bot.closed_trades_count,
+                "win_rate": win_rate,
+                "daily_pnl": bot.daily_realized_pnl,
+                "total_pnl": bot.total_pnl,
+            }
+
         bot.closed_trades_count += 1
         bot.daily_realized_pnl += pnl_net
         bot.total_pnl += pnl_net
