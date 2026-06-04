@@ -34,6 +34,33 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _validate_stop_loss_side(side, entry_price, stop_loss, fallback_pct, price_precision):
+    """Garante que o SL esteja do lado correto da entrada.
+
+    Um SL de LONG precisa ficar ABAIXO da entrada; de SHORT, ACIMA. O
+    custom_stop_loss é calculado no setup, contra um preço mais antigo; o
+    slippage entre setup e fill pode jogá-lo para o lado errado da entrada
+    real. Enviar um STOP_MARKET já do lado errado faz a Binance dispará-lo na
+    hora (stop instantâneo, sangrando fee). Nesses casos recai no SL
+    percentual, que está sempre do lado certo.
+
+    Retorna (stop_loss_corrigido, foi_corrigido).
+    """
+    if not stop_loss or stop_loss <= 0 or not entry_price or entry_price <= 0:
+        return stop_loss, False
+    wrong_side = (
+        (side == "LONG" and stop_loss >= entry_price)
+        or (side == "SHORT" and stop_loss <= entry_price)
+    )
+    if not wrong_side:
+        return stop_loss, False
+    if side == "LONG":
+        corrected = round(entry_price * (1 - fallback_pct / 100), price_precision)
+    else:
+        corrected = round(entry_price * (1 + fallback_pct / 100), price_precision)
+    return corrected, True
+
+
 class ExecutionEngine:
     """Orquestrador de fechamento e emergências, opera sobre o TradingBot."""
 
@@ -147,6 +174,25 @@ class ExecutionEngine:
                 )
                 return False
             info = bot.exchange.get_symbol_info(symbol)
+
+            # Trava de segurança: um SL no lado errado da entrada dispara na
+            # hora. O custom_stop_loss vem do setup (preço mais antigo) e o
+            # slippage até o fill pode invertê-lo. Corrige aqui, uma vez, para
+            # que o valor saneado flua para a submissão, o ledger e o positions.
+            if custom_stop_loss and custom_stop_loss > 0:
+                _side = "LONG" if open_long else "SHORT"
+                _fallback_pct = float(getattr(config, "STOP_LOSS_PERCENT", 3.0))
+                _corrected_sl, _was_corrected = _validate_stop_loss_side(
+                    _side, price, custom_stop_loss, _fallback_pct,
+                    info.get('pricePrecision', 4),
+                )
+                if _was_corrected:
+                    logger.warning(
+                        f"⚠️ SL {_side} no lado errado da entrada "
+                        f"(SL=${custom_stop_loss:.6f} vs entrada=${price:.6f}). "
+                        f"Corrigido para ${_corrected_sl:.6f} ({_fallback_pct:g}%)."
+                    )
+                    custom_stop_loss = _corrected_sl
 
             # Tamanho mínimo (minNotional) vindo da Binance
             min_notional = float(info.get('minNotional', 5.0))
