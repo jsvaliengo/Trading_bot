@@ -751,6 +751,16 @@ class TradingConfig:
         "TRADING_BOT_SYMBOL_TRANSIENT_COOLDOWN_SECONDS", 60
     )
 
+    # Cooldown por símbolo após um fechamento NEGATIVO (loss/breakeven). Sem
+    # ele, um stop-out libera o símbolo no ciclo seguinte e o mesmo sinal
+    # reabre na hora — em mercado lateral isso vira churn (visto em 04/06:
+    # 20 trades de BCHUSDT em ~16h, quase todos stop-out sangrando fee). Pausa
+    # o símbolo por alguns minutos após perder; um win NÃO ativa o cooldown
+    # (deixa a tendência continuar). 0 desativa.
+    SYMBOL_REENTRY_COOLDOWN_SECONDS: int = _env_int(
+        "TRADING_BOT_SYMBOL_REENTRY_COOLDOWN_SECONDS", 300
+    )
+
     # Relatório diário consolidado para decisão de risco/SL (Telegram)
     DAILY_PERFORMANCE_REPORT_ENABLED: bool = _env_bool("TRADING_BOT_DAILY_REPORT_ENABLED", True)
     DAILY_PERFORMANCE_REPORT_HOUR_BRT: int = _env_int("TRADING_BOT_DAILY_REPORT_HOUR_BRT", 23)

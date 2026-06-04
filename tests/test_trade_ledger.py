@@ -13,7 +13,7 @@ E os dois retornos exigidos pelo caller: closed_trades_count e win_rate.
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -35,6 +35,7 @@ def _make_bot() -> SimpleNamespace:
         trades_by_strategy={},
         pnl_by_symbol={},
         trade_history=[],
+        _mark_symbol_reentry_cooldown=Mock(),
     )
 
 
@@ -60,6 +61,9 @@ def test_record_winning_trade_increments_win_counters():
     assert summary["win_rate"] == 100.0
     assert summary["daily_pnl"] == 10.0
 
+    # Win NÃO ativa cooldown de reentrada (deixa a tendência continuar)
+    bot._mark_symbol_reentry_cooldown.assert_not_called()
+
 
 def test_record_losing_trade_increments_loss_counters_with_negative_total():
     bot = _make_bot()
@@ -74,6 +78,9 @@ def test_record_losing_trade_increments_loss_counters_with_negative_total():
     assert bot.trades_win_count == 0
     assert bot.trades_loss_total == -5.0  # acumula negativo
     assert bot.total_pnl == -5.0
+
+    # Loss ATIVA cooldown de reentrada para o símbolo (anti-churn)
+    bot._mark_symbol_reentry_cooldown.assert_called_once_with("ETHUSDT")
 
 
 def test_first_record_for_symbol_creates_stats_bucket():

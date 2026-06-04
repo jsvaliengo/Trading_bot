@@ -258,6 +258,10 @@ class TradingBot:
         self.processed_transfer_ids = []
         self.peak_prices = {}
         self.trailing_activated = {}
+        # symbol -> epoch do último fechamento negativo; barra reentrada
+        # imediata no mesmo símbolo (anti-churn). Ver
+        # SYMBOL_REENTRY_COOLDOWN_SECONDS e _symbol_reentry_cooldown_remaining.
+        self.symbol_reentry_cooldowns: Dict[str, float] = {}
         self.peak_equity: float = 0.0
         self.peak_equity_ts = None
         self.last_known_balance: float | None = None
@@ -674,6 +678,12 @@ class TradingBot:
             self.trade_history = (state.get('trade_history') or [])[-500:]  # Mantém apenas os últimos 500
             self.peak_prices = state.get('peak_prices', {})
             self.trailing_activated = state.get('trailing_activated', {})
+            raw_cooldowns = state.get('symbol_reentry_cooldowns', {})
+            self.symbol_reentry_cooldowns = {
+                str(k): float(v)
+                for k, v in (raw_cooldowns.items() if isinstance(raw_cooldowns, dict) else [])
+                if isinstance(v, (int, float))
+            }
             self.known_positions = self.state_persistence.deserialize_known_positions(
                 state.get('known_positions', {})
             )
@@ -3111,6 +3121,34 @@ class TradingBot:
             setup_metadata=setup_metadata,
         )
 
+    def _mark_symbol_reentry_cooldown(self, symbol: str) -> None:
+        """Marca o símbolo em cooldown de reentrada a partir de agora.
+
+        Chamado após um fechamento negativo para o mesmo sinal não reabrir no
+        ciclo seguinte (anti-churn). No-op se o cooldown estiver desativado.
+        """
+        if int(getattr(config, "SYMBOL_REENTRY_COOLDOWN_SECONDS", 0) or 0) <= 0:
+            return
+        if symbol:
+            self.symbol_reentry_cooldowns[symbol] = time.time()
+
+    def _symbol_reentry_cooldown_remaining(self, symbol: str) -> float:
+        """Segundos restantes de cooldown de reentrada (0 se livre/desativado).
+
+        Faz prune da entrada expirada ao consultar.
+        """
+        window = int(getattr(config, "SYMBOL_REENTRY_COOLDOWN_SECONDS", 0) or 0)
+        if window <= 0:
+            return 0.0
+        started = self.symbol_reentry_cooldowns.get(symbol)
+        if started is None:
+            return 0.0
+        remaining = window - (time.time() - started)
+        if remaining <= 0:
+            self.symbol_reentry_cooldowns.pop(symbol, None)
+            return 0.0
+        return remaining
+
     def analyze_and_trade(self, symbol: str, strategy_name: str | None = None) -> bool:
         """
         Analisa um par e executa trades se houver oportunidade.
@@ -3377,7 +3415,17 @@ class TradingBot:
         if should_open_short and has_short:
             logger.info(f"⏸️  Sinal {signal_name} em {symbol} mas SHORT já está aberto")
             return False
-        
+
+        # Anti-churn: símbolo que fechou negativo há pouco fica em cooldown.
+        # Checado aqui (antes do review da IA) para não gastar chamada à toa.
+        cooldown_remaining = self._symbol_reentry_cooldown_remaining(symbol)
+        if cooldown_remaining > 0:
+            logger.info(
+                f"⏳ {symbol} em cooldown de reentrada "
+                f"({int(cooldown_remaining)}s restantes após fechamento negativo) — pulando"
+            )
+            return False
+
         total_positions = len(open_positions)
         if total_positions >= config.MAX_OPEN_POSITIONS:
             logger.info("⏸️  Limite de posições atingido")
