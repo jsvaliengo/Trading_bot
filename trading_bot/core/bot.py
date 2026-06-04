@@ -97,6 +97,50 @@ def _configure_logging():
     )
 
 
+def _aggregate_realized_pnl(income_list):
+    """Soma TODAS as linhas REALIZED_PNL de uma janela de income da Binance.
+
+    Um SL/TP pode preencher em vários fills parciais, cada um gerando uma linha
+    de REALIZED_PNL. Pegar só a última linha (income_list[-1]) capturava um
+    parcial e subestimava — ou até invertia o sinal — do P&L real do trade.
+    Robusto a linhas malformadas e a tipos de income misturados (só soma
+    REALIZED_PNL; quando incomeType ausente, assume REALIZED_PNL pois a query
+    já filtra por tipo no servidor).
+
+    Retorna None quando a lista é vazia/inválida (caller cai no fallback).
+    """
+    if not income_list:
+        return None
+    total = 0.0
+    counted = 0
+    for row in income_list:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get('incomeType', 'REALIZED_PNL')) != 'REALIZED_PNL':
+            continue
+        try:
+            total += float(row.get('income', 0) or 0)
+            counted += 1
+        except (TypeError, ValueError):
+            continue
+    return total if counted else None
+
+
+def _implied_exit_price(side, entry_price, pnl_gross, quantity):
+    """Preço de saída IMPLÍCITO pelo P&L bruto realizado.
+
+    A Binance não devolve o preço de saída no income; derivamos o exit efetivo
+    (equivalente a um VWAP) a partir do gross: para LONG, gross = (exit-entry)*qty.
+    Com o gross agregado correto (ver _aggregate_realized_pnl), este exit é
+    consistente com o pnl por construção. NÃO é um fill real — é o exit efetivo.
+    Necessário só para o trade_history/dashboard marcarem a posição como fechada.
+    """
+    if not quantity:
+        return entry_price
+    delta = pnl_gross / quantity
+    return entry_price + delta if side == "LONG" else entry_price - delta
+
+
 class TradingBot:
     """
     Classe principal do bot de trading.
@@ -3808,13 +3852,11 @@ class TradingBot:
             income_list = self.exchange.get_income_history(
                 income_type='REALIZED_PNL',
                 symbol=symbol,
-                limit=10,
+                limit=100,
                 start_time=start_time_ms,
             )
-            if income_list:
-                latest = income_list[-1]
-                pnl_gross = float(latest.get('income', 0))
-            else:
+            pnl_gross = _aggregate_realized_pnl(income_list)
+            if pnl_gross is None:
                 logger.warning(f"⚠️ REALIZED_PNL não encontrado para {symbol} após {entry_time} — usando estimativa")
         except Exception as e:
             logger.error(f"❌ Erro ao buscar P&L da Binance para {symbol}: {e} — usando estimativa")
@@ -3847,14 +3889,9 @@ class TradingBot:
         # executa as ordens SL/TP server-side: gross > 0 ⇒ TP, senão ⇒ SL.
         reason = "Take Profit (Binance)" if pnl_gross > 0 else "Stop Loss (Binance)"
 
-        # exit_price derivado do gross — o income da Binance não devolve o
-        # preço de saída diretamente, mas precisamos de um valor > 0 pra que
-        # o trade_history (e o dashboard) marque a posição como fechada.
-        if quantity:
-            delta = pnl_gross / quantity
-            exit_price = entry_price + delta if side == "LONG" else entry_price - delta
-        else:
-            exit_price = entry_price
+        # exit_price IMPLÍCITO pelo gross agregado (não é fill real; ver helper).
+        # Consistente com pnl por construção agora que o gross soma todos os fills.
+        exit_price = _implied_exit_price(side, entry_price, pnl_gross, quantity)
 
         pos_meta = self._get_known_position(f"{symbol}_{side}")
         strat_key = pos_meta.get('strategy_name')
