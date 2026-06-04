@@ -55,6 +55,7 @@ def _fake_bot():
         _daily_baseline_date="2026-05-31",
         peak_prices={"ETHUSDT": 2600.0},
         trailing_activated={"ETHUSDT_LONG": True},
+        symbol_reentry_cooldowns={"BCHUSDT": 1717500000.0},
         known_positions={"ETHUSDT_LONG": {"symbol": "ETHUSDT", "side": "LONG",
                                           "last_seen": datetime(2026, 5, 31, 10, 0, 0)}},
         double_first_used={},
@@ -86,6 +87,9 @@ def test_build_payload_shape_and_excludes_history_arrays():
 
     # kill_switch None => {}
     assert payload["kill_switch"] == {}
+
+    # cooldowns de reentrada persistidos (sobrevivem a deploy)
+    assert payload["symbol_reentry_cooldowns"] == {"BCHUSDT": 1717500000.0}
 
     # daily_date é a data UTC de hoje (formato YYYY-MM-DD)
     assert payload["daily_date"] == datetime.now(timezone.utc).strftime("%Y-%m-%d")

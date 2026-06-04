@@ -93,6 +93,9 @@ class BotStatePersistence:
             'daily_baseline_date': getattr(bot, '_daily_baseline_date', None),
             'peak_prices': bot.peak_prices,
             'trailing_activated': bot.trailing_activated,
+            # Cooldowns de reentrada (symbol -> epoch do último loss). Persiste
+            # para um deploy não zerar o anti-churn no meio de uma maré de losses.
+            'symbol_reentry_cooldowns': dict(getattr(bot, 'symbol_reentry_cooldowns', {}) or {}),
             # known_positions persistido pra não perder custom_tp/sl, strategy e
             # range_mid_price no restart — antes, restart recriava entries só com
             # campos básicos vindos da API, zerando a proteção customizada.

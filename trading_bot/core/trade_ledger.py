@@ -115,6 +115,11 @@ class TradeLedger:
         bot.total_pnl += pnl_net
         bot.total_fees_paid += total_fees
 
+        # Anti-churn: fechamento negativo (loss/breakeven) coloca o símbolo em
+        # cooldown de reentrada — um win não, deixando a tendência continuar.
+        if pnl_net <= 0:
+            bot._mark_symbol_reentry_cooldown(symbol)
+
         self._enrich_open_record_with_close(
             symbol=symbol,
             side=side,
