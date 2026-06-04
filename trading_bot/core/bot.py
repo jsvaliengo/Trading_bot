@@ -141,6 +141,22 @@ def _implied_exit_price(side, entry_price, pnl_gross, quantity):
     return entry_price + delta if side == "LONG" else entry_price - delta
 
 
+def _retain_held_pairs(selected_pairs, held_symbols):
+    """Mantém na lista qualquer par com posição aberta que cairia do score.
+
+    Um par com posição aberta NUNCA é rotacionado para fora: segue gerido
+    (análise + monitor de SL/TP/trailing) até fechar no próprio alvo. Liquidar
+    só porque o par caiu no score (o antigo "Par removido da lista") corta o
+    trade no meio. Os pares retidos são anexados ao fim da lista selecionada.
+
+    Retorna (selected_pairs_final, retained_list).
+    """
+    new_set = set(selected_pairs)
+    retained = sorted(set(held_symbols) - new_set)
+    final = list(selected_pairs) + retained
+    return final, retained
+
+
 class TradingBot:
     """
     Classe principal do bot de trading.
@@ -2465,9 +2481,11 @@ class TradingBot:
     def update_trading_pairs(self):
         """
         Atualiza a lista de pares de trading usando seleção inteligente.
-        
+
         Chamado periodicamente (configurável em config.PAIR_UPDATE_INTERVAL_MINUTES).
-        Fecha posições de pares removidos e configura novos pares.
+        Configura os novos pares. Pares com posição ABERTA não são rotacionados
+        para fora — seguem geridos até fechar no próprio SL/TP (não liquidamos
+        por causa do score). Ver _retain_held_pairs.
         """
         if not config.AUTO_SELECT_PAIRS or not self.pair_selector:
             return
@@ -2488,41 +2506,42 @@ class TradingBot:
         selected_pairs, _scores = self.pair_selector.select_best_pairs(
             available_capital=available_capital
         )
+        # Pares com posição aberta não saem da lista: precisamos saber quais são
+        # ANTES de calcular as mudanças. Se a API falhar, pulamos o rescore para
+        # não desproteger nenhum par com posição.
+        try:
+            open_positions = self.exchange.get_open_positions()
+        except Exception as exc:
+            logger.warning(
+                f"⚠️ API indisponível ao checar posições abertas — pulando este "
+                f"rescore para não rotacionar par com posição: {exc}"
+            )
+            return
+        held_symbols = {pos['symbol'] for pos in open_positions}
+
+        selected_pairs, retained = _retain_held_pairs(selected_pairs, held_symbols)
         new_pairs = set(selected_pairs)
-        
-        # Identifica mudanças
+        if retained:
+            logger.info(f"📌 Mantidos por posição aberta (não rotacionados): {', '.join(retained)}")
+
+        # Identifica mudanças (removed_pairs já exclui os retidos por posição)
         removed_pairs = old_pairs - new_pairs
         added_pairs = new_pairs - old_pairs
-        
+
         if not removed_pairs and not added_pairs:
             logger.info("✅ Nenhuma mudança nos pares")
             return
-        
+
         # Log das mudanças
         if removed_pairs:
             logger.info(f"📤 Pares REMOVIDOS: {', '.join(removed_pairs)}")
         if added_pairs:
             logger.info(f"📥 Pares ADICIONADOS: {', '.join(added_pairs)}")
-        
-        # Fecha posições dos pares removidos
-        if removed_pairs:
-            try:
-                positions = self.exchange.get_open_positions()
-            except Exception as exc:
-                logger.warning(
-                    f"⚠️ API indisponível ao fechar posições de pares removidos — "
-                    f"pulando este rescore: {exc}"
-                )
-                positions = []
-            for pos in positions:
-                if pos['symbol'] in removed_pairs:
-                    logger.info(f"🔴 Fechando posição em {pos['symbol']} (par removido)")
-                    closed = self._close_position_with_notification(pos, "Par removido da lista")
-                    if not closed:
-                        logger.warning(
-                            f"⚠️ Falha ao fechar posição de {pos['symbol']} durante remoção de par."
-                        )
-        
+
+        # NÃO fechamos posições por rotação: removed_pairs já exclui pares com
+        # posição aberta (ver _retain_held_pairs), então os removidos estão flat.
+        # A posição retida fecha no próprio SL/TP via monitor_positions.
+
         config.TRADING_PAIRS = self._filter_disabled_pairs(selected_pairs)
         self._sync_strategy_profiles_with_trading_pairs(
             reason="auto-select-update",
