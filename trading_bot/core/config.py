@@ -630,9 +630,12 @@ class TradingConfig:
     
     CHECK_FUNDING_RATE: bool = True
     
-    # Perda máxima diária permitida (em % do capital)
-    # Se perder 10% do capital no dia, para de operar
-    MAX_DAILY_LOSS_PERCENT: float = 10.0
+    # Perda máxima diária permitida (em % do capital inicial). Ao atingir, o
+    # risk manager para de ABRIR posições novas até o reset diário (00:00 UTC).
+    # Configurável por ambiente: default conservador de 10% protege a mainnet;
+    # testnet pode afrouxar via TRADING_BOT_MAX_DAILY_LOSS_PERCENT para observar
+    # a estratégia sem o gate cortar o dia cedo.
+    MAX_DAILY_LOSS_PERCENT: float = _env_float("TRADING_BOT_MAX_DAILY_LOSS_PERCENT", 10.0)
     
     # Número máximo de posições abertas simultaneamente
     # Com estratégia direcional, cada par pode ter LONG ou SHORT (ou ambos se sinal mudar)
