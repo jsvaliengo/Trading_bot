@@ -267,6 +267,15 @@ class TradingConfig:
     
     # Filtros mínimos para um par ser considerado
     MIN_VOLUME_24H_USD: float = 150_000_000   # Volume mínimo $150M
+
+    # Piso de liquidez verificado NO MOMENTO DA ABERTURA (última linha de
+    # defesa). O filtro acima roda na SELEÇÃO de pares; um par escolhido quando
+    # líquido pode secar antes do trade (drift de volume). Operar par ilíquido =
+    # slippage brutal no stop (caso LABUSDT em 04/06: stop preencheu ~12% contra
+    # a posição). 0 desativa o gate.
+    MIN_TRADE_VOLUME_24H_USD: float = _env_float(
+        "TRADING_BOT_MIN_TRADE_VOLUME_24H_USD", 150_000_000
+    )
     MAX_SPREAD_PERCENT: float = 0.07          # Spread máximo 0.07%
     MIN_VOLATILITY_PERCENT: float = 1.5       # Volatilidade mínima 1.5%
     MAX_MIN_NOTIONAL: float = 10.0            # Mínimo notional máximo $10 (exclui BTC $100, ETH $20)
