@@ -60,16 +60,21 @@ STAT_SCALARS = [
     "max_drawdown_from_peak_percent",
 ]
 
-# Coleções -> vazias (preservando o tipo list/dict original).
-EMPTY_COLLECTIONS = [
-    "trade_history",
-    "known_positions",
-    "pnl_by_symbol",
-    "portfolio_history",
-    "peak_prices",
-    "trailing_activated",
-    "double_first_used",
-]
+# Coleções -> vazias. Tipo explícito por chave (NÃO inferir de state.get(k)):
+# trade_history/portfolio_history deixaram de ser persistidos no JSON desde o
+# Phase 1 (vivem no SQLite TradeStore — ver trading_bot/core/bot.py:778). Quando
+# ausentes do state, state.get(k) é None e inferir o tipo daria {} (dict); o load
+# do bot então quebraria ao fatiar `trade_history[-500:]` (unhashable type: 'slice').
+# Por isso fixamos o tipo-vazio aqui, independente de a chave existir ou não.
+EMPTY_COLLECTIONS = {
+    "trade_history": list,
+    "known_positions": dict,
+    "pnl_by_symbol": dict,
+    "portfolio_history": list,
+    "peak_prices": dict,
+    "trailing_activated": dict,
+    "double_first_used": dict,
+}
 
 
 def log(*a):
@@ -99,16 +104,6 @@ def _bot_is_running() -> bool:
             fh.close()
     except BlockingIOError:
         return True
-
-
-def _empty_like(value):
-    if isinstance(value, list):
-        return []
-    if isinstance(value, dict):
-        return {}
-    if isinstance(value, set):
-        return set()
-    return {}
 
 
 def reset(dry_run: bool, force: bool) -> int:
@@ -153,8 +148,8 @@ def reset(dry_run: bool, force: bool) -> int:
     # Aplica reset (em memória).
     for k in STAT_SCALARS:
         state[k] = 0 if isinstance(state.get(k), int) else 0.0
-    for k in EMPTY_COLLECTIONS:
-        state[k] = _empty_like(state.get(k))
+    for k, empty_factory in EMPTY_COLLECTIONS.items():
+        state[k] = empty_factory()
 
     # Datas de baseline diário -> None pra forçar re-baseline limpo.
     for k in ("daily_date", "daily_baseline_date", "last_daily_performance_report_date"):

@@ -669,7 +669,9 @@ class TradingBot:
             self.closed_trades_count = state.get('closed_trades_count', 0)
             self.total_pnl = state.get('total_pnl', 0.0)
             self.pnl_by_symbol = state.get('pnl_by_symbol', {})
-            self.trade_history = state.get('trade_history', [])[-500:]  # Mantém apenas os últimos 500
+            # `or []` blinda contra a chave presente como não-lista (ex.: {} ou
+            # None) — slice em dict lançaria "unhashable type: 'slice'".
+            self.trade_history = (state.get('trade_history') or [])[-500:]  # Mantém apenas os últimos 500
             self.peak_prices = state.get('peak_prices', {})
             self.trailing_activated = state.get('trailing_activated', {})
             self.known_positions = self.state_persistence.deserialize_known_positions(
@@ -763,7 +765,7 @@ class TradingBot:
                 self._loaded_initial_capital = saved_initial_capital
                 logger.info(f"💰 Capital inicial carregado: ${saved_initial_capital:.2f}")
             
-            portfolio_history_raw = state.get('portfolio_history', [])
+            portfolio_history_raw = state.get('portfolio_history') or []
             self.portfolio_history = []
             for snap in portfolio_history_raw:
                 self.portfolio_history.append({
