@@ -61,6 +61,25 @@ def _validate_stop_loss_side(side, entry_price, stop_loss, fallback_pct, price_p
     return corrected, True
 
 
+def _below_min_trade_volume(raw_quote_volume, min_volume) -> bool:
+    """True só quando o volume 24h é CONHECIDO e abaixo do piso.
+
+    Gate fail-open: piso <= 0 desativa; ticker ilegível/ausente (raw None ou
+    não-numérico) NÃO bloqueia — a seleção já vetou o par e um blip de API não
+    deve derrubar um trade. Só retorna True com um número válido < piso.
+    """
+    try:
+        floor = float(min_volume)
+    except (TypeError, ValueError):
+        return False
+    if floor <= 0 or raw_quote_volume is None:
+        return False
+    try:
+        return float(raw_quote_volume) < floor
+    except (TypeError, ValueError):
+        return False
+
+
 class ExecutionEngine:
     """Orquestrador de fechamento e emergências, opera sobre o TradingBot."""
 
@@ -174,6 +193,35 @@ class ExecutionEngine:
                 )
                 return False
             info = bot.exchange.get_symbol_info(symbol)
+
+            # Gate de liquidez no momento da abertura: um par selecionado quando
+            # líquido pode ter secado (drift de volume). Operar par ilíquido =
+            # slippage brutal no stop (LABUSDT 04/06: -12% real). Só bloqueia com
+            # volume confirmado abaixo do piso; falha de leitura do ticker NÃO
+            # bloqueia (a seleção já vetou o par, não derruba trade por blip de API).
+            min_trade_volume = float(getattr(config, "MIN_TRADE_VOLUME_24H_USD", 0) or 0)
+            if min_trade_volume > 0:
+                # Fetch isolado: falha de ticker (rede/atributo) é fail-open —
+                # não derruba o trade nem cai no except externo.
+                try:
+                    raw_vol = (bot.exchange.get_ticker_24h(symbol) or {}).get("quoteVolume")
+                except Exception:
+                    raw_vol = None
+                if _below_min_trade_volume(raw_vol, min_trade_volume):
+                    vol_24h = float(raw_vol)
+                    logger.warning(
+                        f"⚠️ {symbol} abaixo do volume mínimo de trade "
+                        f"(${vol_24h:,.0f} < ${min_trade_volume:,.0f}) — abertura cancelada"
+                    )
+                    bot.block_reporter.notify_blocked(
+                        symbol=symbol,
+                        side=requested_side,
+                        strategy_name=strategy_name,
+                        reason="Volume 24h abaixo do piso de liquidez",
+                        detail=f"Volume ${vol_24h:,.0f} < piso ${min_trade_volume:,.0f}.",
+                        setup_metadata=setup_metadata,
+                    )
+                    return False
 
             # Trava de segurança: um SL no lado errado da entrada dispara na
             # hora. O custom_stop_loss vem do setup (preço mais antigo) e o
