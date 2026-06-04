@@ -219,6 +219,58 @@ class TradeStore:
             logger.exception("🗃️ Falha ao gravar fechamento no TradeStore")
             return False
 
+    def is_duplicate_close(
+        self,
+        *,
+        symbol: str,
+        side: Optional[str],
+        entry_price: Optional[float],
+    ) -> bool:
+        """True quando este fechamento já foi registrado (re-processamento).
+
+        Assinatura de duplicata: NÃO há linha `open` para (symbol[, side]) — ou
+        seja, nada a fechar — MAS já existe uma linha `closed` com o mesmo
+        entry_price. Distingue de reconciliação legítima (close-only sem open),
+        que não casa o entry_price de nenhum closed anterior.
+
+        Usado como guarda de idempotência: um restart na janela entre registrar
+        o fechamento e remover de known_positions faz o monitor re-disparar o
+        mesmo close. O store persistido é a fonte de verdade que sobrevive ao
+        restart. Fail-open: em erro, retorna False (não perde close legítimo).
+        """
+        if entry_price is None:
+            return False
+        try:
+            with self._lock:
+                if side is not None:
+                    has_open = self._conn.execute(
+                        "SELECT 1 FROM trades WHERE symbol=? AND side=? AND status='open' LIMIT 1",
+                        (symbol, side),
+                    ).fetchone()
+                else:
+                    has_open = self._conn.execute(
+                        "SELECT 1 FROM trades WHERE symbol=? AND status='open' LIMIT 1",
+                        (symbol,),
+                    ).fetchone()
+                if has_open is not None:
+                    return False  # há um open para fechar → fechamento legítimo
+                if side is not None:
+                    dup = self._conn.execute(
+                        "SELECT 1 FROM trades WHERE symbol=? AND side=? AND status='closed' "
+                        "AND entry_price=? LIMIT 1",
+                        (symbol, side, entry_price),
+                    ).fetchone()
+                else:
+                    dup = self._conn.execute(
+                        "SELECT 1 FROM trades WHERE symbol=? AND status='closed' "
+                        "AND entry_price=? LIMIT 1",
+                        (symbol, entry_price),
+                    ).fetchone()
+                return dup is not None
+        except Exception:
+            logger.exception("🗃️ Falha ao checar duplicata de fechamento")
+            return False
+
     def record_equity(self, snapshot: Dict[str, Any]) -> bool:
         """Persiste um snapshot de equity."""
         try:
