@@ -344,6 +344,70 @@ class TradeStore:
         out.reverse()
         return out
 
+    def cumulative_realized_pnl(self) -> float:
+        """Soma de pnl_net de TODOS os trades fechados (realizado acumulado).
+
+        Fonte durável e cumulativa do progresso do bot — não zera na virada do
+        dia (diferente do realizado diário da Binance). Usado no saldo/P&L total
+        do dashboard.
+        """
+        try:
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT COALESCE(SUM(pnl_net), 0) FROM trades WHERE status='closed'"
+                ).fetchone()
+            return float(row[0] or 0.0) if row else 0.0
+        except Exception:
+            logger.exception("🗃️ Falha ao somar pnl realizado acumulado")
+            return 0.0
+
+    def daily_pnl_history(self, limit: int = 90) -> List[Dict[str, Any]]:
+        """P&L agregado por dia (UTC) dos trades fechados, cronológico.
+
+        Agrega por date(exit_at): nº de trades, wins, net, fees, win_rate e o
+        acumulado corrido (`cumulative`). Base da tabela de histórico diário do
+        dashboard. O acumulado é computado sobre TODOS os dias e só então o
+        resultado é cortado nos últimos `limit`, então fica correto mesmo com o
+        corte.
+        """
+        try:
+            with self._lock:
+                rows = self._conn.execute(
+                    """
+                    SELECT substr(exit_at, 1, 10)                       AS day,
+                           COUNT(*)                                     AS trades,
+                           SUM(CASE WHEN pnl_net > 0 THEN 1 ELSE 0 END) AS wins,
+                           COALESCE(SUM(pnl_net), 0)                    AS net,
+                           COALESCE(SUM(fees), 0)                       AS fees
+                      FROM trades
+                     WHERE status='closed' AND exit_at IS NOT NULL
+                     GROUP BY day
+                     ORDER BY day
+                    """
+                ).fetchall()
+        except Exception:
+            logger.exception("🗃️ Falha ao agregar P&L diário")
+            return []
+
+        out: List[Dict[str, Any]] = []
+        cumulative = 0.0
+        for r in rows:
+            net = float(r["net"] or 0.0)
+            cumulative += net
+            trades = int(r["trades"] or 0)
+            wins = int(r["wins"] or 0)
+            out.append({
+                "day": r["day"],
+                "trades": trades,
+                "wins": wins,
+                "losses": trades - wins,
+                "win_rate": round(wins / trades * 100.0, 1) if trades else 0.0,
+                "net": round(net, 4),
+                "fees": round(float(r["fees"] or 0.0), 4),
+                "cumulative": round(cumulative, 4),
+            })
+        return out[-int(limit):] if limit else out
+
     def count_trades(self) -> int:
         try:
             with self._lock:

@@ -234,11 +234,13 @@ def test_collect_summary_includes_kpis(monkeypatch):
     )
     summary = dashboard_data.collect_summary(bot)
     assert summary["initial_capital"] == 100.0
-    # Binance daily_realized (5.0) + unrealized (2.0) = 7.0
-    assert summary["total_pnl"] == 7.0
+    # total_pnl agora é ACUMULADO: sem trade_store cai no bot_total_pnl (20.0)
+    # + unrealized (2.0) = 22.0. (Antes usava só o realizado do DIA e zerava.)
+    assert summary["total_pnl"] == 22.0
+    # P&L HOJE continua sendo o realizado diário da Binance
     assert summary["daily_pnl"] == 5.0
     assert summary["unrealized_pnl"] == 2.0
-    # Equity = wallet + unrealized = 122.0
+    # Equity = wallet + unrealized = 122.0 (não-simulado, inalterado)
     assert summary["last_balance"] == 122.0
     # Bot counters preservados pra debug
     assert summary["bot_total_pnl"] == 20.0
@@ -248,17 +250,20 @@ def test_collect_summary_includes_kpis(monkeypatch):
 
 
 def test_collect_summary_uses_simulated_cap_in_testnet(monkeypatch):
-    """Com SIMULATED_BALANCE_USD ativo, equity = cap + daily_realized + unrealized."""
+    """Com SIMULATED_BALANCE_USD ativo, equity = cap + ACUMULADO + unrealized.
+
+    Antes somava só o realizado do DIA (zerava na virada). Agora soma o
+    acumulado (sem trade_store, cai no bot_total_pnl=10.0 default)."""
     monkeypatch.setattr(global_config, "SIMULATED_BALANCE_USD", 130.0, raising=False)
-    bot = _make_bot(initial_capital=130.0)
+    bot = _make_bot(initial_capital=130.0)  # total_pnl default = 10.0
     bot.exchange = SimpleNamespace(
         get_daily_pnl_from_binance=lambda: {"total": 1.5},
         get_account_info=lambda: {"wallet_balance": 130.0, "unrealized_pnl": -0.20},
         get_open_positions=lambda: [],
     )
     summary = dashboard_data.collect_summary(bot)
-    # 130 + 1.5 - 0.20 = 131.30
-    assert summary["last_balance"] == pytest.approx(131.30, abs=0.001)
+    # 130 (cap) + 10.0 (acumulado) - 0.20 (unrealized) = 139.80
+    assert summary["last_balance"] == pytest.approx(139.80, abs=0.001)
 
 
 def test_collect_positions_serializes_known_positions():
