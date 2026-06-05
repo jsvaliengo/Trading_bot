@@ -10,11 +10,16 @@ O QUE ZERA:
   • known_positions          -> {}   (assume conta FLAT — feche posições antes!)
   • contadores de PnL/fees/trades, pnl_by_symbol, portfolio_history,
     drawdown e dicts de gestão de posição (peak_prices/trailing/double).
+  • TradeStore (SQLite): trades + portfolio_history -> 0 (com backup do .db).
+    Sem isso o dashboard continuava mostrando o acumulado/histórico antigos,
+    que vêm do TradeStore desde a feature de saldo cumulativo.
+  • kill_switch.daily_pnl_history / alerted_events -> vazios (começa sem
+    carregar dias de perda antigos no loss-streak).
 
 O QUE *NÃO* TOCA:
   • disabled_pairs, strategy_profiles, binance_coin_list, initial_capital,
-    kill_switch, invert_signals, sentiment_mode_enabled, version, e os
-    campos de transfer/baseline.
+    invert_signals, sentiment_mode_enabled, version, thresholds do kill_switch,
+    e os campos de transfer/baseline.
   • O SALDO da carteira e o PnL-do-dia dos cards vêm AO VIVO da Binance —
     este script não mexe neles (só zeram resetando a conta testnet / à
     meia-noite UTC).
@@ -106,6 +111,39 @@ def _bot_is_running() -> bool:
         return True
 
 
+def _trade_store_path():
+    p = getattr(config, "TRADE_DB_PATH", "") or ""
+    return Path(p) if p else None
+
+
+def _trade_store_counts(db_path):
+    """Conta trades + snapshots no TradeStore (best-effort)."""
+    try:
+        from trading_bot.core.trade_store import TradeStore
+        store = TradeStore(str(db_path))
+        counts = {"trades": store.count_trades(), "equity": store.count_equity()}
+        store.close()
+        return counts
+    except Exception as e:
+        log(f"⚠️  Não foi possível inspecionar o TradeStore: {e}")
+        return None
+
+
+def _reset_trade_store(db_path) -> None:
+    """Backup do .db + reset das tabelas (trades + portfolio_history)."""
+    db_backup = db_path.with_suffix(
+        db_path.suffix + f".bak.{datetime.now():%Y%m%d_%H%M%S}"
+    )
+    shutil.copy2(db_path, db_backup)
+    log(f"Backup DB : {db_backup}")
+    from trading_bot.core.trade_store import TradeStore
+    store = TradeStore(str(db_path))
+    removed = store.reset()
+    store.close()
+    log(f"✅ TradeStore zerado: {removed['trades']} trades, "
+        f"{removed['equity']} snapshots removidos")
+
+
 def reset(dry_run: bool, force: bool) -> int:
     state_path = Path(config.STATE_FILE_PATH)
     log("=" * 64)
@@ -156,6 +194,14 @@ def reset(dry_run: bool, force: bool) -> int:
         if k in state:
             state[k] = None
 
+    # Zera o histórico de risco do kill switch (loss-streak / alertas) pra
+    # começar sem carregar dias de perda antigos. Preserva o resto do dict
+    # (thresholds e config).
+    ks = state.get("kill_switch")
+    if isinstance(ks, dict):
+        ks["daily_pnl_history"] = []
+        ks["alerted_events"] = {}
+
     # Recomeça a contagem de uptime.
     state["start_time"] = datetime.now().isoformat()
 
@@ -165,9 +211,18 @@ def reset(dry_run: bool, force: bool) -> int:
               "trades_win_count", "trades_loss_count"):
         log(f"  {k:<19} = {state.get(k)}")
     log("")
-    log("PRESERVADO: disabled_pairs, strategy_profiles, kill_switch, "
-        "initial_capital, invert_signals, sentiment_mode_enabled, version.")
+    log("PRESERVADO: disabled_pairs, strategy_profiles, initial_capital, "
+        "invert_signals, sentiment_mode_enabled, version, thresholds do kill_switch.")
     log("")
+
+    # TradeStore (SQLite) — fonte do acumulado/histórico do dashboard.
+    db_path = _trade_store_path()
+    if db_path and db_path.exists():
+        counts = _trade_store_counts(db_path)
+        if counts is not None:
+            log(f"TradeStore  : {counts['trades']} trades + {counts['equity']} "
+                f"snapshots → serão apagados (com backup do .db)")
+            log("")
 
     if dry_run:
         log("DRY-RUN: nenhuma escrita feita.")
@@ -183,6 +238,15 @@ def reset(dry_run: bool, force: bool) -> int:
     tmp_path.write_text(json.dumps(state, ensure_ascii=False, indent=2))
     tmp_path.replace(state_path)
     log(f"✅ State zerado: {state_path}")
+
+    # Zera o TradeStore por último (state já persistido). Best-effort: uma
+    # falha aqui não desfaz o reset do JSON.
+    if db_path and db_path.exists():
+        try:
+            _reset_trade_store(db_path)
+        except Exception as e:
+            log(f"⚠️  Falha ao zerar o TradeStore: {e} — limpe manualmente se necessário.")
+
     return 0
 
 

@@ -178,3 +178,36 @@ def test_persists_across_reopen(tmp_path):
     s2 = TradeStore(db)
     assert s2.count_trades() == 1
     s2.close()
+
+
+def test_reset_clears_trades_and_equity(tmp_path):
+    store = _store(tmp_path)
+    # 1 trade fechado + 1 snapshot de equity
+    store.record_open(_open_record())
+    store.record_close(
+        symbol="ETHUSDT", side="LONG", entry_price=2500.0, exit_price=2600.0,
+        exit_at=None, pnl_gross=100.0, pnl_net=99.0, fees=1.0,
+        close_reason="TP", strategy_name="primary",
+    )
+    store.record_equity({
+        "timestamp": datetime(2026, 6, 1, 12, 0, 0), "balance": 100.0,
+        "pnl_realized": 99.0, "pnl_unrealized": 0.0, "pnl_total": 99.0,
+        "closed_trades": 1,
+    })
+    assert store.count_trades() == 1
+    assert store.count_equity() == 1
+
+    removed = store.reset()
+    assert removed == {"trades": 1, "equity": 1}
+    assert store.count_trades() == 0
+    assert store.count_equity() == 0
+
+    # store segue utilizável após o reset
+    store.record_open(_open_record())
+    assert store.count_trades() == 1
+
+
+def test_reset_on_empty_store_is_safe(tmp_path):
+    store = _store(tmp_path)
+    assert store.reset() == {"trades": 0, "equity": 0}
+    assert store.count_trades() == 0

@@ -36,12 +36,17 @@ def _write_state(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2))
 
 
-def _run_reset(reset_mod, monkeypatch, tmp_path, state_payload):
+def _run_reset(reset_mod, monkeypatch, tmp_path, state_payload, *, trade_db=None):
     state_path = tmp_path / "bot_state.test.json"
     _write_state(state_path, state_payload)
     # Sem lock => _bot_is_running() False, reset prossegue.
     monkeypatch.setattr(reset_mod.config, "STATE_FILE_PATH", str(state_path))
     monkeypatch.setattr(reset_mod.config, "LOCK_FILE_PATH", str(tmp_path / "nope.lock"))
+    # ISOLA o TradeStore: aponta pra um db temp (default: inexistente) pra os
+    # testes NUNCA tocarem o DB real, independente do ambiente resolvido.
+    monkeypatch.setattr(
+        reset_mod.config, "TRADE_DB_PATH", str(trade_db or (tmp_path / "nope.db"))
+    )
 
     rc = reset_mod.reset(dry_run=False, force=False)
     assert rc == 0
@@ -101,13 +106,50 @@ def test_config_is_preserved(reset_mod, monkeypatch, tmp_path):
         "strategy_profiles": [{"name": "trend_strong", "enabled": True}],
         "initial_capital": 100.0,
         "invert_signals": True,
-        "kill_switch": {"daily_pnl_history": [{"date": "2026-06-02", "net_pnl": -1.0}]},
+        "kill_switch": {
+            "daily_pnl_history": [{"date": "2026-06-02", "net_pnl": -1.0}],
+            "alerted_events": {"win_rate": "bucket=3"},
+            "max_consecutive_loss_days": 3,  # config/threshold — preservado
+        },
     }
     out = _run_reset(reset_mod, monkeypatch, tmp_path, state)
 
     assert out["disabled_pairs"] == ["BTCUSDT", "RIVERUSDT"]
     assert out["strategy_profiles"] == [{"name": "trend_strong", "enabled": True}]
     assert out["initial_capital"] == 100.0
-    # invert_signals e kill_switch NÃO são tocados pelo reset (por design).
     assert out["invert_signals"] is True
-    assert out["kill_switch"]["daily_pnl_history"]
+    # kill_switch: o HISTÓRICO de risco é zerado (loss-streak/alertas), mas a
+    # config/thresholds é preservada.
+    assert out["kill_switch"]["daily_pnl_history"] == []
+    assert out["kill_switch"]["alerted_events"] == {}
+    assert out["kill_switch"]["max_consecutive_loss_days"] == 3
+
+
+def test_reset_also_clears_trade_store(reset_mod, monkeypatch, tmp_path):
+    """O reset agora zera o TradeStore (SQLite) — antes só o JSON, e o dashboard
+    continuava mostrando o histórico antigo (acumulado vem do TradeStore)."""
+    from trading_bot.core.trade_store import TradeStore
+
+    db = tmp_path / "trades.db"
+    store = TradeStore(str(db))
+    store.record_open({
+        "timestamp": "2026-06-01T10:00:00", "symbol": "ETHUSDT", "signal": "BUY",
+        "side": "LONG", "qty": 1.0, "value": 100.0, "entry_price": 2500.0,
+        "stop_loss": 2400.0, "take_profit": 2700.0, "strategy_name": "primary",
+        "strategy_type": "hedge", "double_first": False, "ai_consultive": {},
+    })
+    store.close()
+
+    _run_reset(reset_mod, monkeypatch, tmp_path, {"closed_trades_count": 1}, trade_db=db)
+
+    after = TradeStore(str(db))
+    assert after.count_trades() == 0
+    after.close()
+    # backup do .db foi criado
+    assert list(tmp_path.glob("trades.db.bak.*"))
+
+
+def test_reset_skips_trade_store_when_db_absent(reset_mod, monkeypatch, tmp_path):
+    """DB inexistente não quebra o reset (só zera o JSON)."""
+    out = _run_reset(reset_mod, monkeypatch, tmp_path, {"closed_trades_count": 9})
+    assert out["closed_trades_count"] == 0

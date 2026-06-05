@@ -430,6 +430,37 @@ class TradeStore:
             logger.exception("🗃️ Falha ao contar equity no TradeStore")
             return 0
 
+    def reset(self) -> Dict[str, int]:
+        """Apaga TODO o histórico durável: trades + portfolio_history.
+
+        Usado pelo reset do bot (scripts/reset_bot_state.py). Sem isso o reset
+        zerava só o JSON e o dashboard continuava mostrando o histórico antigo
+        (o acumulado/histórico por dia vêm do TradeStore). Retorna as contagens
+        removidas. Faz VACUUM para recuperar espaço.
+        """
+        removed = {"trades": 0, "equity": 0}
+        try:
+            with self._lock:
+                removed["trades"] = int(
+                    self._conn.execute("SELECT COUNT(*) FROM trades").fetchone()[0]
+                )
+                removed["equity"] = int(
+                    self._conn.execute("SELECT COUNT(*) FROM portfolio_history").fetchone()[0]
+                )
+                self._conn.execute("DELETE FROM trades")
+                self._conn.execute("DELETE FROM portfolio_history")
+                try:
+                    self._conn.execute(
+                        "DELETE FROM sqlite_sequence WHERE name IN ('trades','portfolio_history')"
+                    )
+                except Exception:
+                    pass  # sqlite_sequence só existe se houve AUTOINCREMENT
+                self._conn.commit()
+                self._conn.execute("VACUUM")  # fora da transação (após commit)
+        except Exception:
+            logger.exception("🗃️ Falha ao resetar TradeStore")
+        return removed
+
     # -------------------------------------------------------------- migration
 
     def migrate_from_state(
