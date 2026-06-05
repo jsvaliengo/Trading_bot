@@ -39,8 +39,25 @@ def collect_snapshot(bot) -> Dict[str, Any]:
         "recent_trades": collect_recent_trades(bot, limit=20),
         "regime": collect_regime(bot),
         "portfolio_history": collect_portfolio_history(bot, limit=200),
+        "daily_history": collect_daily_history(bot),
         "server_time": datetime.utcnow().isoformat() + "Z",
     }
+
+
+def collect_daily_history(bot, limit: int = 90) -> List[Dict[str, Any]]:
+    """Histórico de P&L por dia (UTC) — fonte durável do TradeStore.
+
+    Cada item: day, trades, wins, losses, win_rate, net (P&L do dia), fees e
+    cumulative (acumulado corrido). Base da tabela "Histórico por dia" do
+    dashboard. Vazio quando não há TradeStore.
+    """
+    store = getattr(bot, "trade_store", None)
+    if store is None:
+        return []
+    try:
+        return store.daily_pnl_history(limit=limit)
+    except Exception:
+        return []
 
 
 def collect_summary(bot) -> Dict[str, Any]:
@@ -93,17 +110,27 @@ def collect_summary(bot) -> Dict[str, Any]:
         except Exception:
             pass
 
-    # P&L total = realizado do dia + não realizado das posições abertas
-    # (mesma fórmula usada no /portfolio do Telegram)
-    total_pnl = binance_daily_realized + binance_unrealized
-    # Equity = wallet + unrealized. Em simulated mode, wallet é capped,
-    # então equity ≈ cap + (lucro/prejuízo aberto). Quando trades fecham,
-    # o wallet em testnet REAL muda mas o cap simulated não — então
-    # somamos realized do dia também pra refletir lucros já materializados.
+    # Realizado ACUMULADO (todos os dias), do TradeStore durável — não zera na
+    # virada do dia UTC. Antes o saldo/P&L usava só o realizado do DIA, então
+    # voltava pro capital inicial todo dia e escondia o progresso do bot.
+    # Fallback no contador interno do bot quando não há store.
+    cumulative_realized = bot_total_pnl
+    store = getattr(bot, "trade_store", None)
+    if store is not None:
+        try:
+            cumulative_realized = _safe_float(store.cumulative_realized_pnl())
+        except Exception:
+            pass
+
+    # P&L total = realizado ACUMULADO + não realizado das posições abertas.
+    total_pnl = cumulative_realized + binance_unrealized
+    # Equity = capital/wallet + acumulado + não realizado. No mainnet o wallet
+    # já reflete o realizado; no testnet simulated o cap é fixo, então somamos
+    # o realizado acumulado (não só o do dia) pra refletir o progresso real.
     if getattr(config, "USE_TESTNET", False) and float(
         getattr(config, "SIMULATED_BALANCE_USD", 0.0) or 0.0
     ) > 0:
-        effective_balance = float(getattr(config, "SIMULATED_BALANCE_USD")) + binance_daily_realized + binance_unrealized
+        effective_balance = float(getattr(config, "SIMULATED_BALANCE_USD")) + cumulative_realized + binance_unrealized
     else:
         effective_balance = wallet_balance + binance_unrealized
 

@@ -313,6 +313,33 @@
     }
 
     // ───────── Render: Regime (full + compact) ─────────
+    function renderDailyHistory(history) {
+        const tbody = $('historico-table').querySelector('tbody');
+        const sub = $('historico-summary');
+        if (!history || !history.length) {
+            tbody.innerHTML = '<tr><td colspan="6" class="empty">Sem histórico ainda.</td></tr>';
+            if (sub) sub.textContent = '—';
+            return;
+        }
+        if (sub) {
+            const last = history[history.length - 1];
+            sub.textContent = `${history.length} dia(s) · acumulado ${fmt.usd(last.cumulative, { signed: true })}`;
+        }
+        // Mais recente primeiro
+        tbody.innerHTML = history.slice().reverse().map(d => {
+            const netCls = (d.net || 0) > 0 ? 'pnl-pos' : (d.net || 0) < 0 ? 'pnl-neg' : '';
+            const cumCls = (d.cumulative || 0) > 0 ? 'pnl-pos' : (d.cumulative || 0) < 0 ? 'pnl-neg' : '';
+            return `<tr>
+                <td><strong>${d.day}</strong></td>
+                <td>${d.trades} <small style="color:var(--text-muted)">(${d.wins}W/${d.losses}L)</small></td>
+                <td>${Number(d.win_rate || 0).toFixed(1)}%</td>
+                <td><span class="pnl-neg">${fmt.usd(d.fees)}</span></td>
+                <td><span class="${netCls}"><strong>${fmt.usd(d.net, { signed: true })}</strong></span></td>
+                <td><span class="${cumCls}">${fmt.usd(d.cumulative, { signed: true })}</span></td>
+            </tr>`;
+        }).join('');
+    }
+
     function renderRegime(regime) {
         if (!regime) return;
         const tbodyFull = $('regime-table').querySelector('tbody');
@@ -445,6 +472,7 @@
         renderTrades(snap.recent_trades || []);
         renderRegime(snap.regime);
         renderEquity(snap.portfolio_history || []);
+        renderDailyHistory(snap.daily_history || []);
         $('kpi-last-update').textContent = fmt.time(snap.server_time);
         resetRefreshCountdown();
     }

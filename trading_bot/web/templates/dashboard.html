@@ -35,6 +35,9 @@
                 <button class="nav-item" data-target="regime-view">
                     <span class="nav-icon">🌀</span><span>Regime</span>
                 </button>
+                <button class="nav-item" data-target="historico-view">
+                    <span class="nav-icon">📅</span><span>Histórico</span>
+                </button>
             </nav>
 
             <div class="sidebar-footer">
@@ -220,6 +223,27 @@
                                 <tr><th>Par</th><th>Regime comitado</th><th>Janela (hysteresis)</th></tr>
                             </thead>
                             <tbody><tr><td colspan="3" class="empty">Sem dados ainda.</td></tr></tbody>
+                        </table>
+                    </div>
+                </article>
+            </section>
+
+            <!-- HISTÓRICO POR DIA VIEW -->
+            <section class="view" id="historico-view">
+                <article class="card">
+                    <header class="card-head">
+                        <h2>Histórico por dia</h2>
+                        <span class="card-sub" id="historico-summary">—</span>
+                    </header>
+                    <div class="table-scroll">
+                        <table class="table" id="historico-table">
+                            <thead>
+                                <tr>
+                                    <th>Dia (UTC)</th><th>Trades</th><th>Win rate</th>
+                                    <th>Taxas</th><th>P&amp;L do dia</th><th>Acumulado</th>
+                                </tr>
+                            </thead>
+                            <tbody><tr><td colspan="6" class="empty">Sem histórico ainda.</td></tr></tbody>
                         </table>
                     </div>
                 </article>
