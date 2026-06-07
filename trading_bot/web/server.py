@@ -61,6 +61,18 @@ class DashboardServer:
             port = int(getattr(config, "DASHBOARD_PORT", 5050))
 
             def _run():
+                # O Flask imprime um banner de startup via click.echo
+                # (flask.cli.show_server_banner). Num processo sem stdout
+                # utilizável — ex.: respawn do bot sob screen/pipe — o click.echo
+                # levanta e derruba o servidor ANTES de começar a servir. Como o
+                # banner é irrelevante para um servidor em thread daemon,
+                # silenciamos para o dashboard sobreviver a qualquer contexto de
+                # stdout.
+                try:
+                    import flask.cli
+                    flask.cli.show_server_banner = lambda *args, **kwargs: None
+                except Exception:
+                    pass
                 try:
                     self._socketio.run(
                         self._app,
