@@ -3212,6 +3212,47 @@ class TradingBot:
             return 0.0
         return remaining
 
+    @staticmethod
+    def _mirror_setup_sl_tp_for_inversion(setup, is_long_now: bool) -> None:
+        """Espelha o SL/TP do setup quando o sinal é invertido (/invert).
+
+        O setup chega com SL/TP calculados para o sinal ORIGINAL (ex.: para um
+        STRONG_SELL, TP fica ABAIXO da entrada). Ao inverter o lado sem ajustar,
+        um LONG invertido recebe TP abaixo do entry e fecha instantaneamente em
+        ≈entry (só pagando fee). Aqui refletimos as distâncias em torno do entry
+        preservando o risk/reward e propagamos para as chaves de metadata, que o
+        ExecutionEngine lê com precedência sobre setup.stop_loss/take_profit.
+        """
+        try:
+            entry = float(getattr(setup, "entry_price", 0) or 0)
+        except (TypeError, ValueError):
+            return
+        if entry <= 0:
+            return
+        meta = getattr(setup, "metadata", None)
+        meta = meta if isinstance(meta, dict) else {}
+        try:
+            src_sl = float(meta.get("custom_stop_loss", setup.stop_loss))
+            src_tp = float(meta.get("custom_take_profit", setup.take_profit))
+        except (TypeError, ValueError):
+            return
+        if src_sl <= 0 or src_tp <= 0:
+            return
+        sl_dist = abs(entry - src_sl) / entry
+        tp_dist = abs(src_tp - entry) / entry
+        if is_long_now:
+            new_sl = round(entry * (1 - sl_dist), 8)
+            new_tp = round(entry * (1 + tp_dist), 8)
+        else:
+            new_sl = round(entry * (1 + sl_dist), 8)
+            new_tp = round(entry * (1 - tp_dist), 8)
+        setup.stop_loss = new_sl
+        setup.take_profit = new_tp
+        if "custom_stop_loss" in meta:
+            meta["custom_stop_loss"] = new_sl
+        if "custom_take_profit" in meta:
+            meta["custom_take_profit"] = new_tp
+
     def analyze_and_trade(self, symbol: str, strategy_name: str | None = None) -> bool:
         """
         Analisa um par e executa trades se houver oportunidade.
@@ -3364,10 +3405,12 @@ class TradingBot:
             should_open_short = signal_name == 'STRONG_SELL'
 
         # Inversão global de sinais (toggle via /invert no Telegram).
-        # Aplicada aqui pra manter SL/TP, trailing e execução intactos —
-        # o resto do pipeline só vê position_side já invertido.
+        # Inverte o lado E espelha o SL/TP do setup em torno do entry — senão o
+        # lado invertido herda SL/TP do sinal original (TP do lado errado fecha
+        # a posição na hora). O resto do pipeline só vê o lado/SL/TP já corretos.
         if getattr(self, 'invert_signals', False) and (should_open_long or should_open_short):
             should_open_long, should_open_short = should_open_short, should_open_long
+            self._mirror_setup_sl_tp_for_inversion(setup, should_open_long)
             logger.info(
                 f"🔀 Sinal invertido em {symbol}: {signal_name} → "
                 f"{'LONG' if should_open_long else 'SHORT'}"
