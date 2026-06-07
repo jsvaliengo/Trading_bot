@@ -422,6 +422,67 @@ def test_load_state_ignores_backup_when_primary_is_empty(tmp_path):
     assert bot.total_pnl == 0.0
 
 
+def test_mirror_setup_sl_tp_inverts_short_setup_to_long_preserving_rr():
+    # SHORT original: SL 1% acima (risco), TP 2% abaixo (recompensa).
+    setup = TradeSetup(
+        symbol="XRPUSDT",
+        signal=Signal.STRONG_SELL,
+        long_size=3.0,
+        short_size=3.0,
+        entry_price=100.0,
+        stop_loss=101.0,
+        take_profit=98.0,
+        dca_levels=[],
+        metadata={"custom_stop_loss": 101.0, "custom_take_profit": 98.0},
+    )
+    # Invertido para LONG: SL deve cair p/ 1% abaixo, TP subir p/ 2% acima.
+    TradingBot._mirror_setup_sl_tp_for_inversion(setup, is_long_now=True)
+    assert setup.stop_loss == pytest.approx(99.0)
+    assert setup.take_profit == pytest.approx(102.0)
+    # Metadata (lido com precedência pelo engine) também espelhado.
+    assert setup.metadata["custom_stop_loss"] == pytest.approx(99.0)
+    assert setup.metadata["custom_take_profit"] == pytest.approx(102.0)
+    # SL fica do lado certo do LONG (abaixo) e TP acima — nada dispara na hora.
+    assert setup.stop_loss < setup.entry_price < setup.take_profit
+
+
+def test_mirror_setup_sl_tp_inverts_long_setup_to_short_preserving_rr():
+    setup = TradeSetup(
+        symbol="BTCUSDT",
+        signal=Signal.STRONG_BUY,
+        long_size=3.0,
+        short_size=3.0,
+        entry_price=200.0,
+        stop_loss=198.0,   # 1% abaixo (risco)
+        take_profit=204.0,  # 2% acima (recompensa)
+        dca_levels=[],
+        metadata={"custom_stop_loss": 198.0, "custom_take_profit": 204.0},
+    )
+    TradingBot._mirror_setup_sl_tp_for_inversion(setup, is_long_now=False)
+    assert setup.stop_loss == pytest.approx(202.0)   # 1% acima
+    assert setup.take_profit == pytest.approx(196.0)  # 2% abaixo
+    assert setup.metadata["custom_stop_loss"] == pytest.approx(202.0)
+    assert setup.metadata["custom_take_profit"] == pytest.approx(196.0)
+    assert setup.take_profit < setup.entry_price < setup.stop_loss
+
+
+def test_mirror_setup_sl_tp_noop_on_invalid_entry():
+    setup = TradeSetup(
+        symbol="ETHUSDT",
+        signal=Signal.STRONG_SELL,
+        long_size=3.0,
+        short_size=3.0,
+        entry_price=0.0,
+        stop_loss=101.0,
+        take_profit=98.0,
+        dca_levels=[],
+    )
+    TradingBot._mirror_setup_sl_tp_for_inversion(setup, is_long_now=True)
+    # Entry inválido → não mexe nos valores.
+    assert setup.stop_loss == 101.0
+    assert setup.take_profit == 98.0
+
+
 def test_execute_signal_trade_skips_fixed_sl_on_exchange_when_individual_sl_disabled(monkeypatch):
     bot = _make_light_bot()
     sltp_calls = []
