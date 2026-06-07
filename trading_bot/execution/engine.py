@@ -22,6 +22,7 @@ Mantém fora de escopo (ainda no bot):
 from __future__ import annotations
 
 import logging
+import math
 from datetime import datetime
 from typing import TYPE_CHECKING
 
@@ -32,6 +33,41 @@ if TYPE_CHECKING:
     from ..core.bot import TradingBot
 
 logger = logging.getLogger(__name__)
+
+
+def _round_qty_for_min_notional(qty, price, info):
+    """Arredonda a qty pra precisão do símbolo garantindo o minNotional.
+
+    `round(qty, precision)` arredonda para o mais próximo e pode jogar a qty
+    PARA BAIXO, derrubando o notional (qty*price) abaixo do mínimo da exchange —
+    típico em ativo caro com step grosso (ex.: BTC, qty 0.000845 → 0.0008 →
+    ~$49.7 < $50), o que a Binance rejeita com -4164. Quando o arredondamento
+    cairia abaixo do mínimo, sobe a qty pro próximo step (ceil) que cobre o
+    minNotional. Caso normal: comportamento idêntico ao round() anterior.
+
+    Só deve ser usado em ABERTURA de posição — em closes (reduceOnly) bumpar a
+    qty pra cima poderia exceder/inverter a posição.
+    """
+    try:
+        qty = float(qty)
+        price = float(price)
+    except (TypeError, ValueError):
+        return qty
+    if qty <= 0 or price <= 0:
+        return qty
+    precision = int(info.get('quantityPrecision', 3) or 0)
+    min_notional = float(info.get('minNotional', 0) or 0)
+    rounded = round(qty, precision)
+    if min_notional > 0 and rounded * price < min_notional:
+        step = 10 ** (-precision)
+        needed = math.ceil((min_notional / price) / step) * step
+        bumped = round(needed, precision)
+        logger.info(
+            f"🔧 Qty ~${rounded * price:.2f} abaixo do minNotional ${min_notional:.2f} "
+            f"após arredondamento — subindo {rounded} → {bumped} (~${bumped * price:.2f})"
+        )
+        rounded = bumped
+    return rounded
 
 
 def _validate_stop_loss_side(side, entry_price, stop_loss, fallback_pct, price_precision):
@@ -371,6 +407,7 @@ class ExecutionEngine:
                     return False
 
                 long_qty = (order_size * config.LEVERAGE) / price
+                long_qty = _round_qty_for_min_notional(long_qty, price, info)
 
                 logger.info(f"📈 Abrindo LONG: {long_qty:.4f} {symbol} @ ${price:.4f}")
                 long_order = bot.exchange.place_market_order(
@@ -515,6 +552,7 @@ class ExecutionEngine:
                     return False
 
                 short_qty = (order_size * config.LEVERAGE) / price
+                short_qty = _round_qty_for_min_notional(short_qty, price, info)
 
                 logger.info(f"📉 Abrindo SHORT: {short_qty:.4f} {symbol} @ ${price:.4f}")
                 short_order = bot.exchange.place_market_order(
