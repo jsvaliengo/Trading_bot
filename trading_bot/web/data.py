@@ -87,6 +87,8 @@ def collect_summary(bot) -> Dict[str, Any]:
     binance_unrealized = 0.0
     binance_funding_fee = 0.0
     binance_commission = 0.0
+    binance_funding_total = 0.0
+    binance_commission_total = 0.0
     wallet_balance = _safe_float(getattr(bot, "last_known_balance", 0.0) or 0.0)
     exchange = getattr(bot, "exchange", None)
     if exchange is not None:
@@ -101,6 +103,18 @@ def collect_summary(bot) -> Dict[str, Any]:
             # commission é sempre negativo (custo).
             binance_funding_fee = _safe_float(daily.get("funding_fee"))
             binance_commission = _safe_float(daily.get("commission"))
+        except Exception:
+            pass
+        try:
+            # Funding/comissão ACUMULADOS do PERÍODO ATUAL — alinhados ao P&L
+            # realizado (que recomeça no reset do DB). Âncora = 1º trade do
+            # trade_store; sem trades, fica em 0 (período recém-começado).
+            _store = getattr(bot, "trade_store", None)
+            _start_ms = _store.first_trade_time_ms() if _store is not None else None
+            if _start_ms is not None:
+                cum = exchange.get_cumulative_income_from_binance(start_ms=_start_ms)
+                binance_funding_total = _safe_float(cum.get("funding_fee"))
+                binance_commission_total = _safe_float(cum.get("commission"))
         except Exception:
             pass
         try:
@@ -147,6 +161,9 @@ def collect_summary(bot) -> Dict[str, Any]:
         "unrealized_pnl": binance_unrealized,
         "funding_fee_today": binance_funding_fee,
         "commission_today": binance_commission,
+        # Acumulado (todos os dias) — usado nos cards que não devem zerar diário.
+        "funding_fee_total": binance_funding_total,
+        "commission_total": binance_commission_total,
         # Debug: contadores internos do bot (estimados, podem divergir)
         "bot_total_pnl": bot_total_pnl,
         "bot_daily_pnl": bot_daily_pnl,

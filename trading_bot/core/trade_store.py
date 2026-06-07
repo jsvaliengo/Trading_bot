@@ -361,6 +361,30 @@ class TradeStore:
             logger.exception("🗃️ Falha ao somar pnl realizado acumulado")
             return 0.0
 
+    def first_trade_time_ms(self) -> Optional[int]:
+        """Epoch ms do trade mais antigo (MIN opened_at), ou None se vazio.
+
+        Âncora do "período atual" de tracking: usada pra alinhar funding/comissão
+        acumulados ao MESMO intervalo do P&L realizado acumulado (que recomeça
+        quando o DB é resetado). Sem isso, o income da Binance traria a vida
+        toda da conta, destoando do saldo pós-reset.
+        """
+        try:
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT MIN(opened_at) FROM trades"
+                ).fetchone()
+            if not row or not row[0]:
+                return None
+            from datetime import datetime, timezone
+            dt = datetime.fromisoformat(str(row[0]))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return int(dt.timestamp() * 1000)
+        except Exception:
+            logger.exception("🗃️ Falha ao obter timestamp do primeiro trade")
+            return None
+
     def daily_pnl_history(self, limit: int = 90) -> List[Dict[str, Any]]:
         """P&L agregado por dia (UTC) dos trades fechados, cronológico.
 

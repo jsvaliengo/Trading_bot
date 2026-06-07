@@ -969,6 +969,104 @@ class BinanceConnection:
                 'income_types': [],
             }
     
+    def get_cumulative_income_from_binance(
+        self,
+        force_refresh: bool = False,
+        lookback_days: int = 200,
+        start_ms: int = None,
+    ) -> dict:
+        """Funding fee e comissão ACUMULADOS (todos os dias), via income history.
+
+        Diferente de get_daily_pnl_from_binance (que filtra só o dia atual), aqui
+        varremos o histórico paginando por startTime. Funding muda só a cada 8h,
+        então o cache usa TTL maior (5min) pra não martelar a API.
+
+        start_ms: início da janela (epoch ms). Quando fornecido (ex.: timestamp
+        do primeiro trade do período atual), o acumulado fica alinhado ao P&L
+        realizado pós-reset. Se None, usa lookback_days (padrão 200, ≤ limite de
+        span do endpoint).
+
+        Returns:
+            dict com funding_fee / commission / realized_pnl / income_count.
+        """
+        TTL = 300.0
+        now_mono = time.monotonic()
+        with self._cache_lock:
+            cached = getattr(self, "_cumulative_income_cache", None)
+            if (
+                (not force_refresh)
+                and cached
+                and (now_mono - cached["ts"]) < TTL
+                and cached.get("start_ms") == start_ms
+            ):
+                metrics.record_cache_hit("cumulative_income")
+                return cached["data"]
+
+        metrics.record_cache_miss("cumulative_income")
+        try:
+            effective_start = (
+                start_ms if start_ms is not None
+                else int((time.time() - lookback_days * 86400) * 1000)
+            )
+            funding = commission = realized = 0.0
+            total_count = 0
+            cursor = effective_start
+            pages = 0
+            while True:
+                batch = self._api_call(
+                    "futures_income_history_cumulative",
+                    self.client.futures_income_history,
+                    startTime=cursor,
+                    limit=1000,
+                ) or []
+                if not batch:
+                    break
+                for item in batch:
+                    itype = item.get("incomeType", "")
+                    amount = float(item.get("income", 0) or 0)
+                    if itype == "FUNDING_FEE":
+                        funding += amount
+                    elif itype == "COMMISSION":
+                        commission += amount
+                    elif itype == "REALIZED_PNL":
+                        realized += amount
+                total_count += len(batch)
+                pages += 1
+                # Última página (menos que o limite) ou trava de segurança.
+                if len(batch) < 1000 or pages >= 50:
+                    break
+                last_t = max(int(i.get("time", cursor) or cursor) for i in batch)
+                if last_t < cursor:  # sem progresso → evita loop infinito
+                    break
+                cursor = last_t + 1
+
+            result = {
+                "funding_fee": funding,
+                "commission": commission,
+                "realized_pnl": realized,
+                "income_count": total_count,
+            }
+            with self._cache_lock:
+                self._cumulative_income_cache = {
+                    "data": result,
+                    "ts": now_mono,
+                    "start_ms": start_ms,
+                }
+            return result
+
+        except Exception as e:
+            logger.error(f"Erro ao obter income acumulado da Binance: {e}")
+            with self._cache_lock:
+                cached = getattr(self, "_cumulative_income_cache", None)
+                if cached:
+                    return cached["data"]
+            return {
+                "funding_fee": 0.0,
+                "commission": 0.0,
+                "realized_pnl": 0.0,
+                "income_count": 0,
+            }
+
     def get_current_price(self, symbol: str) -> float:
         """
         Retorna o preço atual de um par.

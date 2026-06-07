@@ -137,9 +137,10 @@
         setPnlClass(pnlDaily, summary.daily_pnl);
         $('kpi-closed-trades').textContent = 'Trades fechados: ' + summary.closed_trades;
 
-        // Funding fee: positivo = recebendo (verde), negativo = pagando (vermelho).
-        // Sub explica direção em PT-BR e mostra commission do dia abaixo.
-        const fundingVal = summary.funding_fee_today;
+        // Funding fee ACUMULADO (todos os dias): positivo = recebendo (verde),
+        // negativo = pagando (vermelho). Sub explica direção em PT-BR e mostra a
+        // comissão acumulada abaixo. Não zera na virada do dia UTC.
+        const fundingVal = summary.funding_fee_total;
         const funding = $('kpi-funding');
         const fundingSub = $('kpi-funding-sub');
         if (fundingVal === undefined || fundingVal === null || isNaN(fundingVal)) {
@@ -153,7 +154,7 @@
             if (fundingVal > 0) direction = 'Recebendo';
             else if (fundingVal < 0) direction = 'Pagando';
             else direction = 'Neutro';
-            const comm = summary.commission_today;
+            const comm = summary.commission_total;
             const commTxt = (comm !== undefined && comm !== null && !isNaN(comm))
                 ? ` · Taxas: ${fmt.usd(comm, { signed: true })}`
                 : '';
