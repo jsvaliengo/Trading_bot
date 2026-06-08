@@ -31,7 +31,7 @@ import json
 import logging
 import sqlite3
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -359,6 +359,32 @@ class TradeStore:
             return float(row[0] or 0.0) if row else 0.0
         except Exception:
             logger.exception("🗃️ Falha ao somar pnl realizado acumulado")
+            return 0.0
+
+    def realized_pnl_today(self, day_utc: Optional[str] = None) -> float:
+        """Soma de pnl_net dos trades fechados HOJE (UTC), do TradeStore durável.
+
+        MESMA fonte da coluna "P&L DO DIA" do dashboard (daily_pnl_history) e do
+        "P&L TOTAL" (cumulative_realized_pnl). O card "P&L HOJE" usa isto em vez
+        do income diário da Binance — que dependia de um baseline re-ancorado a
+        cada restart (zerava o contador no meio do dia UTC). Agrega por
+        date(exit_at), igual ao histórico diário.
+
+        day_utc: data 'YYYY-MM-DD' a consultar; default = hoje em UTC.
+        """
+        if day_utc is None:
+            day_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        try:
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT COALESCE(SUM(pnl_net), 0) FROM trades "
+                    "WHERE status='closed' AND exit_at IS NOT NULL "
+                    "AND substr(exit_at, 1, 10) = ?",
+                    (day_utc,),
+                ).fetchone()
+            return float(row[0] or 0.0) if row else 0.0
+        except Exception:
+            logger.exception("🗃️ Falha ao somar pnl realizado de hoje")
             return 0.0
 
     def first_trade_time_ms(self) -> Optional[int]:

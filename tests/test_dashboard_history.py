@@ -8,6 +8,7 @@ zeravam na virada do dia UTC — escondendo o progresso do bot. Agora:
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -94,6 +95,27 @@ def test_daily_history_limit_keeps_cumulative_correct(tmp_path):
     assert hist[0]["cumulative"] == pytest.approx(10.0)
 
 
+# ─────────────────────────── realized_pnl_today ───────────────────────────
+
+def test_realized_pnl_today_filtra_por_dia(tmp_path):
+    store = _store(tmp_path)
+    _close(store, entry=2500, pnl_net=2.0, fees=0.0, exit_at="2026-06-07T12:00:00")
+    _close(store, entry=2510, pnl_net=-3.0, fees=0.0, exit_at="2026-06-08T09:00:00")
+    _close(store, entry=2511, pnl_net=1.5, fees=0.0, exit_at="2026-06-08T20:00:00")
+    # só os dois trades do dia 08 somam (-3.0 + 1.5 = -1.5)
+    assert store.realized_pnl_today("2026-06-08") == pytest.approx(-1.5)
+    assert store.realized_pnl_today("2026-06-07") == pytest.approx(2.0)
+    assert store.realized_pnl_today("2026-06-09") == 0.0
+
+
+def test_realized_pnl_today_default_usa_hoje_utc(tmp_path):
+    store = _store(tmp_path)
+    hoje = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    _close(store, entry=2500, pnl_net=4.0, fees=0.0, exit_at=f"{hoje}T10:00:00")
+    _close(store, entry=2510, pnl_net=-1.0, fees=0.0, exit_at="2020-01-01T10:00:00")
+    assert store.realized_pnl_today() == pytest.approx(4.0)
+
+
 # ─────────────────────────── collectors do dashboard ───────────────────────────
 
 def test_collect_daily_history_without_store_is_empty():
@@ -132,3 +154,31 @@ def test_collect_summary_uses_store_cumulative(tmp_path, monkeypatch):
     # saldo = cap 100 + acumulado (-10) = 90  (não volta pra 100 no dia novo)
     assert summary["last_balance"] == pytest.approx(90.0)
     assert summary["daily_pnl"] == 0.0  # P&L HOJE diário, separado
+
+
+def test_collect_summary_daily_pnl_usa_store_nao_binance(tmp_path, monkeypatch):
+    """P&L HOJE (card) deve vir do realizado de HOJE no SQLite, NÃO do income
+    diário da Binance — que dependia de um baseline re-ancorado a cada restart.
+    """
+    monkeypatch.setattr(global_config, "SIMULATED_BALANCE_USD", 100.0, raising=False)
+    store = _store(tmp_path)
+    hoje = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    # Realizado de hoje no SQLite = -3.96 (o número honesto do dia)
+    _close(store, entry=2500, pnl_net=1.24, fees=0.0, exit_at=f"{hoje}T09:00:00")
+    _close(store, entry=2510, pnl_net=-5.20, fees=0.0, exit_at=f"{hoje}T16:00:00")
+    bot = SimpleNamespace(
+        initial_capital=100.0, last_known_balance=100.0, total_pnl=0.0,
+        daily_realized_pnl=0.0, closed_trades_count=2, paused=False, running=True,
+        trade_store=store,
+        exchange=SimpleNamespace(
+            # Binance reportaria +0.62 (baseline distorcido pós-restart) — ignorado.
+            get_daily_pnl_from_binance=lambda: {"total": 0.62, "funding_fee": 0.0, "commission": 0.0},
+            get_account_info=lambda: {"wallet_balance": 100.0, "unrealized_pnl": 0.0},
+            get_open_positions=lambda: [],
+            daily_pnl_binance_baseline=0.0,
+        ),
+        daily_pnl_binance_baseline=0.0,
+    )
+    summary = dashboard_data.collect_summary(bot)
+    # daily_pnl = realizado de hoje do store (-3.96), NÃO o +0.62 da Binance
+    assert summary["daily_pnl"] == pytest.approx(-3.96)
