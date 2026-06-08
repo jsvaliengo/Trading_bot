@@ -4681,17 +4681,31 @@ class TradingBot:
         daily_pnl_binance = self.exchange.get_daily_pnl_from_binance()
         daily_pnl_real = daily_pnl_binance['total'] - self.daily_pnl_binance_baseline
 
-        # P&L total = P&L realizado do DIA (delta-vs-baseline) + não realizado
-        total_pnl = daily_pnl_real + total_unrealized
+        # Realizado ACUMULADO (todos os dias), do TradeStore durável — não zera
+        # na virada do dia UTC nem no /reset diário. MESMA fonte do dashboard
+        # (web/data.py collect_summary). Antes este card usava só o realizado do
+        # DIA (daily_pnl_real), então "Total"/"Atual" voltavam pro capital
+        # inicial toda virada de dia e divergiam do dashboard. Fallback no
+        # contador interno do bot quando não há store.
+        cumulative_realized = float(getattr(self, "total_pnl", 0.0) or 0.0)
+        _store = getattr(self, "trade_store", None)
+        if _store is not None:
+            try:
+                cumulative_realized = float(_store.cumulative_realized_pnl())
+            except Exception:
+                pass
+
+        # P&L total = realizado ACUMULADO + não realizado das posições abertas.
+        total_pnl = cumulative_realized + total_unrealized
 
         # Capital ATUAL = equity efetivo. Em testnet com SIMULATED_BALANCE_USD,
-        # o wallet retorna o cap fixo — adicionamos realized + unrealized pra
-        # refletir o saldo "como se fosse o cap recebendo o P&L". Em mainnet
-        # ou testnet sem cap, wallet_balance já reflete realized; adicionamos
-        # só o unrealized pra ter equity total.
+        # o wallet retorna o cap fixo — adicionamos o realizado ACUMULADO +
+        # unrealized pra refletir o progresso real do bot. Em mainnet ou testnet
+        # sem cap, wallet_balance já reflete o realizado; adicionamos só o
+        # unrealized pra ter equity total.
         sim_cap = float(getattr(config, "SIMULATED_BALANCE_USD", 0.0) or 0.0)
         if getattr(config, "USE_TESTNET", False) and sim_cap > 0:
-            balance = sim_cap + daily_pnl_real + total_unrealized
+            balance = sim_cap + cumulative_realized + total_unrealized
         else:
             balance = wallet_balance + total_unrealized
 
@@ -4727,7 +4741,7 @@ class TradingBot:
             initial_capital=self.initial_capital,
             current_balance=balance,  # Saldo REAL da Binance
             total_pnl=total_pnl,
-            pnl_realized=daily_pnl_real,  # P&L diário REAL da Binance
+            pnl_realized=cumulative_realized,  # Realizado ACUMULADO (igual ao dashboard)
             pnl_unrealized=total_unrealized,
             pct_change=pct_change,
             closed_trades=self.closed_trades_count,
