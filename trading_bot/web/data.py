@@ -129,10 +129,20 @@ def collect_summary(bot) -> Dict[str, Any]:
     # voltava pro capital inicial todo dia e escondia o progresso do bot.
     # Fallback no contador interno do bot quando não há store.
     cumulative_realized = bot_total_pnl
+    # P&L HOJE (card): realizado de HOJE do MESMO TradeStore durável — igual à
+    # coluna "P&L DO DIA" do histórico. Antes usava o income diário da Binance
+    # menos um baseline que era re-ancorado a cada restart, então o card zerava
+    # no meio do dia UTC e divergia do histórico/total. Fallback no realizado
+    # da Binance quando não há store.
+    daily_realized = binance_daily_realized
     store = getattr(bot, "trade_store", None)
     if store is not None:
         try:
             cumulative_realized = _safe_float(store.cumulative_realized_pnl())
+        except Exception:
+            pass
+        try:
+            daily_realized = _safe_float(store.realized_pnl_today())
         except Exception:
             pass
 
@@ -157,7 +167,7 @@ def collect_summary(bot) -> Dict[str, Any]:
         "initial_capital": initial_capital,
         "last_balance": effective_balance,
         "total_pnl": total_pnl,
-        "daily_pnl": binance_daily_realized,
+        "daily_pnl": daily_realized,
         "unrealized_pnl": binance_unrealized,
         "funding_fee_today": binance_funding_fee,
         "commission_today": binance_commission,
