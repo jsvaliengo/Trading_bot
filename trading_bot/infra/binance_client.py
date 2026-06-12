@@ -1735,12 +1735,15 @@ class BinanceConnection:
         try:
             info = self.get_symbol_info(symbol)
             price_precision = info.get('pricePrecision', 2)
-            
+
+            # MARK_PRICE evita disparo por pavio do last price; configurável.
+            working_type = getattr(self.config, "SL_TP_WORKING_TYPE", "MARK_PRICE")
+
             # Stop Loss
             if stop_loss_price:
                 sl_price = round(stop_loss_price, price_precision)
                 close_side = 'SELL' if position_side == 'LONG' else 'BUY'
-                
+
                 self._api_call(
                     "futures_create_order_stop_market",
                     self.client.futures_create_order,
@@ -1750,15 +1753,16 @@ class BinanceConnection:
                     type='STOP_MARKET',
                     stopPrice=sl_price,
                     closePosition=True,
+                    workingType=working_type,
                     allow_timeout_retry=False
                 )
-                logger.info(f"🛑 Stop Loss definido: {symbol} @ ${sl_price}")
-            
+                logger.info(f"🛑 Stop Loss definido: {symbol} @ ${sl_price} ({working_type})")
+
             # Take Profit
             if take_profit_price:
                 tp_price = round(take_profit_price, price_precision)
                 close_side = 'SELL' if position_side == 'LONG' else 'BUY'
-                
+
                 self._api_call(
                     "futures_create_order_take_profit_market",
                     self.client.futures_create_order,
@@ -1768,9 +1772,10 @@ class BinanceConnection:
                     type='TAKE_PROFIT_MARKET',
                     stopPrice=tp_price,
                     closePosition=True,
+                    workingType=working_type,
                     allow_timeout_retry=False
                 )
-                logger.info(f"🎯 Take Profit definido: {symbol} @ ${tp_price}")
+                logger.info(f"🎯 Take Profit definido: {symbol} @ ${tp_price} ({working_type})")
             
             return True
             

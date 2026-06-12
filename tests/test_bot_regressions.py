@@ -1662,6 +1662,8 @@ def test_risk_based_sizing_shrinks_position_as_stop_widens(monkeypatch):
     monkeypatch.setattr(config, "USE_SIGNAL_STRATEGY", True)
     monkeypatch.setattr(config, "MAX_POSITION_PERCENT", 0.08)
     monkeypatch.setattr(config, "LEVERAGE", 10)
+    # Isola a relação risco↔notional do buffer de slippage (testado à parte).
+    monkeypatch.setattr(config, "SLIPPAGE_BUFFER_MULT", 1.0)
 
     # risco = 1% de $130 = $1.30 ; notional = 1.30 / (sl_pct/100)
     long_tight, _ = strategy.calculate_position_sizes(
@@ -2844,3 +2846,51 @@ def test_build_log_file_handler_plain_when_max_bytes_zero(monkeypatch, tmp_path)
         assert not isinstance(handler, RotatingFileHandler)
     finally:
         handler.close()
+
+
+def _make_sizing_config(slippage_buffer: float) -> SimpleNamespace:
+    """Config mínima para exercitar o sizing baseado em risco isoladamente."""
+    return SimpleNamespace(
+        USE_RISK_BASED_SIZING=True,
+        RISK_PER_TRADE_PCT=1.0,
+        SLIPPAGE_BUFFER_MULT=slippage_buffer,
+        MAX_POSITION_PERCENT=0.08,
+        LEVERAGE=10,
+        USE_MIN_NOTIONAL_ONLY=True,
+        USE_SIGNAL_STRATEGY=True,
+        HEDGE_RATIO=0.5,
+    )
+
+
+def test_risk_based_sizing_shrinks_notional_by_slippage_buffer():
+    # STGUSDT 12/06: stop a -3.25% preencheu a -7.32% (STOP_MARKET escorrega).
+    # O buffer dimensiona o notional contra o stop "pior caso" para que a perda
+    # real fique perto de RISK_PER_TRADE_PCT mesmo com slippage.
+    strategy = HedgeStrategy()
+    sl_pct = 3.25
+    capital = 1000.0
+
+    strategy.config = _make_sizing_config(slippage_buffer=1.0)
+    long_no_buffer, _ = strategy.calculate_position_sizes(
+        Signal.STRONG_BUY, capital, min_notional=5.0, sl_pct=sl_pct
+    )
+
+    strategy.config = _make_sizing_config(slippage_buffer=1.5)
+    long_buffer, _ = strategy.calculate_position_sizes(
+        Signal.STRONG_BUY, capital, min_notional=5.0, sl_pct=sl_pct
+    )
+
+    # Ambos longe do floor/cap → o buffer entra direto como divisor.
+    assert long_no_buffer == pytest.approx(1000.0 * 0.01 / (3.25 / 100.0))
+    assert long_buffer == pytest.approx(long_no_buffer / 1.5)
+    assert long_buffer < long_no_buffer
+
+
+def test_risk_based_sizing_treats_buffer_below_one_as_no_buffer():
+    # Buffer < 1.0 aumentaria a posição (anti-segurança); o sizing clampa em 1.0.
+    strategy = HedgeStrategy()
+    strategy.config = _make_sizing_config(slippage_buffer=0.5)
+    long_size, _ = strategy.calculate_position_sizes(
+        Signal.STRONG_BUY, 1000.0, min_notional=5.0, sl_pct=3.25
+    )
+    assert long_size == pytest.approx(1000.0 * 0.01 / (3.25 / 100.0))
