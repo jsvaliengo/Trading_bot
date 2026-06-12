@@ -195,6 +195,27 @@ class PairSelector:
             # 5. PREÇO ATUAL
             current_price = float(ticker_24h['lastPrice'])
 
+            # LIQUIDEZ DE REFERÊNCIA: em testnet, volume/spread acima vêm da
+            # própria testnet e são sintéticos — pares ilíquidos passam pelos
+            # filtros e geram slippage brutal no stop. Sobrescreve com volume/
+            # spread REAIS da mainnet pública quando disponível. Símbolo sem
+            # dado real (não existe/ilíquido na mainnet) recebe sentinelas que
+            # os filtros de select_best_pairs rejeitam. Em mainnet o mapa é None
+            # e nada muda. Falha de leitura é fail-open (mantém valor da exchange).
+            try:
+                ref_map = self.exchange.get_reference_liquidity_map()
+            except Exception:
+                ref_map = None
+            if ref_map is not None:
+                ref = ref_map.get(symbol)
+                if ref is None:
+                    volume_24h = 0.0          # < MIN_VOLUME → rejeitado
+                    spread_percent = 999.0    # > MAX_SPREAD → rejeitado
+                else:
+                    volume_24h = float(ref.get('volume_24h', 0.0) or 0.0)
+                    if ref.get('spread_percent') is not None:
+                        spread_percent = float(ref['spread_percent'])
+
             return {
                 'symbol': symbol,
                 'volume_24h': volume_24h,
