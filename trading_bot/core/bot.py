@@ -4675,12 +4675,6 @@ class TradingBot:
         wallet_balance = account_info['wallet_balance']  # Saldo total da carteira (cappado em testnet)
         total_unrealized = account_info['unrealized_pnl']  # P&L não realizado
 
-        # Busca P&L diário REAL da Binance — subtrai o baseline ancorado no
-        # /reset ou rollover de dia UTC (mantém alinhado aos contadores
-        # internos zerados após reset).
-        daily_pnl_binance = self.exchange.get_daily_pnl_from_binance()
-        daily_pnl_real = daily_pnl_binance['total'] - self.daily_pnl_binance_baseline
-
         # Realizado ACUMULADO (todos os dias), do TradeStore durável — não zera
         # na virada do dia UTC nem no /reset diário. MESMA fonte do dashboard
         # (web/data.py collect_summary). Antes este card usava só o realizado do
@@ -4711,31 +4705,38 @@ class TradingBot:
 
         pct_change = (total_pnl / self.initial_capital) * 100 if self.initial_capital > 0 else 0
         
-        # Prepara dados do histórico para o Telegram (converte para horário do Brasil)
+        # Prepara dados do histórico para o Telegram.
+        # Fonte: curva do realizado ACUMULADO (net) do TradeStore — um ponto por
+        # trade fechado. O último ponto é igual ao "Realizado" do topo
+        # (cumulative_realized), então o histórico FECHA com o topo. Antes a série
+        # vinha de portfolio_history (income DIÁRIO da Binance, c/ taxas/baseline),
+        # que divergia do topo e tinha valores repetidos/parados entre snapshots.
         history_data = []
-        for snap in self.portfolio_history[-12:]:  # Últimos 12 snapshots
-            # Converte timestamp para horário do Brasil
-            snap_time = snap['timestamp']
-            if snap_time.tzinfo is None:
-                # Se não tem timezone, assume que é UTC e converte para BRT
-                snap_time = snap_time.replace(tzinfo=timezone.utc).astimezone(BRT)
-            else:
-                snap_time = snap_time.astimezone(BRT)
-            
-            history_data.append({
-                'time': snap_time.strftime("%H:%M"),
-                # Histórico da evolução: usa P&L realizado (não realizado fica fora)
-                'pnl': snap.get('pnl_realized', snap.get('pnl_total', 0.0))
-            })
-        
-        # Adiciona snapshot atual se não estiver no histórico (usando horário Brasil)
-        current_snap = {
-            'time': now_brt.strftime("%H:%M"),
-            'pnl': daily_pnl_real
-        }
-        if not history_data or history_data[-1]['time'] != current_snap['time']:
-            history_data.append(current_snap)
-        
+        _store = getattr(self, "trade_store", None)
+        if _store is not None:
+            try:
+                for point in _store.realized_curve(limit=6):
+                    exit_dt = point.get("exit_at")
+                    if isinstance(exit_dt, str):
+                        try:
+                            exit_dt = datetime.fromisoformat(exit_dt)
+                        except ValueError:
+                            exit_dt = None
+                    if exit_dt is None:
+                        label = now_brt.strftime("%H:%M")
+                    else:
+                        # Naive == UTC (mesma convenção dos snapshots).
+                        if exit_dt.tzinfo is None:
+                            exit_dt = exit_dt.replace(tzinfo=timezone.utc)
+                        label = exit_dt.astimezone(BRT).strftime("%H:%M")
+                    history_data.append({
+                        'time': label,
+                        'pnl': float(point.get("cum_pnl", 0.0) or 0.0),
+                    })
+            except Exception:
+                logger.exception("Falha ao montar histórico de realizado para o card")
+                history_data = []
+
         # Envia para o Telegram com estatísticas de trades
         self.telegram.send_portfolio_evolution(
             initial_capital=self.initial_capital,

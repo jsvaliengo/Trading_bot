@@ -795,18 +795,26 @@ class TelegramCommandHandler:
             wallet_balance = account_info['wallet_balance']
             unrealized = account_info['unrealized_pnl']
 
+            # Realizado ACUMULADO (net de taxas) do TradeStore durável — MESMA
+            # fonte do card EVOLUÇÃO (/portfolio) e do dashboard. Antes este card
+            # usava o income DIÁRIO da Binance (com taxas/funding e baseline), que
+            # divergia do /portfolio tanto no Saldo quanto no "Realizado" (ex.:
+            # STATUS -1.87 vs EVOLUÇÃO +1.91 no mesmo bot). Fallback no counter
+            # interno do bot quando não há store.
+            cumulative_realized = float(getattr(self.bot, "total_pnl", 0.0) or 0.0)
+            _store = getattr(self.bot, "trade_store", None)
+            if _store is not None:
+                try:
+                    cumulative_realized = float(_store.cumulative_realized_pnl())
+                except Exception:
+                    pass
+
             # Equity efetivo: em testnet com SIMULATED_BALANCE_USD ativo, o
-            # wallet vem cappado no SIMULATED_BALANCE — soma realized+unrealized
-            # do dia pra refletir o saldo real.
-            try:
-                daily_realized = float(
-                    self.bot.exchange.get_daily_pnl_from_binance().get('total', 0.0)
-                )
-            except Exception:
-                daily_realized = 0.0
+            # wallet vem cappado no SIMULATED_BALANCE — soma realizado acumulado +
+            # não realizado pra refletir o saldo real (mesma fórmula da EVOLUÇÃO).
             sim_cap = float(getattr(self.config, "SIMULATED_BALANCE_USD", 0.0) or 0.0)
             if getattr(self.config, "USE_TESTNET", False) and sim_cap > 0:
-                balance = sim_cap + daily_realized + unrealized
+                balance = sim_cap + cumulative_realized + unrealized
             else:
                 balance = wallet_balance + unrealized
 
@@ -827,10 +835,9 @@ class TelegramCommandHandler:
                 logger.warning(f"⚠️ /status: API indisponível ao listar posições: {exc}")
                 positions = []
 
-            # P&L mostrado vem da Binance (fonte de verdade) pra bater com
-            # /portfolio e dashboard. self.bot.total_pnl seria o counter
-            # interno (estimativa de taxas, diverge ~$1 a cada 18 trades).
-            pnl_display = daily_realized
+            # P&L Total Realizado = realizado acumulado net do SQLite (mesma fonte
+            # do Saldo acima e do /portfolio). Agora o rótulo "Total" é fiel.
+            pnl_display = cumulative_realized
             pnl_emoji = "🟢" if pnl_display >= 0 else "🔴"
             
             message = f"""

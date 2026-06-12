@@ -672,28 +672,20 @@ class TelegramNotifier:
         if history and len(history) > 1:
             message += "\n\n<b>📜 HISTÓRICO (REALIZADO):</b>"
             
-            # Encontra o máximo e mínimo para escala
-            pnls = [h['pnl'] for h in history]
-            max_pnl = max(pnls) if pnls else 0
-            min_pnl = min(pnls) if pnls else 0
-            range_pnl = max_pnl - min_pnl if max_pnl != min_pnl else 1
-            
+            # Escala pelo MÓDULO máximo (referência no ZERO): o tamanho da barra
+            # reflete a magnitude e a cor reflete o sinal. Antes a escala era
+            # min→máx da janela, então numa sequência só de perdas a "menos ruim"
+            # ganhava barra cheia e a pior ficava vazia — contraditório com o
+            # emoji vermelho.
+            max_abs = max((abs(h['pnl']) for h in history[-6:]), default=0.0) or 1.0
+
             # Mostra últimos 6 pontos do histórico com mini gráfico
             for h in history[-6:]:
-                # Normaliza para criar barra (0-5 blocos)
-                if range_pnl > 0:
-                    normalized = (h['pnl'] - min_pnl) / range_pnl
-                    blocks = int(normalized * 5)
-                else:
-                    blocks = 2
-                
-                if h['pnl'] >= 0:
-                    mini_bar = "▓" * blocks + "░" * (5 - blocks)
-                    emoji = "🟢"
-                else:
-                    mini_bar = "▓" * blocks + "░" * (5 - blocks)
-                    emoji = "🔴"
-                
+                frac = min(abs(h['pnl']) / max_abs, 1.0)
+                blocks = int(round(frac * 5))
+                mini_bar = "▓" * blocks + "░" * (5 - blocks)
+                emoji = "🟢" if h['pnl'] >= 0 else "🔴"
+
                 message += f"\n   {h['time']} {mini_bar} {emoji} {self._format_usd_brl(h['pnl'], 2, True)}"
         
         message += "\n━━━━━━━━━━━━━━━━━━━━━"

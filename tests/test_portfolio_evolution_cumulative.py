@@ -24,11 +24,15 @@ class _ExchangeStub:
 
 
 class _TradeStoreStub:
-    def __init__(self, cumulative):
+    def __init__(self, cumulative, curve=None):
         self._cumulative = cumulative
+        self._curve = curve or []
 
     def cumulative_realized_pnl(self):
         return self._cumulative
+
+    def realized_curve(self, limit=6):
+        return self._curve[-limit:]
 
 
 class _TelegramSpy:
@@ -39,11 +43,11 @@ class _TelegramSpy:
         self.kwargs = kwargs
 
 
-def _make_fake_bot(cumulative_realized):
+def _make_fake_bot(cumulative_realized, curve=None):
     telegram = _TelegramSpy()
     fake = SimpleNamespace(
         exchange=_ExchangeStub(),
-        trade_store=_TradeStoreStub(cumulative_realized),
+        trade_store=_TradeStoreStub(cumulative_realized, curve),
         telegram=telegram,
         daily_pnl_binance_baseline=0.0,
         initial_capital=100.0,
@@ -92,3 +96,27 @@ def test_portfolio_evolution_mainnet_usa_wallet(monkeypatch):
     assert abs(kw["total_pnl"] - (1.36 + 0.46)) < 1e-9
     # wallet (100) + unrealized (0.46)
     assert abs(kw["current_balance"] - (100.0 + 0.46)) < 1e-9
+
+
+def test_historico_fecha_com_realizado_do_topo(monkeypatch):
+    """O HISTÓRICO (série net do SQLite) deve terminar no MESMO valor do
+    'Realizado' do topo — antes a série vinha do income diário da Binance e
+    divergia (último ponto negativo enquanto o topo era positivo)."""
+    monkeypatch.setattr(type(config), "USE_TESTNET", True, raising=False)
+    monkeypatch.setattr(config, "SIMULATED_BALANCE_USD", 100.0, raising=False)
+
+    curve = [
+        {"exit_at": "2026-06-01T10:00:00", "cum_pnl": 0.40},
+        {"exit_at": "2026-06-01T10:10:00", "cum_pnl": -0.10},
+        {"exit_at": "2026-06-01T10:20:00", "cum_pnl": 1.36},
+    ]
+    fake, telegram = _make_fake_bot(cumulative_realized=1.36, curve=curve)
+    TradingBot.send_portfolio_evolution(fake)
+
+    kw = telegram.kwargs
+    history = kw["history"]
+    assert len(history) == 3
+    # último ponto do histórico == "Realizado" do topo
+    assert abs(history[-1]["pnl"] - kw["pnl_realized"]) < 1e-9
+    # rótulos de horário convertidos (UTC->BRT, -3h): 10:00 -> 07:00
+    assert history[0]["time"] == "07:00"
