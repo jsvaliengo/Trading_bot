@@ -328,6 +328,13 @@ class TradingConfig:
     # Sem sl_pct disponível, faz fallback pro comportamento padrão.
     USE_RISK_BASED_SIZING: bool = _env_bool("TRADING_BOT_USE_RISK_BASED_SIZING", True)
     RISK_PER_TRADE_PCT: float = _env_float("TRADING_BOT_RISK_PER_TRADE_PCT", 1.0)
+    # Buffer de slippage no sizing baseado em risco. O STOP_MARKET preenche a
+    # mercado: numa vela violenta o fill escorrega ALÉM do gatilho e a perda
+    # real supera RISK_PER_TRADE_PCT (caso STGUSDT 12/06: stop a -3.25%,
+    # preencheu a -7.32% → ~1.8x o risco orçado). Inflar o sl_pct usado no
+    # divisor encolhe o notional, de forma que mesmo um stop escorregado fique
+    # perto do alvo de risco. 1.0 = sem buffer (comportamento antigo).
+    SLIPPAGE_BUFFER_MULT: float = _env_float("TRADING_BOT_SLIPPAGE_BUFFER_MULT", 1.5)
     
     # ============================================
     # ESTRATÉGIA DE TRADING
@@ -434,6 +441,15 @@ class TradingConfig:
     STRUCTURAL_STOP_LOOKBACK: int = _env_int("TRADING_BOT_STRUCTURAL_STOP_LOOKBACK", 10)
     STRUCTURAL_STOP_BUFFER_PERCENT: float = _env_float("TRADING_BOT_STRUCTURAL_STOP_BUFFER_PERCENT", 0.10)
     STRUCTURAL_STOP_MAX_PERCENT: float = _env_float("TRADING_BOT_STRUCTURAL_STOP_MAX_PERCENT", 2.5)
+
+    # Tipo de preço que dispara o STOP_MARKET/TAKE_PROFIT_MARKET na Binance.
+    # MARK_PRICE evita disparo por pavio do last price (CONTRACT_PRICE), que
+    # pode acionar o stop num spike efêmero e fechar a posição no ruído.
+    # Valores aceitos pela Binance: MARK_PRICE | CONTRACT_PRICE.
+    SL_TP_WORKING_TYPE: str = (
+        os.getenv("TRADING_BOT_SL_TP_WORKING_TYPE", "MARK_PRICE").strip().upper()
+        or "MARK_PRICE"
+    )
 
     # Stop Loss Global (baseado no capital total)
     # Se o prejuízo total atingir esse % do capital inicial, fecha TUDO e para o bot

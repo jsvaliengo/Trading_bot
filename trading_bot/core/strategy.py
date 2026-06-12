@@ -757,7 +757,17 @@ class HedgeStrategy:
         if use_risk_based and sl_pct is not None and float(sl_pct) > 0:
             risk_pct = float(getattr(self.config, "RISK_PER_TRADE_PCT", 0.5))
             risk_dollars = available_capital * (risk_pct / 100.0)
-            base_notional = risk_dollars / (float(sl_pct) / 100.0)
+            # Buffer de slippage: o STOP_MARKET preenche a mercado e pode
+            # escorregar além do gatilho numa vela violenta. Dimensionar o
+            # notional contra um stop "pior caso" (sl_pct × buffer) mantém a
+            # perda real perto de RISK_PER_TRADE_PCT mesmo quando o fill
+            # escorrega. Não altera o preço do stop enviado à Binance, só o
+            # tamanho da posição.
+            slippage_buffer = float(getattr(self.config, "SLIPPAGE_BUFFER_MULT", 1.0) or 1.0)
+            if slippage_buffer < 1.0:
+                slippage_buffer = 1.0
+            effective_sl_pct = float(sl_pct) * slippage_buffer
+            base_notional = risk_dollars / (effective_sl_pct / 100.0)
             # Cap pela margem disponível com alavancagem (mesma trava do modo legado)
             max_position_pct = float(getattr(self.config, "MAX_POSITION_PERCENT", 0.08))
             leverage = float(getattr(self.config, "LEVERAGE", 10))
@@ -768,7 +778,8 @@ class HedgeStrategy:
             short_size = base_notional
             logger.info(
                 f"📊 Risk-based: risk={risk_pct:.2f}% SL={float(sl_pct):.3f}% "
-                f"→ notional ${base_notional:.2f} (risk_$={risk_dollars:.2f})"
+                f"×{slippage_buffer:.2f} (slip) → notional ${base_notional:.2f} "
+                f"(risk_$={risk_dollars:.2f})"
             )
         elif self.config.USE_MIN_NOTIONAL_ONLY:
             # SEMPRE usa o mínimo do par (para diversificar mais)
