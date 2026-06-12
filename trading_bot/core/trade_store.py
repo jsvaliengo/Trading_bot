@@ -387,6 +387,41 @@ class TradeStore:
             logger.exception("🗃️ Falha ao somar pnl realizado de hoje")
             return 0.0
 
+    def realized_curve(self, limit: int = 6) -> List[Dict[str, Any]]:
+        """Curva do realizado ACUMULADO (net) ponto a ponto por trade fechado.
+
+        Cada ponto: {'exit_at': iso, 'cum_pnl': soma de pnl_net até aquele trade
+        (inclusive)}. O último ponto é, por construção, igual a
+        cumulative_realized_pnl() — então o histórico do card EVOLUÇÃO fecha com
+        o "Realizado" do topo (mesma fonte SQLite, net de taxas).
+
+        Substitui a antiga série baseada no income DIÁRIO da Binance (que incluía
+        taxas/funding com baseline e divergia do topo). Ordena por exit_at — todos
+        gravados pelo mesmo datetime.now().isoformat(), então a ordem é coerente.
+
+        Retorna os últimos `limit` pontos (a soma acumulada ainda reflete TODOS os
+        trades anteriores, não só os exibidos).
+        """
+        try:
+            with self._lock:
+                rows = self._conn.execute(
+                    "SELECT exit_at, pnl_net FROM trades "
+                    "WHERE status='closed' AND exit_at IS NOT NULL "
+                    "ORDER BY exit_at ASC, id ASC"
+                ).fetchall()
+        except Exception:
+            logger.exception("🗃️ Falha ao montar curva de realizado")
+            return []
+
+        running = 0.0
+        curve: List[Dict[str, Any]] = []
+        for r in rows:
+            running += float(r["pnl_net"] or 0.0)
+            curve.append({"exit_at": r["exit_at"], "cum_pnl": running})
+        if limit and limit > 0:
+            return curve[-limit:]
+        return curve
+
     def first_trade_time_ms(self) -> Optional[int]:
         """Epoch ms do trade mais antigo (MIN opened_at), ou None se vazio.
 

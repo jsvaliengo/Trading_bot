@@ -211,3 +211,48 @@ def test_reset_on_empty_store_is_safe(tmp_path):
     store = _store(tmp_path)
     assert store.reset() == {"trades": 0, "equity": 0}
     assert store.count_trades() == 0
+
+
+def _close(store, symbol, pnl_net, exit_at):
+    store.record_open(_open_record(symbol=symbol))
+    store.record_close(
+        symbol=symbol, side="LONG", entry_price=2500.0, exit_price=2600.0,
+        exit_at=exit_at, pnl_gross=pnl_net, pnl_net=pnl_net, fees=0.0,
+        close_reason="tp", strategy_name="primary",
+    )
+
+
+def test_realized_curve_last_point_equals_cumulative(tmp_path):
+    """O último ponto da curva == cumulative_realized_pnl(): o histórico do card
+    EVOLUÇÃO fecha exatamente com o 'Realizado' do topo."""
+    store = _store(tmp_path)
+    _close(store, "AUSDT", 1.0, "2026-06-01T10:00:00")
+    _close(store, "BUSDT", -0.5, "2026-06-01T10:10:00")
+    _close(store, "CUSDT", 2.0, "2026-06-01T10:20:00")
+
+    curve = store.realized_curve(limit=6)
+    assert [round(p["cum_pnl"], 4) for p in curve] == [1.0, 0.5, 2.5]
+    assert abs(curve[-1]["cum_pnl"] - store.cumulative_realized_pnl()) < 1e-9
+
+
+def test_realized_curve_orders_by_exit_and_limits(tmp_path):
+    """Ordena por exit_at e retorna só os últimos N — mas a soma acumulada ainda
+    reflete TODOS os trades anteriores (não reinicia do zero na janela)."""
+    store = _store(tmp_path)
+    # Insere fora de ordem cronológica de exit_at de propósito.
+    _close(store, "AUSDT", 1.0, "2026-06-01T10:00:00")
+    _close(store, "DUSDT", 4.0, "2026-06-01T10:30:00")
+    _close(store, "BUSDT", 1.0, "2026-06-01T10:10:00")
+    _close(store, "CUSDT", 1.0, "2026-06-01T10:20:00")
+
+    curve = store.realized_curve(limit=2)
+    assert len(curve) == 2
+    # ordenado por exit_at: ...10:20 (cum 3.0), 10:30 (cum 7.0)
+    assert [round(p["cum_pnl"], 4) for p in curve] == [3.0, 7.0]
+    assert curve[-1]["exit_at"] == "2026-06-01T10:30:00"
+
+
+def test_realized_curve_empty_when_no_closed_trades(tmp_path):
+    store = _store(tmp_path)
+    store.record_open(_open_record())  # aberto, não fechado
+    assert store.realized_curve() == []
