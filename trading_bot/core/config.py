@@ -277,6 +277,19 @@ class TradingConfig:
         "TRADING_BOT_MIN_TRADE_VOLUME_24H_USD", 150_000_000
     )
     MAX_SPREAD_PERCENT: float = 0.07          # Spread máximo 0.07%
+
+    # Em TESTNET, volume/spread reportados pela própria exchange são sintéticos
+    # e deixam pares ilíquidos passarem pelos filtros de liquidez (volume fake
+    # > piso) → slippage brutal no stop (caso LABUSDT/XRP/BCH). Quando ligado,
+    # os gates de liquidez (seleção e abertura) usam volume/spread REAIS da
+    # mainnet pública como referência. Ignorado em mainnet (lá os dados já são
+    # reais). REFERENCE_LIQUIDITY_TTL_S controla o cache do fetch bulk.
+    USE_REAL_LIQUIDITY_ON_TESTNET: bool = _env_bool(
+        "TRADING_BOT_USE_REAL_LIQUIDITY_ON_TESTNET", True
+    )
+    REFERENCE_LIQUIDITY_TTL_S: float = _env_float(
+        "TRADING_BOT_REFERENCE_LIQUIDITY_TTL_S", 300.0
+    )
     MIN_VOLATILITY_PERCENT: float = 1.5       # Volatilidade mínima 1.5%
     MAX_MIN_NOTIONAL: float = 10.0            # Mínimo notional máximo $10 (exclui BTC $100, ETH $20)
     # RVOL = volume da última hora fechada ÷ média horária recente. Piso baixo

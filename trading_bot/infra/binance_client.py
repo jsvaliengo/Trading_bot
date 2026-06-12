@@ -95,6 +95,13 @@ class BinanceConnection:
         self._positions_cache: Optional[Dict[str, Any]] = None  # {"data","ts"}
         self._positions_cache_ttl: float = 5.0
 
+        # Liquidez de REFERÊNCIA (mainnet pública) — só usada em testnet, onde
+        # volume/spread da própria conta são sintéticos. Cliente público lazy +
+        # cache do fetch bulk. Ver get_reference_liquidity_map().
+        self._public_ref_client = None
+        self._ref_liq_cache: Optional[Dict[str, Dict[str, float]]] = None
+        self._ref_liq_ts: float = 0.0
+
         # Improvement 8: WebSocket kline store (substitui REST polling em get_klines).
         # Se habilitado, start() + subscribe por par/intervalo. REST é fallback automático.
         # Kill switch via TRADING_BOT_WEBSOCKET_ENABLED=false.
@@ -1388,6 +1395,78 @@ class BinanceConnection:
         except Exception as e:
             logger.error(f"Erro ao obter todos os tickers 24h: {e}")
             return {}
+
+    def _get_public_ref_client(self):
+        """Cliente python-binance público (mainnet, SEM chaves) para dados de
+        mercado de REFERÊNCIA. Só faz sentido em testnet — onde volume/spread
+        da própria conta são sintéticos. Mesma ideia do cliente público de Open
+        Interest no pair_selector. Retorna None em mainnet ou se falhar."""
+        if not bool(getattr(self.config, "USE_TESTNET", False)):
+            return None
+        if self._public_ref_client is None:
+            try:
+                from binance.client import Client
+                self._public_ref_client = Client()
+            except Exception as e:
+                logger.warning(f"⚠️ Falha ao criar cliente público de liquidez: {e}")
+                self._public_ref_client = None
+        return self._public_ref_client
+
+    def get_reference_liquidity_map(self) -> Optional[Dict[str, Dict[str, float]]]:
+        """Mapa {symbol: {'volume_24h', 'spread_percent'}} de liquidez REAL da
+        mainnet pública, para os gates de liquidez quando o bot roda em testnet.
+
+        Retorna None quando não aplicável (mainnet, ou feature desligada, ou
+        sem cliente público) — nesse caso os callers usam os próprios dados da
+        exchange (que já são reais em mainnet). Cacheado por
+        REFERENCE_LIQUIDITY_TTL_S segundos (2 chamadas bulk: ticker 24h + book).
+        """
+        if not bool(getattr(self.config, "USE_TESTNET", False)):
+            return None
+        if not bool(getattr(self.config, "USE_REAL_LIQUIDITY_ON_TESTNET", True)):
+            return None
+        now = time.time()
+        ttl = float(getattr(self.config, "REFERENCE_LIQUIDITY_TTL_S", 300.0))
+        if self._ref_liq_cache is not None and (now - self._ref_liq_ts) < ttl:
+            return self._ref_liq_cache
+        client = self._get_public_ref_client()
+        if client is None:
+            return self._ref_liq_cache  # stale (ou None) — não derruba o fluxo
+        out: Dict[str, Dict[str, float]] = {}
+        try:
+            for t in (client.futures_ticker() or []):
+                sym = t.get("symbol")
+                if sym:
+                    out.setdefault(sym, {})["volume_24h"] = float(t.get("quoteVolume", 0.0) or 0.0)
+            for b in (client.futures_orderbook_ticker() or []):
+                sym = b.get("symbol")
+                if not sym:
+                    continue
+                bid = float(b.get("bidPrice", 0) or 0)
+                ask = float(b.get("askPrice", 0) or 0)
+                if bid > 0 and ask > 0:
+                    out.setdefault(sym, {})["spread_percent"] = (ask - bid) / bid * 100.0
+        except Exception as e:
+            logger.warning(f"⚠️ Falha ao buscar liquidez de referência (mainnet): {e}")
+            return self._ref_liq_cache  # mantém cache antigo se houver
+        if not out:
+            return self._ref_liq_cache
+        self._ref_liq_cache = out
+        self._ref_liq_ts = now
+        logger.info(f"📊 Liquidez de referência (mainnet) carregada: {len(out)} pares")
+        return out
+
+    def get_reference_volume_24h(self, symbol: str) -> Optional[float]:
+        """Volume 24h REAL (mainnet) do símbolo para o gate de abertura em
+        testnet. None se não aplicável (mainnet/feature off) ou símbolo ausente
+        no mapa de referência (par inexistente/ilíquido na mainnet)."""
+        ref = self.get_reference_liquidity_map()
+        if not ref:
+            return None
+        entry = ref.get(str(symbol).upper())
+        if not entry:
+            return None
+        return entry.get("volume_24h")
 
     def get_all_funding_rates(self) -> Dict[str, float]:
         """
