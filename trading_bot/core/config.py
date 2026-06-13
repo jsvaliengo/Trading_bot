@@ -242,6 +242,14 @@ class TradingConfig:
     # Mantém o framework de sizing por tier; só fecha o universo. Vazio = dinâmico.
     FIXED_PRIMARY_PAIRS: List[str] = None  # Será definido no __post_init__
 
+    # WHITELIST do universo de seleção dinâmica. Quando preenchido (env
+    # TRADING_BOT_BINANCE_UNIVERSE_WHITELIST="ADAUSDT,SOLUSDT,..."), o scoring de
+    # pares só considera moedas desta lista (∩ pares tradáveis da exchange), em
+    # vez da exchange inteira. A rotação CONTINUA (pega as melhores num_coins por
+    # score), mas dentro de um universo curado (ex.: moedas do PDF). Vazio = todo
+    # o mercado. Diferente de FIXED_PRIMARY_PAIRS (que congela o conjunto exato).
+    BINANCE_UNIVERSE_WHITELIST: List[str] = None  # Será definido no __post_init__
+
     # Pares desabilitados manualmente (não entram na seleção de moedas)
     DISABLED_PAIRS: List[str] = None  # Será definido no __post_init__
     
@@ -935,6 +943,13 @@ class TradingConfig:
             self.FIXED_PRIMARY_PAIRS = self.normalize_pair_list(
                 [p.strip() for p in _raw_fixed.split(",") if p.strip()]
             ) if _raw_fixed else []
+
+        # Whitelist do universo de seleção dinâmica (env, separados por vírgula).
+        if self.BINANCE_UNIVERSE_WHITELIST is None:
+            _raw_uni = os.getenv("TRADING_BOT_BINANCE_UNIVERSE_WHITELIST", "").strip()
+            self.BINANCE_UNIVERSE_WHITELIST = self.normalize_pair_list(
+                [p.strip() for p in _raw_uni.split(",") if p.strip()]
+            ) if _raw_uni else []
 
         # Pares desabilitados por padrão (podem ser reabilitados via Telegram)
         if self.DISABLED_PAIRS is None:
