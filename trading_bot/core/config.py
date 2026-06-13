@@ -576,6 +576,14 @@ class TradingConfig:
     # subir além de DISTANCE+fee_floor, esmagando o trailing. Ver validate_params().
     TRAILING_ACTIVATION_PERCENT: float = _env_float("TRADING_BOT_TRAILING_ACTIVATION_PERCENT", 0.70)
     TRAILING_DISTANCE_PERCENT: float = _env_float("TRADING_BOT_TRAILING_DISTANCE_PERCENT", 0.40)
+    # Cushion de slippage no piso de breakeven do trailing. O piso garante saída
+    # com lucro ≥ fees, mas assume que o STOP preenche no gatilho — o STOP_MARKET
+    # escorrega (gatilho +0.13% → fill +0.02% → líquido negativo, caso SOL 13/06).
+    # Soma esta folga (%) ao piso pra que, mesmo com slippage, a saída fique ≥
+    # breakeven líquido. Override por env. 0 = sem cushion (comportamento antigo).
+    TRAILING_BREAKEVEN_SLIPPAGE_PERCENT: float = _env_float(
+        "TRADING_BOT_TRAILING_BREAKEVEN_SLIPPAGE_PERCENT", 0.10
+    )
     # TRAILING_MIN_PROFIT_USD removido — gate em USD bloqueava fechamento em posições pequenas
     # (order=$3 × 10x = $30 notional → profit_usd < $0.20 na ativação)
 
