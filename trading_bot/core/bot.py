@@ -1219,6 +1219,16 @@ class TradingBot:
         # pares fixos configurados. Isso garante que desabilitar pares acione
         # nova seleção em vez de apenas filtrar a lista existente.
         primary_is_dynamic = bool(primary_profile.get("max_pairs", 0)) or not bool(primary_profile.get("pairs"))
+
+        # Override de pares fixos: pina EXATAMENTE FIXED_PRIMARY_PAIRS e desliga a
+        # seleção dinâmica, ANTES da migração que força dinâmico no modo Binance.
+        # Mantém o sizing por tier; só fecha o universo (estratégia de pares fixos).
+        fixed_primary = list(getattr(config, "FIXED_PRIMARY_PAIRS", []) or [])
+        if fixed_primary and primary_profile:
+            primary_profile["pairs"] = list(fixed_primary)
+            primary_profile.pop("max_pairs", None)
+            return enabled_profiles, primary_profile, False
+
         if (
             config.USE_BINANCE_STRATEGY
             and self._normalize_strategy_type(primary_profile.get("strategy_type", "trend_signal")) == "trend_signal"

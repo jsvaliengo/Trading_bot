@@ -235,6 +235,13 @@ class TradingConfig:
     # Pares que SEMPRE serão operados (não são removidos pela seleção)
     FIXED_PAIRS: List[str] = None  # Será definido no __post_init__
 
+    # Override de PARES FIXOS do perfil primário. Quando preenchido (env
+    # TRADING_BOT_FIXED_PRIMARY_PAIRS="SOLUSDT,DOGEUSDT,..."), o perfil primário
+    # trend_signal usa EXATAMENTE esses pares e NÃO entra em seleção dinâmica,
+    # mesmo com USE_BINANCE_STRATEGY=True (que por padrão força rotação por score).
+    # Mantém o framework de sizing por tier; só fecha o universo. Vazio = dinâmico.
+    FIXED_PRIMARY_PAIRS: List[str] = None  # Será definido no __post_init__
+
     # Pares desabilitados manualmente (não entram na seleção de moedas)
     DISABLED_PAIRS: List[str] = None  # Será definido no __post_init__
     
@@ -266,7 +273,7 @@ class TradingConfig:
     PAIR_SELECTION_WEIGHTS: dict = None  # Será definido no __post_init__
     
     # Filtros mínimos para um par ser considerado
-    MIN_VOLUME_24H_USD: float = 150_000_000   # Volume mínimo $150M
+    MIN_VOLUME_24H_USD: float = _env_float("TRADING_BOT_MIN_VOLUME_24H_USD", 150_000_000)  # Volume mínimo (seleção)
 
     # Piso de liquidez verificado NO MOMENTO DA ABERTURA (última linha de
     # defesa). O filtro acima roda na SELEÇÃO de pares; um par escolhido quando
@@ -921,6 +928,14 @@ class TradingConfig:
         if self.FIXED_PAIRS is None:
             self.FIXED_PAIRS = []  # Nenhum par fixo, todos dinâmicos
 
+        # Override de pares fixos do primário (env, separados por vírgula).
+        # Pina o universo do perfil trend_signal mesmo em modo Binance.
+        if self.FIXED_PRIMARY_PAIRS is None:
+            _raw_fixed = os.getenv("TRADING_BOT_FIXED_PRIMARY_PAIRS", "").strip()
+            self.FIXED_PRIMARY_PAIRS = self.normalize_pair_list(
+                [p.strip() for p in _raw_fixed.split(",") if p.strip()]
+            ) if _raw_fixed else []
+
         # Pares desabilitados por padrão (podem ser reabilitados via Telegram)
         if self.DISABLED_PAIRS is None:
             self.DISABLED_PAIRS = ["BTCUSDT", "RIVERUSDT", "SIGNUSDT"]
@@ -1284,9 +1299,20 @@ class TradingConfig:
         return normalized_profiles
 
     def get_enabled_strategy_profiles(self) -> List[dict]:
-        """Retorna apenas perfis de estratégia habilitados."""
+        """Retorna apenas perfis de estratégia habilitados.
+
+        Quando FIXED_PRIMARY_PAIRS está configurado, pina o universo do perfil
+        primário (1º habilitado) nesses pares e remove max_pairs — de forma
+        idempotente e em TODO consumidor (loop de análise, refresh, sync),
+        vencendo inclusive os pares persistidos no state.
+        """
         profiles = list(getattr(self, "STRATEGY_PROFILES", []) or [])
-        return [profile for profile in profiles if bool(profile.get("enabled", True))]
+        enabled = [profile for profile in profiles if bool(profile.get("enabled", True))]
+        fixed_primary = list(getattr(self, "FIXED_PRIMARY_PAIRS", []) or [])
+        if fixed_primary and enabled:
+            enabled[0]["pairs"] = list(fixed_primary)
+            enabled[0].pop("max_pairs", None)
+        return enabled
     
     def validate(self) -> bool:
         """
