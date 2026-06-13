@@ -213,8 +213,10 @@ class TradingConfig:
     MAX_POSITION_PERCENT: float = 0.08  # 8% por trade (aumentado para maior ticket médio)
     
     # Alavancagem (1x a 20x) - MAIOR ALAVANCAGEM = MAIOR RISCO
-    # Recomendo começar com 3x-5x para testes
-    LEVERAGE: int = 10
+    # Default 20 conforme a Estratégia Padrão do PDF. ATENÇÃO: a 20x a liquidação
+    # fica a ~5% adverso — se um STOP_MARKET escorregar além disso (caso STG 12/06
+    # preencheu a -7.32%), a posição LIQUIDA antes do stop. Dialar via env.
+    LEVERAGE: int = _env_int("TRADING_BOT_LEVERAGE", 20)
 
     # ============================================
     # SIMULATED BALANCE (APENAS TESTNET)
@@ -977,18 +979,21 @@ class TradingConfig:
                 # order_size escala com capital para que ganhos cresçam proporcionalmente.
                 # notional = order_size × leverage(20). stop_loss = order_size × 60.
                 # margem total ≈ 15–21% do capital (conservador).
-                (90,    200,    3,    180,   6),   # notional $60   → ganho ~$0.20
-                (200,   350,    6,    360,   6),   # notional $120  → ganho ~$0.40
-                (350,   500,    9,    540,   6),   # notional $180  → ganho ~$0.60
-                (500,   750,    15,   900,   6),   # notional $300  → ganho ~$1.00
-                (750,   1000,   20,   1200,  6),   # notional $400  → ganho ~$1.33
-                (1000,  1500,   30,   1800,  6),   # notional $600  → ganho ~$2.00
-                (1500,  2500,   45,   2700,  6),   # notional $900  → ganho ~$3.00
-                (2500,  4000,   60,   3600,  9),   # notional $1200 → ganho ~$4.00
-                (4000,  6000,   80,   4800,  9),   # notional $1600 → ganho ~$5.33
-                (6000,  9000,   100,  6000,  9),   # notional $2000 → ganho ~$6.67
-                (9000,  15000,  120,  7200,  12),  # notional $2400 → ganho ~$8.00
-                (15000, 999999, 150,  9000,  12),  # notional $3000 → ganho ~$10.00
+                # num_coins segue a escala do PDF (Estratégia Padrão): 1 par em
+                # bancas pequenas, subindo até 12. order_size/stop_loss são moot
+                # com USE_RISK_BASED_SIZING (o sizing por risco sobrescreve).
+                (90,    200,    3,    180,   1),   # PDF 90-150 → 1 moeda
+                (200,   350,    6,    360,   2),   # PDF 300    → 2
+                (350,   500,    9,    540,   3),   # PDF 500    → 3
+                (500,   750,    15,   900,   3),   # PDF (500-1000) → 3
+                (750,   1000,   20,   1200,  3),   # PDF (<1000)    → 3
+                (1000,  1500,   30,   1800,  6),   # PDF 1000   → 6
+                (1500,  2500,   45,   2700,  9),   # PDF 2000   → 9
+                (2500,  4000,   60,   3600,  9),   # PDF 3000   → 9
+                (4000,  6000,   80,   4800,  10),  # PDF 4000   → 10
+                (6000,  9000,   100,  6000,  11),  # PDF 6000-7000 → 11
+                (9000,  15000,  120,  7200,  12),  # PDF 9000-10000 → 12
+                (15000, 999999, 150,  9000,  12),  # PDF teto → 12
             ]
         
         # Universo de moedas PERMITIDAS pela estratégia Binance.
