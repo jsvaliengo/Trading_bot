@@ -56,6 +56,33 @@ def test_fixed_primary_pairs_disables_dynamic_even_in_binance_mode(monkeypatch):
     assert "max_pairs" not in primary
 
 
+def test_sync_does_not_union_legacy_pairs_when_fixed(monkeypatch):
+    # Regressão: _sync unia config.TRADING_PAIRS (pares dinâmicos antigos) ao
+    # primário mesmo com universo fixo → ZEC/HYPE/TRUMP vazavam pro perfil.
+    pairs12 = [
+        "SOLUSDT", "DOGEUSDT", "XRPUSDT", "BNBUSDT", "NEARUSDT", "ADAUSDT",
+        "FILUSDT", "SUIUSDT", "DOTUSDT", "BCHUSDT", "AVAXUSDT", "LINKUSDT",
+    ]
+    monkeypatch.setattr(config, "USE_BINANCE_STRATEGY", True)
+    monkeypatch.setattr(config, "FIXED_PRIMARY_PAIRS", list(pairs12))
+    monkeypatch.setattr(config, "DISABLED_PAIRS", [])
+    monkeypatch.setattr(config, "STRATEGY_PROFILES", [{
+        "name": "trend_strong", "enabled": True, "strategy_type": "trend_signal",
+        "entry_mode": "strong_only", "pairs": list(pairs12),
+    }])
+    # pares dinâmicos legados ainda em TRADING_PAIRS (fonte da união indevida)
+    monkeypatch.setattr(config, "TRADING_PAIRS", ["ZECUSDT", "HYPEUSDT", "TRUMPUSDT"])
+
+    bot = _make_light_bot()
+    monkeypatch.setattr(bot, "_reload_strategy_profiles", lambda **_k: None, raising=False)
+    bot._sync_strategy_profiles_with_trading_pairs(reason="test")
+
+    primary = config.STRATEGY_PROFILES[0]
+    assert primary["pairs"] == pairs12
+    for stale in ("ZECUSDT", "HYPEUSDT", "TRUMPUSDT"):
+        assert stale not in primary["pairs"]
+
+
 def test_binance_mode_stays_dynamic_without_fixed_override(monkeypatch):
     # Sem FIXED_PRIMARY_PAIRS, o comportamento legado (dinâmico) é preservado.
     monkeypatch.setattr(config, "USE_BINANCE_STRATEGY", True)
