@@ -38,6 +38,7 @@ from .trade_ledger import TradeLedger
 from .trade_store import TradeStore
 from ..ai.consultive_engine import ConsultiveEngine
 from ..execution import ExecutionEngine
+from ..execution.engine import _below_min_trade_volume
 from ..infra.binance_client import BinanceConnection
 from ..observability import metrics
 from .strategy import HedgeStrategy, RangeScalpingStrategy, RiskManager, TechnicalAnalysis
@@ -2602,14 +2603,27 @@ class TradingBot:
             all_funding = _funding_fut.result()
 
         # ── 2. PRÉ-FILTRO POR VOLUME (evita chamadas desnecessárias) ─────────
+        # Em testnet o quoteVolume do ticker é SINTÉTICO (inflado) e deixa pares
+        # ilíquidos passarem por este piso → são pontuados e atribuídos ao perfil,
+        # entrando em loop "IA aprova → gate de abertura barra" (caso SPACE/BSB).
+        # Usa o volume REAL da mainnet de referência quando disponível, igual ao
+        # gate de abertura e ao get_pair_metrics (#137). Símbolo ausente do mapa
+        # de referência = ilíquido/inexistente na mainnet → volume 0 (rejeitado).
         min_volume = getattr(config, "MIN_VOLUME_24H_USD", 0)
+        try:
+            ref_map = self.exchange.get_reference_liquidity_map()
+        except Exception:
+            ref_map = None
         pre_filtered_with_vol: List[Tuple[str, float]] = []
         for symbol in candidate_coins:
             ticker = all_tickers.get(symbol)
             if not ticker:
                 continue
             try:
-                vol = float(ticker.get("quoteVolume", 0))
+                if ref_map is not None:
+                    vol = float((ref_map.get(symbol) or {}).get("volume_24h", 0.0) or 0.0)
+                else:
+                    vol = float(ticker.get("quoteVolume", 0))
                 if vol >= min_volume:
                     pre_filtered_with_vol.append((symbol, vol))
             except (TypeError, ValueError):
@@ -3119,6 +3133,24 @@ class TradingBot:
             logger.warning(f"⚠️ Erro na IA consultiva para {symbol}: {exc}")
             return None
 
+    def _reference_quote_volume_24h(self, symbol: str):
+        """Volume 24h de referência do símbolo, com a mesma fonte/fallback do
+        gate de abertura: volume REAL da mainnet em testnet (o quoteVolume da
+        testnet é sintético), caindo pro ticker da própria exchange quando não
+        há referência (mainnet, ou leitura falha). Retorna None se ilegível —
+        fail-open: um blip de API não deve barrar o fluxo.
+        """
+        try:
+            vol = self.exchange.get_reference_volume_24h(symbol)
+        except Exception:
+            vol = None
+        if vol is None:
+            try:
+                vol = (self.exchange.get_ticker_24h(symbol) or {}).get("quoteVolume")
+            except Exception:
+                vol = None
+        return vol
+
     def _maybe_build_gated_ai_override_setup(
         self,
         *,
@@ -3141,6 +3173,21 @@ class TradingBot:
             return None
         if not hasattr(strategy_engine, "build_ai_override_candidate_setup"):
             return None
+
+        # Rede de segurança ANTES do gate da IA: se o par está abaixo do piso de
+        # liquidez de trade, o gate de abertura barraria de qualquer forma. Pular
+        # aqui evita queimar chamada de IA e spammar notificação a cada ciclo —
+        # caso SPACE/BSB, par ilíquido atribuído ao perfil entrava em loop
+        # "IA aprova → abertura barra" indefinidamente.
+        min_trade_volume = float(getattr(config, "MIN_TRADE_VOLUME_24H_USD", 0) or 0)
+        if min_trade_volume > 0:
+            raw_vol = self._reference_quote_volume_24h(symbol)
+            if _below_min_trade_volume(raw_vol, min_trade_volume):
+                logger.info(
+                    f"⏭️ {symbol} pulado antes do gate da IA — volume 24h abaixo "
+                    f"do piso de liquidez (${float(raw_vol):,.0f} < ${min_trade_volume:,.0f})"
+                )
+                return None
 
         candidate_setup = strategy_engine.build_ai_override_candidate_setup(
             symbol=symbol,

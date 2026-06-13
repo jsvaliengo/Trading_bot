@@ -241,15 +241,7 @@ class ExecutionEngine:
                 # não derruba o trade nem cai no except externo.
                 # Em testnet, prioriza o volume REAL da mainnet (referência) —
                 # o quoteVolume da testnet é sintético e não reflete liquidez.
-                try:
-                    raw_vol = bot.exchange.get_reference_volume_24h(symbol)
-                except Exception:
-                    raw_vol = None
-                if raw_vol is None:
-                    try:
-                        raw_vol = (bot.exchange.get_ticker_24h(symbol) or {}).get("quoteVolume")
-                    except Exception:
-                        raw_vol = None
+                raw_vol = bot._reference_quote_volume_24h(symbol)
                 if _below_min_trade_volume(raw_vol, min_trade_volume):
                     vol_24h = float(raw_vol)
                     logger.warning(
