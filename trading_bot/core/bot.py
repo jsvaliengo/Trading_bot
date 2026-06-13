@@ -1513,6 +1513,19 @@ class TradingBot:
             # Compatibilidade com estado legado: perfil primário salvo com pares
             # preenchidos e sem max_pairs deve continuar dinâmico em modo Binance.
             profile_is_dynamic = True
+
+        # Override de pares fixos: pina o primário e impede a união de pares
+        # dinâmicos legados (config.TRADING_PAIRS) — senão o universo "fixo"
+        # vazava pares da seleção anterior (ZEC/HYPE/TRUMP) a cada sync.
+        fixed_primary = self._filter_disabled_pairs(
+            list(getattr(config, "FIXED_PRIMARY_PAIRS", []) or [])
+        )
+        if fixed_primary:
+            normalized_profiles[primary_index]["pairs"] = list(fixed_primary)
+            normalized_profiles[primary_index].pop("max_pairs", None)
+            profile_is_dynamic = False
+            existing_primary_pairs = list(fixed_primary)
+
         primary_has_fixed_pairs = bool(existing_primary_pairs) and not profile_is_dynamic
 
         if primary_pairs is not None and not primary_has_fixed_pairs:
