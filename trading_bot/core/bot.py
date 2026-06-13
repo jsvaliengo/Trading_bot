@@ -1788,6 +1788,21 @@ class TradingBot:
             else [str(item).upper() for item in fresh_pairs]
         )
 
+        # Whitelist do universo: restringe o scoring a uma lista curada (ex.: as
+        # moedas do PDF), preservando a rotação por score dentro dela. ∩ com os
+        # pares tradáveis da exchange evita selecionar símbolo inexistente/delistado.
+        whitelist = list(getattr(config, "BINANCE_UNIVERSE_WHITELIST", []) or [])
+        if whitelist and normalized_fresh:
+            whitelist_set = set(whitelist)
+            filtered = [p for p in normalized_fresh if p in whitelist_set]
+            if filtered:
+                normalized_fresh = filtered
+            else:
+                logger.warning(
+                    "⚠️ Whitelist de universo não intersecta nenhum par tradável — "
+                    "ignorando whitelist neste ciclo (usando universo completo)."
+                )
+
         if normalized_fresh:
             config.BINANCE_COIN_LIST = normalized_fresh
             enabled = self._filter_disabled_pairs(normalized_fresh)
