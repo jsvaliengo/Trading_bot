@@ -705,6 +705,7 @@ def test_trailing_stop_activates_and_closes_long_on_retrace(monkeypatch):
     monkeypatch.setattr(config, "CHECK_FUNDING_RATE", True)
     monkeypatch.setattr(config, "TRAILING_ACTIVATION_PERCENT", 0.20)
     monkeypatch.setattr(config, "TRAILING_DISTANCE_PERCENT", 0.12)
+    monkeypatch.setattr(config, "TRAILING_BREAKEVEN_SLIPPAGE_PERCENT", 0.0)
 
     key = "ETHUSDT_LONG"
     # Ativa trailing
@@ -744,6 +745,7 @@ def test_trailing_stop_activates_and_closes_short_on_retrace(monkeypatch):
     monkeypatch.setattr(config, "CHECK_FUNDING_RATE", True)
     monkeypatch.setattr(config, "TRAILING_ACTIVATION_PERCENT", 0.20)
     monkeypatch.setattr(config, "TRAILING_DISTANCE_PERCENT", 0.12)
+    monkeypatch.setattr(config, "TRAILING_BREAKEVEN_SLIPPAGE_PERCENT", 0.0)
 
     key = "ETHUSDT_SHORT"
     # Ativa trailing no SHORT
@@ -786,6 +788,7 @@ def test_trailing_stop_always_closes_when_hit_regardless_of_profit_usd(monkeypat
     monkeypatch.setattr(config, "CHECK_FUNDING_RATE", False)
     monkeypatch.setattr(config, "TRAILING_ACTIVATION_PERCENT", 0.20)
     monkeypatch.setattr(config, "TRAILING_DISTANCE_PERCENT", 0.05)
+    monkeypatch.setattr(config, "TRAILING_BREAKEVEN_SLIPPAGE_PERCENT", 0.0)
 
     key = "ETHUSDT_LONG"
     position_amt = 0.01  # posição pequena: profit_usd seria centavos
@@ -835,6 +838,8 @@ def test_trailing_stop_breakeven_floor_prevents_loss_from_fees(monkeypatch):
     monkeypatch.setattr(config, "CHECK_FUNDING_RATE", False)
     monkeypatch.setattr(config, "TRAILING_ACTIVATION_PERCENT", 0.40)
     monkeypatch.setattr(config, "TRAILING_DISTANCE_PERCENT", 0.50)
+    # Isola o piso de fee do cushion de slippage (testado à parte).
+    monkeypatch.setattr(config, "TRAILING_BREAKEVEN_SLIPPAGE_PERCENT", 0.0)
 
     entry_price = 628.68
     # Piso esperado: entry × (1 + 2×0.0004 + 0.0005) = entry × 1.0013 = 629.497

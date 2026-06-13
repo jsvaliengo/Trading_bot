@@ -4040,15 +4040,24 @@ class TradingBot:
         logger.info(f"   Taxas: ${total_fees:.4f}")
         logger.info(f"   P&L Líquido: ${pnl_net:.4f}")
 
-        # Motivo do fechamento. Com USE_INDIVIDUAL_STOP_LOSS=True a Binance
-        # executa as ordens SL/TP server-side: gross > 0 ⇒ TP, senão ⇒ SL.
-        reason = "Take Profit (Binance)" if pnl_gross > 0 else "Stop Loss (Binance)"
-
         # exit_price IMPLÍCITO pelo gross agregado (não é fill real; ver helper).
         # Consistente com pnl por construção agora que o gross soma todos os fills.
         exit_price = _implied_exit_price(side, entry_price, pnl_gross, quantity)
 
         pos_meta = self._get_known_position(f"{symbol}_{side}")
+
+        # Motivo do fechamento: infere pela proximidade do preço de saída ao TP/SL
+        # da posição. Antes etiquetava só pelo sinal do P&L (gross>0 ⇒ "Take
+        # Profit"), o que rotulava uma saída de trailing/breakeven como TP mesmo
+        # fechando longe do alvo (caso SOL 13/06: TP 69.84, saiu em ~68.64 → era
+        # trailing, não TP).
+        reason = self._infer_exchange_close_reason(
+            side=side,
+            exit_price=exit_price,
+            take_profit=pos_meta.get("custom_take_profit"),
+            stop_loss=pos_meta.get("custom_stop_loss"),
+            pnl_gross=pnl_gross,
+        )
         strat_key = pos_meta.get('strategy_name')
         if not strat_key:
             strat_key = self._resolve_strategy_context(symbol).get('name', 'primary')
@@ -4106,6 +4115,48 @@ class TradingBot:
             )
         return (float(activation), float(distance))
 
+    def _infer_exchange_close_reason(
+        self,
+        *,
+        side: str,
+        exit_price: Optional[float],
+        take_profit: Optional[float],
+        stop_loss: Optional[float],
+        pnl_gross: float,
+    ) -> str:
+        """Infere o motivo de um fechamento server-side da Binance.
+
+        Usa a proximidade do preço de saída ao TP/SL: bateu no alvo ⇒ Take
+        Profit; bateu no stop ⇒ Stop Loss; fechou ENTRE os dois ⇒ o trailing/
+        breakeven moveu o stop (Trailing Stop), não foi o TP. Fallback pelo
+        sinal do P&L quando não há preço/níveis confiáveis.
+        """
+        tol = 0.0015  # 0.15% — tolera o ruído do exit_price implícito
+        try:
+            ep = float(exit_price) if exit_price else None
+        except (TypeError, ValueError):
+            ep = None
+        tp = float(take_profit) if take_profit else None
+        sl = float(stop_loss) if stop_loss else None
+
+        # Só infere por proximidade se temos preço E ao menos um nível (TP/SL).
+        if ep and ep > 0 and (tp or sl):
+            if side == "LONG":
+                if tp and ep >= tp * (1 - tol):
+                    return "Take Profit (Binance)"
+                if sl and ep <= sl * (1 + tol):
+                    return "Stop Loss (Binance)"
+            else:  # SHORT
+                if tp and ep <= tp * (1 + tol):
+                    return "Take Profit (Binance)"
+                if sl and ep >= sl * (1 - tol):
+                    return "Stop Loss (Binance)"
+            # Fechou entre SL e TP: trailing/breakeven moveu o stop server-side.
+            return "Trailing Stop (Binance)"
+
+        # Sem níveis confiáveis: não dá pra distinguir — cai no sinal do P&L.
+        return "Take Profit (Binance)" if pnl_gross > 0 else "Stop Loss (Binance)"
+
     def _trailing_stop_price(
         self,
         side: str,
@@ -4126,8 +4177,11 @@ class TradingBot:
         """
         effective_pct = distance_pct if distance_pct is not None else config.TRAILING_DISTANCE_PERCENT
         distance = float(effective_pct) / 100.0
-        # Piso: cobre fees round-trip + pequena margem de segurança
-        fee_floor = (self.get_taker_fee_rate() * 2.0) + 0.0005
+        # Piso: cobre fees round-trip + margem fixa + cushion de slippage do stop.
+        # O cushion garante que, mesmo com o STOP_MARKET escorregando no fill, a
+        # saída do trailing fique ≥ breakeven líquido (caso SOL 13/06).
+        slip_cushion = float(getattr(config, "TRAILING_BREAKEVEN_SLIPPAGE_PERCENT", 0.0) or 0.0) / 100.0
+        fee_floor = (self.get_taker_fee_rate() * 2.0) + 0.0005 + slip_cushion
 
         if side == "LONG":
             raw = peak_price * (1 - distance)
