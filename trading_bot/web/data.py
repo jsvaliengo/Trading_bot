@@ -74,7 +74,16 @@ def collect_summary(bot) -> Dict[str, Any]:
     caso o equity é $130 + realized_dia + unrealized.
     """
     initial_capital = _safe_float(getattr(bot, "initial_capital", 0.0))
+    # Contagem de fechados vem do SQLite (fonte de verdade): o contador em
+    # memória pode dessincronizar dos fechamentos server-side (caso 14/06:
+    # SQLite=7, contador=6). Fallback no contador em memória se não houver store.
     closed_trades = int(getattr(bot, "closed_trades_count", 0) or 0)
+    _store = getattr(bot, "trade_store", None)
+    if _store is not None:
+        try:
+            closed_trades = int(_store.count_closed_trades())
+        except Exception:
+            pass
     paused = bool(getattr(bot, "paused", False))
     running = bool(getattr(bot, "running", False))
 
