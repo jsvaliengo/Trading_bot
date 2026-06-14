@@ -340,6 +340,9 @@ class TradingBot:
         # HYSTERESIS_TICKS) e regime atualmente comprometido (após hysteresis).
         self._regime_observations: Dict[str, List[str]] = {}
         self._regime_committed: Dict[str, str] = {}
+        # Cooldown da troca de par por regime: símbolo -> timestamp da última
+        # troca (entrada ou saída), pra evitar carrossel de rotação.
+        self._regime_swap_cooldowns: Dict[str, float] = {}
         # Engines reutilizáveis quando o classifier sobrepõe a estratégia
         # estática do profile (lazy-init em _get_or_create_regime_engine).
         self._regime_engine_cache: Dict[str, Any] = {}
@@ -1917,10 +1920,124 @@ class TradingBot:
             "removed_pairs": removed_pairs,
         }
     
+    def _maybe_swap_non_trend_pairs(self) -> Optional[Dict[str, Any]]:
+        """Troca pares OCIOSOS em regime non-trend por melhores candidatos (abordagem A).
+
+        Quando um par do perfil primário commita regime non-trend (squeeze/range/
+        neutral) e NÃO tem posição aberta, o slot é despejado e preenchido pelo
+        melhor par do universo por score que não esteja ativo nem em cooldown —
+        sem esperar o rescore horário. Mantém intactos os pares em trend e os com
+        posição aberta. Cooldown por símbolo evita carrossel. Retorna dict do swap
+        ou None se nada mudou.
+        """
+        if not bool(getattr(config, "REGIME_SWAP_ENABLED", False)):
+            return None
+        if not bool(getattr(config, "USE_BINANCE_STRATEGY", False)):
+            return None
+        try:
+            enabled_profiles, primary_profile, _is_dynamic = self._get_primary_profile_info()
+        except Exception:
+            return None
+        if not primary_profile:
+            return None
+
+        active = self._filter_disabled_pairs(list(primary_profile.get("pairs", []) or []))
+        if not active:
+            return None
+
+        non_trend = ("squeeze", "range", "neutral")
+        now = time.time()
+        cooldown_s = float(getattr(config, "REGIME_SWAP_COOLDOWN_MINUTES", 0.0) or 0.0) * 60.0
+
+        def _in_cooldown(sym: str) -> bool:
+            return cooldown_s > 0 and (now - self._regime_swap_cooldowns.get(sym, 0.0)) < cooldown_s
+
+        def _has_position(sym: str) -> bool:
+            return any(self._get_known_position(f"{sym}_{s}") for s in ("LONG", "SHORT"))
+
+        # Despeja só os OCIOSOS com regime non-trend COMITADO (a hysteresis de 3
+        # ticks já é o "3x"; par recém-adicionado ainda sem commit não é elegível).
+        evict = [
+            sym for sym in active
+            if self._regime_committed.get(sym) in non_trend
+            and not _has_position(sym)
+            and not _in_cooldown(sym)
+        ]
+        if not evict:
+            return None
+
+        keep = [sym for sym in active if sym not in evict]
+        reserved: set = set()
+        try:
+            reserved = set(self._get_reserved_pairs(enabled_profiles))
+        except Exception:
+            reserved = set()
+        cooldown_syms = {s for s in self._regime_swap_cooldowns if _in_cooldown(s)}
+        exclude = set(active) | reserved | cooldown_syms
+
+        try:
+            ranked = self.sort_binance_coins_by_score(
+                num_coins=len(active) + len(evict) + 5,
+                exclude=exclude,
+            )
+        except Exception as exc:
+            logger.warning(f"⚠️ regime-swap: falha ao ranquear candidatos: {exc}")
+            return None
+
+        replacements = [s for s in ranked if s not in active][:len(evict)]
+        if not replacements:
+            logger.info(
+                "🔁 regime-swap: %s em regime non-trend, sem candidato disponível — mantendo.",
+                ", ".join(evict),
+            )
+            # Cooldown nos evicts pra não re-ranquear todo ciclo sem candidato.
+            for sym in evict:
+                self._regime_swap_cooldowns[sym] = now
+            return None
+
+        evicted_done = evict[:len(replacements)]
+        evicted_kept = evict[len(replacements):]  # sem candidato suficiente → ficam
+        new_pairs = keep + evicted_kept + replacements
+
+        config.TRADING_PAIRS = self._filter_disabled_pairs(new_pairs)
+        if hasattr(self, "binance_strategy") and self.binance_strategy is not None:
+            self.binance_strategy["coins"] = list(config.TRADING_PAIRS)
+        self._sync_strategy_profiles_with_trading_pairs(
+            reason="regime-swap", primary_pairs=config.TRADING_PAIRS,
+        )
+
+        for sym in replacements:
+            try:
+                self.exchange.set_leverage(sym, config.LEVERAGE)
+            except Exception:
+                pass
+            self.pnl_by_symbol.setdefault(sym, 0.0)
+
+        # Cooldown nos envolvidos (despejados + entrantes) pra evitar carrossel.
+        for sym in evict + replacements:
+            self._regime_swap_cooldowns[sym] = now
+
+        logger.info(
+            "🔁 regime-swap: %s (non-trend) → %s",
+            ", ".join(evicted_done),
+            ", ".join(replacements),
+        )
+        if getattr(self, "telegram", None):
+            try:
+                self.telegram.send_message(
+                    "🔁 <b>ROTAÇÃO POR REGIME</b>\n\n"
+                    f"♻️ Trocados (non-trend): <code>{', '.join(s.replace('USDT','') for s in evicted_done)}</code>\n"
+                    f"🆕 Entraram: <code>{', '.join(s.replace('USDT','') for s in replacements)}</code>"
+                )
+            except Exception:
+                pass
+
+        return {"evicted": evicted_done, "added": replacements, "kept": keep + evicted_kept}
+
     def setup_exchange(self):
         """
         Configura a exchange antes de começar a operar.
-        
+
         - Ativa Hedge Mode
         - Define alavancagem para cada par
         - Busca taxas de comissão atuais
@@ -5422,6 +5539,13 @@ class TradingBot:
                         if analysis_index >= len(analysis_tasks):
                             analysis_cycle_active = False
                             next_analysis_cycle_time = now + analysis_cycle_interval
+                            # Fim do ciclo: todos os pares foram classificados.
+                            # Troca slots ociosos non-trend por melhores candidatos
+                            # (throttle natural via cooldown por símbolo).
+                            try:
+                                self._maybe_swap_non_trend_pairs()
+                            except Exception as _swap_exc:
+                                logger.warning(f"⚠️ regime-swap falhou: {_swap_exc}")
 
                 # Sleep curto para não ocupar CPU em busy-loop
                 now = time.monotonic()
