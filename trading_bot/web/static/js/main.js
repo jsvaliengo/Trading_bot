@@ -106,7 +106,22 @@
     }
     function initRouter() {
         $$('.nav-item').forEach(btn => {
-            btn.addEventListener('click', () => showView(btn.dataset.target));
+            btn.addEventListener('click', () => {
+                showView(btn.dataset.target);
+                // No mobile, fecha o menu colapsado após escolher.
+                const sb = $('sidebar');
+                if (sb) sb.classList.remove('open');
+            });
+        });
+    }
+
+    function initNavToggle() {
+        const toggle = $('nav-toggle');
+        const sidebar = $('sidebar');
+        if (!toggle || !sidebar) return;
+        toggle.addEventListener('click', () => {
+            const open = sidebar.classList.toggle('open');
+            toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
         });
     }
 
@@ -604,6 +619,7 @@
     // ───────── Boot ─────────
     initTheme();
     initRouter();
+    initNavToggle();
     initChartTabs();
 
     if (typeof io !== 'undefined') {
