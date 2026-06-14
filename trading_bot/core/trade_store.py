@@ -518,6 +518,25 @@ class TradeStore:
             logger.exception("🗃️ Falha ao contar trades fechados no TradeStore")
             return 0
 
+    def closed_trade_counters(self) -> Dict[str, int]:
+        """Contadores de fechados derivados do SQLite (fonte de verdade):
+        {closed, wins, losses}. win = pnl_net > 0 (mesma definição do ledger).
+        Usado pra ANCORAR os contadores em memória no startup — imuniza contra
+        drift quando um crash/kill ocorre entre o write no SQLite e o save do
+        state (o guard de idempotência então barra o re-incremento)."""
+        try:
+            with self._lock:
+                closed = int(self._conn.execute(
+                    "SELECT COUNT(*) FROM trades WHERE status = 'closed'"
+                ).fetchone()[0])
+                wins = int(self._conn.execute(
+                    "SELECT COUNT(*) FROM trades WHERE status = 'closed' AND pnl_net > 0"
+                ).fetchone()[0])
+            return {"closed": closed, "wins": wins, "losses": max(0, closed - wins)}
+        except Exception:
+            logger.exception("🗃️ Falha ao derivar contadores de fechados")
+            return {"closed": 0, "wins": 0, "losses": 0}
+
     def count_equity(self) -> int:
         try:
             with self._lock:

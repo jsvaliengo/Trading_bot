@@ -861,6 +861,19 @@ class TradingBot:
                 store.migrate_from_state(self.trade_history, self.portfolio_history)
                 self.trade_history = store.recent_trades(500)
                 self.portfolio_history = store.recent_equity(144)
+                # Ancora os contadores no SQLite (fonte de verdade). O contador
+                # em memória persistido no state pode dessincronizar quando um
+                # crash/kill ocorre entre o write no SQLite e o save do state —
+                # daí o guard de idempotência barra o re-incremento e o off-by-one
+                # vira permanente, contaminando win-rate e o gate de promoção.
+                try:
+                    _counters = store.closed_trade_counters()
+                    self.closed_trades_count = _counters["closed"]
+                    self.trades_win_count = _counters["wins"]
+                    self.trades_loss_count = _counters["losses"]
+                    self.total_pnl = float(store.cumulative_realized_pnl())
+                except Exception:
+                    logger.exception("⚠️ Falha ao ancorar contadores no SQLite — usando state")
 
             # Garante que todos os símbolos configurados estejam no pnl_by_symbol
             for symbol in config.TRADING_PAIRS:
