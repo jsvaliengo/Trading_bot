@@ -357,6 +357,7 @@ def test_save_state_persists_runtime_drawdown_limit(tmp_path, monkeypatch):
 
 def test_load_state_uses_backup_when_primary_is_corrupted(tmp_path):
     bot = _make_light_bot()
+    bot.trade_store = None  # isola do store; testa fallback de ARQUIVO de state
     state_file = tmp_path / "bot_state.json"
     backup_file = tmp_path / "bot_state.json.bak"
     bot._state_file_path = str(state_file)
@@ -401,6 +402,7 @@ def test_load_state_restores_runtime_drawdown_limit(tmp_path, monkeypatch):
 
 def test_load_state_ignores_backup_when_primary_is_empty(tmp_path):
     bot = _make_light_bot()
+    bot.trade_store = None  # isola do store; testa fallback de ARQUIVO de state
     state_file = tmp_path / "bot_state.json"
     backup_file = tmp_path / "bot_state.json.bak"
     bot._state_file_path = str(state_file)

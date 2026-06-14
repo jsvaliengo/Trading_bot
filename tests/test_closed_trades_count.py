@@ -62,3 +62,20 @@ def test_collect_summary_uses_sqlite_count_over_memory(tmp_path, monkeypatch):
     )
     summary = collect_summary(bot)
     assert summary["closed_trades"] == 1
+
+
+def test_closed_trade_counters_wins_losses(tmp_path):
+    store = _store(tmp_path)
+    # 2 wins, 1 loss, 1 aberto
+    specs = [("ETHUSDT", 0.9), ("SOLUSDT", 0.5), ("SUIUSDT", -0.4)]
+    for sym, pnl in specs:
+        store.record_open(_open(sym))
+        store.record_close(
+            symbol=sym, side="LONG", entry_price=100.0, exit_price=101.0,
+            exit_at="2026-06-14T11:00:00", pnl_gross=pnl + 0.1, pnl_net=pnl, fees=0.1,
+            close_reason="x", strategy_name="primary",
+        )
+    store.record_open(_open("XRPUSDT", side="SHORT"))  # aberto
+
+    counters = store.closed_trade_counters()
+    assert counters == {"closed": 3, "wins": 2, "losses": 1}
