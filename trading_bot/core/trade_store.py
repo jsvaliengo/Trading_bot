@@ -503,6 +503,21 @@ class TradeStore:
             logger.exception("🗃️ Falha ao contar trades no TradeStore")
             return 0
 
+    def count_closed_trades(self) -> int:
+        """Conta só os trades FECHADOS (status='closed') — fonte de verdade do
+        contador exibido no dashboard, em vez do contador em memória que pode
+        ficar dessincronizado dos fechamentos server-side."""
+        try:
+            with self._lock:
+                return int(
+                    self._conn.execute(
+                        "SELECT COUNT(*) FROM trades WHERE status = 'closed'"
+                    ).fetchone()[0]
+                )
+        except Exception:
+            logger.exception("🗃️ Falha ao contar trades fechados no TradeStore")
+            return 0
+
     def count_equity(self) -> int:
         try:
             with self._lock:
