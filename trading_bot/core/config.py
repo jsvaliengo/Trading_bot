@@ -637,6 +637,14 @@ class TradingConfig:
     REGIME_BBW_SQUEEZE_PERCENT: float = _env_float("TRADING_BOT_REGIME_BBW_SQUEEZE_PERCENT", 4.0)
     REGIME_HYSTERESIS_TICKS: int = _env_int("TRADING_BOT_REGIME_HYSTERESIS_TICKS", 3)
 
+    # Troca de par por regime: quando um par do perfil primário commita um regime
+    # NÃO-trend (squeeze/range/neutral) e está OCIOSO (sem posição aberta), o slot
+    # é trocado pelo melhor candidato do universo por score — sem esperar o
+    # rescore horário. Mantém os pares em trend; só rotaciona os ociosos non-trend.
+    # Cooldown por símbolo evita carrossel (troca→squeeze→troca). 0 desativa.
+    REGIME_SWAP_ENABLED: bool = _env_bool("TRADING_BOT_REGIME_SWAP_ENABLED", True)
+    REGIME_SWAP_COOLDOWN_MINUTES: float = _env_float("TRADING_BOT_REGIME_SWAP_COOLDOWN_MINUTES", 30.0)
+
     # Gate de promoção testnet → mainnet: bloqueia switch_environment("mainnet")
     # até a expectativa por trade no testnet superar MAINNET_PROMOTION_MIN_EXPECTANCY
     # com pelo menos MAINNET_PROMOTION_MIN_TRADES trades fechados. Evita subir
