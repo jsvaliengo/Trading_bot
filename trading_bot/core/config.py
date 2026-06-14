@@ -991,7 +991,7 @@ class TradingConfig:
                 # bancas pequenas, subindo até 12. order_size/stop_loss são moot
                 # com USE_RISK_BASED_SIZING (o sizing por risco sobrescreve).
                 (90,    200,    3,    180,   1),   # PDF 90-150 → 1 moeda
-                (200,   350,    6,    360,   2),   # PDF 300    → 2
+                (200,   350,    6,    360,   3),   # PDF 300=2; subido p/ 3 (mais trades, 13/06)
                 (350,   500,    9,    540,   3),   # PDF 500    → 3
                 (500,   750,    15,   900,   3),   # PDF (500-1000) → 3
                 (750,   1000,   20,   1200,  3),   # PDF (<1000)    → 3

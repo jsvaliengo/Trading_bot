@@ -13,7 +13,7 @@ from trading_bot.core.config import TradingConfig, config
 def test_num_coins_scales_per_pdf():
     expected = {
         100: 1,     # PDF 90-150
-        300: 2,     # PDF 300
+        300: 3,     # PDF diz 2; subido p/ 3 (mais trades) em 13/06
         450: 3,     # PDF 500
         600: 3,     # PDF (500-1000)
         1200: 6,    # PDF 1000
