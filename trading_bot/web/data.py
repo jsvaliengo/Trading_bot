@@ -320,30 +320,76 @@ def collect_regime(bot) -> Dict[str, Any]:
     }
 
 
-def collect_portfolio_history(bot, limit: int = 200) -> List[Dict[str, Any]]:
-    """Série de equity para o gráfico — últimos N snapshots.
+def _parse_ts(value: Any) -> Optional[datetime]:
+    """Parse robusto de timestamp p/ datetime UTC-aware (None se ilegível)."""
+    from datetime import timezone
+    if value is None:
+        return None
+    dt = value if isinstance(value, datetime) else None
+    if dt is None:
+        try:
+            dt = datetime.fromisoformat(str(value))
+        except (TypeError, ValueError):
+            return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
 
-    Cada snapshot expõe `equity = balance + pnl_total` (o gráfico plota esse
-    campo). Em testnet com SIMULATED_BALANCE_USD ativo, `balance` é o cap
-    fixo — sem somar pnl_total, a curva fica eternamente flat em $130 mesmo
-    com trades ganhando ou perdendo. `balance` continua disponível pra
-    debugging/legacy.
+
+def collect_portfolio_history(bot, limit: int = 200) -> List[Dict[str, Any]]:
+    """Série de equity para o gráfico.
+
+    Equity de cada ponto = capital + realizado ACUMULADO até aquele instante +
+    não-realizado do snapshot — derivado do MESMO realizado do SQLite que o card
+    SALDO usa (store.cumulative_realized_pnl). Antes a curva usava o `pnl_total`
+    do snapshot, que carrega o realizado do DIA (reseta à meia-noite UTC), então
+    o gráfico divergia do card (302 no card, 299 na curva). Agora batem.
     """
     history = getattr(bot, "portfolio_history", []) or []
+    store = getattr(bot, "trade_store", None)
+    sim_cap = float(getattr(config, "SIMULATED_BALANCE_USD", 0.0) or 0.0)
+    use_sim = bool(getattr(config, "USE_TESTNET", False)) and sim_cap > 0
+
+    # Trades fechados (exit_at, pnl_net) ordenados — base do realizado acumulado.
+    closed: List = []
+    if store is not None:
+        try:
+            for t in store.recent_trades(1000):
+                if str(t.get("status")) == "closed":
+                    ts = _parse_ts(t.get("exit_at"))
+                    if ts is not None:
+                        closed.append((ts, _safe_float(t.get("pnl_net"))))
+            closed.sort(key=lambda x: x[0])
+        except Exception:
+            closed = []
+
+    def _cumulative_realized_until(ts: Optional[datetime]) -> float:
+        if ts is None:
+            return sum(p for _t, p in closed)
+        return sum(p for _t, p in closed if _t <= ts)
+
     out: List[Dict[str, Any]] = []
     for snap in history[-limit:]:
         if not isinstance(snap, dict):
             continue
         balance = _safe_float(snap.get("balance"))
-        pnl_total = _safe_float(snap.get("pnl_total"))
+        unrealized = _safe_float(snap.get("pnl_unrealized"))
+        snap_ts = _parse_ts(snap.get("timestamp"))
+        cum_realized = _cumulative_realized_until(snap_ts)
+        # Mesma fórmula do card: testnet simulado soma o realizado acumulado ao
+        # cap fixo; em mainnet o wallet já reflete o realizado.
+        if use_sim:
+            equity = sim_cap + cum_realized + unrealized
+        else:
+            equity = balance + unrealized
         out.append(
             {
                 "timestamp": _iso(snap.get("timestamp")) or snap.get("timestamp"),
                 "balance": balance,
-                "equity": balance + pnl_total,
-                "pnl_realized": _safe_float(snap.get("pnl_realized")),
-                "pnl_unrealized": _safe_float(snap.get("pnl_unrealized")),
-                "pnl_total": pnl_total,
+                "equity": equity,
+                "pnl_realized": cum_realized,
+                "pnl_unrealized": unrealized,
+                "pnl_total": cum_realized + unrealized,
                 "closed_trades": int(snap.get("closed_trades", 0) or 0),
             }
         )
