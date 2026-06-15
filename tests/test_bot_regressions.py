@@ -2901,3 +2901,34 @@ def test_risk_based_sizing_treats_buffer_below_one_as_no_buffer():
         Signal.STRONG_BUY, 1000.0, min_notional=5.0, sl_pct=3.25
     )
     assert long_size == pytest.approx(1000.0 * 0.01 / (3.25 / 100.0))
+
+
+def test_global_stop_loss_uses_cumulative_pnl_not_raw_daily(monkeypatch):
+    """Regressão 15/06: o Global SL disparou com a conta NO AZUL porque usava o
+    income diário BRUTO da Binance / capital simulado. Agora usa realizado
+    acumulado (SQLite) + não-realizado → não dispara quando lucrativo, mesmo com
+    o income bruto da Binance muito negativo."""
+    monkeypatch.setattr(config, "GLOBAL_STOP_LOSS_PERCENT", 15.0)
+    bot = _make_light_bot()
+    bot.initial_capital = 300.0
+    bot.total_pnl = 1.6
+    bot.trade_store = SimpleNamespace(cumulative_realized_pnl=lambda: 1.6)  # lucrativo
+    bot.exchange = SimpleNamespace(
+        get_account_info=lambda: {"wallet_balance": 4653.0, "unrealized_pnl": 0.4},
+        # income BRUTO bem negativo (a antiga fonte do falso gatilho) — deve ser IGNORADO
+        get_daily_pnl_from_binance=lambda: {"total": -80.0},
+    )
+    assert bot.check_global_stop_loss() is False
+
+
+def test_global_stop_loss_triggers_on_real_drawdown(monkeypatch):
+    monkeypatch.setattr(config, "GLOBAL_STOP_LOSS_PERCENT", 15.0)
+    bot = _make_light_bot()
+    bot.initial_capital = 300.0
+    bot.trade_store = SimpleNamespace(cumulative_realized_pnl=lambda: -40.0)
+    bot.exchange = SimpleNamespace(
+        get_account_info=lambda: {"wallet_balance": 250.0, "unrealized_pnl": -10.0},
+        get_daily_pnl_from_binance=lambda: {"total": 0.0},
+    )
+    # -50 / 300 = 16.7% >= 15% → dispara
+    assert bot.check_global_stop_loss() is True

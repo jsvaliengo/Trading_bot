@@ -874,8 +874,22 @@ class ExecutionEngine:
         account_info = bot.exchange.get_account_info()
         total_unrealized = account_info['unrealized_pnl']
 
-        daily_pnl = bot.exchange.get_daily_pnl_from_binance()
-        total_pnl = daily_pnl['total'] + total_unrealized
+        # P&L total = realizado ACUMULADO (SQLite, fonte de verdade) + não-realizado.
+        # Antes usava o income diário BRUTO da Binance (get_daily_pnl_from_binance),
+        # não-ajustado por baseline e na escala do wallet real — dividido pelo
+        # capital simulado dava FALSO GATILHO (disparou com a conta no AZUL em
+        # 15/06: P&L do dia +$1,25, mas o circuit breaker de -15% acionou e matou
+        # o bot). Agora mede drawdown de equity vs capital inicial, consistente
+        # com os cards do dashboard. Fallback no contador em memória.
+        store = getattr(bot, "trade_store", None)
+        try:
+            cumulative_realized = (
+                float(store.cumulative_realized_pnl()) if store is not None
+                else float(getattr(bot, "total_pnl", 0.0) or 0.0)
+            )
+        except Exception:
+            cumulative_realized = float(getattr(bot, "total_pnl", 0.0) or 0.0)
+        total_pnl = cumulative_realized + total_unrealized
 
         try:
             initial_capital = float(bot.initial_capital or 0.0)
