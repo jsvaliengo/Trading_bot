@@ -70,8 +70,9 @@ def test_balance_cache_expires_after_ttl():
     client.get_account_balance()
     assert api_mock.call_count == 1
 
-    import time
-    time.sleep(0.15)
+    # Envelhece o snapshot além do TTL rebobinando o timestamp do cache — testa
+    # a lógica de expiração sem sleep real (rápido e determinístico).
+    client._balance_cache["ts"] -= client._balance_cache_ttl + 1.0
 
     # Após TTL expirar, deve refazer a chamada
     client.get_account_balance()
@@ -257,12 +258,11 @@ def test_daily_pnl_cache_hit_within_ttl_avoids_second_api_call():
 
 def test_daily_pnl_cache_expires_after_ttl():
     client = _make_client()
-    client._daily_pnl_cache_ttl = 0.1
     client._api_call = MagicMock(return_value=[])
 
     client.get_daily_pnl_from_binance()
-    import time
-    time.sleep(0.15)
+    # Envelhece o cache além do TTL sem sleep real (determinístico).
+    client._daily_pnl_cache["ts"] -= client._daily_pnl_cache_ttl + 1.0
     client.get_daily_pnl_from_binance()
 
     assert client._api_call.call_count == 2

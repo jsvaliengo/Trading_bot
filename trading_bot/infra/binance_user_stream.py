@@ -82,6 +82,7 @@ class UserStreamMonitor:
 
         self._terminal_error_count = 0
         self._restart_in_progress = False
+        self._restart_thread: Optional[threading.Thread] = None
         self._restart_attempts = 0
         self._restart_success_count = 0
         self._restart_failure_count = 0
@@ -192,6 +193,7 @@ class UserStreamMonitor:
             name="UserStreamMonitor-restart",
             daemon=True,
         )
+        self._restart_thread = thread
         thread.start()
 
     def _restart_socket_loop(self) -> None:

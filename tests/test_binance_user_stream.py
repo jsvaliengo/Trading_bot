@@ -1,6 +1,5 @@
 """Testes do UserStreamMonitor (roteamento de eventos para invalidação de cache)."""
 
-import time
 from unittest.mock import MagicMock
 
 from trading_bot.infra.binance_user_stream import UserStreamMonitor
@@ -152,11 +151,9 @@ def test_restart_retries_until_success(monkeypatch):
 
     m._on_message({"e": "error", "type": "ReadLoopClosed", "m": "x"})
 
-    # Espera o restart concluir.
-    for _ in range(50):
-        if m._restart_success_count >= 1 or m._shutdown:
-            break
-        time.sleep(0.02)
+    # Espera a thread de restart concluir (join é determinístico, sem poll/sleep).
+    m._restart_thread.join(timeout=2.0)
+    assert not m._restart_thread.is_alive()
     assert m._restart_success_count == 1
     assert m._restart_failure_count == 1
     assert m._socket_id == "ok-sock"
@@ -175,10 +172,9 @@ def test_restart_aborts_on_stop(monkeypatch):
     # Marca shutdown imediatamente — o loop deve respeitar.
     m._shutdown = True
 
-    for _ in range(50):
-        if not m._restart_in_progress:
-            break
-        time.sleep(0.02)
+    # Join determinístico: o loop deve sair sozinho ao ver _shutdown.
+    m._restart_thread.join(timeout=2.0)
+    assert not m._restart_thread.is_alive()
     assert m._restart_in_progress is False
     assert m._restart_success_count == 0
 

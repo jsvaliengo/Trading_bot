@@ -53,10 +53,9 @@ def test_is_enabled_long_and_short_independent(monkeypatch):
     assert policy.is_enabled("SHORT") is False
 
 
-def test_is_enabled_normalizes_side_casing():
+def test_normalize_side_maps_casing_and_defaults_non_short_to_long():
     policy = DoubleFirstPolicy(_make_bot())
-    # "long" minúsculo deve ser tratado como LONG
-    # Mas o teste só funciona se config tiver LONG=True; aqui só checa o normalize.
+    # _normalize_side: case-insensitive; qualquer valor != SHORT vira LONG.
     assert policy._normalize_side("long") == "LONG"
     assert policy._normalize_side("SHORT") == "SHORT"
     assert policy._normalize_side("buy") == "LONG"  # default não-SHORT vira LONG
