@@ -1,6 +1,5 @@
 """Testes do WebSocketKlineStore — mocka o ThreadedWebsocketManager."""
 
-import time
 from unittest.mock import MagicMock, patch
 
 
@@ -307,7 +306,10 @@ def test_is_fresh_false_when_staleness_exceeded():
         store.subscribe("ETHUSDT", "1m")
         assert store.is_fresh("ETHUSDT", "1m") is True
 
-        time.sleep(0.1)
+        # Envelhece o timestamp da última mensagem além da janela de staleness,
+        # sem sleep real — testa o comparador de is_fresh de forma determinística.
+        with store._lock:
+            store._last_message_ts[("ETHUSDT", "1m")] -= 1.0
         assert store.is_fresh("ETHUSDT", "1m") is False
 
 

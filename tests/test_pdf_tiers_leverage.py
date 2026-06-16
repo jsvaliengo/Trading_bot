@@ -40,16 +40,20 @@ def test_leverage_default_is_20():
     assert c.LEVERAGE == 20
 
 
-def test_leverage_env_override_via_subprocess():
+def test_leverage_env_override_via_reload(monkeypatch):
     # LEVERAGE é default de campo (lido no import, como RISK_PER_TRADE_PCT etc.),
-    # então o override só vale com a env setada ANTES do processo — que é como o
-    # .env funciona em produção. Valida num subprocesso com a env setada.
-    import subprocess
-    import sys
-    out = subprocess.check_output(
-        [sys.executable, "-c",
-         "from trading_bot.core.config import TradingConfig; print(TradingConfig().LEVERAGE)"],
-        env={**__import__("os").environ, "TRADING_BOT_LEVERAGE": "15"},
-        text=True,
-    ).strip()
-    assert out == "15"
+    # então o override só vale com a env setada ANTES do módulo carregar — que é
+    # como o .env funciona em produção. Recarregar o módulo com a env setada
+    # reproduz isso de forma rápida e determinística (sem abrir um subprocesso);
+    # o finally restaura o default para não vazar para os outros testes.
+    import importlib
+
+    from trading_bot.core import config as config_module
+
+    monkeypatch.setenv("TRADING_BOT_LEVERAGE", "15")
+    try:
+        reloaded = importlib.reload(config_module)
+        assert reloaded.TradingConfig().LEVERAGE == 15
+    finally:
+        monkeypatch.delenv("TRADING_BOT_LEVERAGE", raising=False)
+        importlib.reload(config_module)  # restaura o default (20) p/ os demais testes

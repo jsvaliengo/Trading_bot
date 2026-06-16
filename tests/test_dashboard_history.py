@@ -8,7 +8,7 @@ zeravam na virada do dia UTC — escondendo o progresso do bot. Agora:
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
@@ -20,6 +20,24 @@ from trading_bot.core.config import config as global_config
 
 def _store(tmp_path):
     return TradeStore(str(tmp_path / "trades.test.db"))
+
+
+def _freeze_trade_store_today(monkeypatch, *, year, month, day):
+    """Congela o datetime.now() do trade_store numa data fixa.
+
+    Sem isso, testes que escrevem um trade em `datetime.now()` e depois conferem
+    `realized_pnl_today()` (que recomputa o "hoje" internamente) flakam ~1x/dia se
+    a virada de meia-noite UTC cai entre as duas chamadas. Retorna o "YYYY-MM-DD".
+    """
+    from trading_bot.core import trade_store as ts_mod
+
+    class _FixedNow(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(year, month, day, 12, 0, 0, tzinfo=tz)
+
+    monkeypatch.setattr(ts_mod, "datetime", _FixedNow)
+    return f"{year:04d}-{month:02d}-{day:02d}"
 
 
 def _open(symbol="ETHUSDT", side="LONG", entry=2500.0):
@@ -108,9 +126,9 @@ def test_realized_pnl_today_filtra_por_dia(tmp_path):
     assert store.realized_pnl_today("2026-06-09") == 0.0
 
 
-def test_realized_pnl_today_default_usa_hoje_utc(tmp_path):
+def test_realized_pnl_today_default_usa_hoje_utc(tmp_path, monkeypatch):
+    hoje = _freeze_trade_store_today(monkeypatch, year=2026, month=6, day=8)
     store = _store(tmp_path)
-    hoje = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     _close(store, entry=2500, pnl_net=4.0, fees=0.0, exit_at=f"{hoje}T10:00:00")
     _close(store, entry=2510, pnl_net=-1.0, fees=0.0, exit_at="2020-01-01T10:00:00")
     assert store.realized_pnl_today() == pytest.approx(4.0)
@@ -161,8 +179,8 @@ def test_collect_summary_daily_pnl_usa_store_nao_binance(tmp_path, monkeypatch):
     diário da Binance — que dependia de um baseline re-ancorado a cada restart.
     """
     monkeypatch.setattr(global_config, "SIMULATED_BALANCE_USD", 100.0, raising=False)
+    hoje = _freeze_trade_store_today(monkeypatch, year=2026, month=6, day=8)
     store = _store(tmp_path)
-    hoje = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     # Realizado de hoje no SQLite = -3.96 (o número honesto do dia)
     _close(store, entry=2500, pnl_net=1.24, fees=0.0, exit_at=f"{hoje}T09:00:00")
     _close(store, entry=2510, pnl_net=-5.20, fees=0.0, exit_at=f"{hoje}T16:00:00")
