@@ -2035,7 +2035,10 @@ class TradingBot:
             ", ".join(evicted_done),
             ", ".join(replacements),
         )
-        if getattr(self, "telegram", None):
+        # Notificação no Telegram desligada por padrão — a rotação por regime
+        # acontece de hora em hora e poluía o chat. A troca continua (e fica no
+        # log); só não avisa. Religar com TRADING_BOT_REGIME_SWAP_NOTIFY=true.
+        if getattr(config, "REGIME_SWAP_NOTIFY", False) and getattr(self, "telegram", None):
             try:
                 self.telegram.send_message(
                     "🔁 <b>ROTAÇÃO POR REGIME</b>\n\n"

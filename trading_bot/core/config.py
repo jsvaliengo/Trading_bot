@@ -644,6 +644,9 @@ class TradingConfig:
     # Cooldown por símbolo evita carrossel (troca→squeeze→troca). 0 desativa.
     REGIME_SWAP_ENABLED: bool = _env_bool("TRADING_BOT_REGIME_SWAP_ENABLED", True)
     REGIME_SWAP_COOLDOWN_MINUTES: float = _env_float("TRADING_BOT_REGIME_SWAP_COOLDOWN_MINUTES", 30.0)
+    # Notificar a rotação por regime no Telegram. Default OFF — polui o chat
+    # (acontece de hora em hora). A troca continua acontecendo de qualquer forma.
+    REGIME_SWAP_NOTIFY: bool = _env_bool("TRADING_BOT_REGIME_SWAP_NOTIFY", False)
 
     # Gate de promoção testnet → mainnet: bloqueia switch_environment("mainnet")
     # até a expectativa por trade no testnet superar MAINNET_PROMOTION_MIN_EXPECTANCY
