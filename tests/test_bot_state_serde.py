@@ -1,6 +1,6 @@
 """Testes do BotStatePersistence — (de)serialização pura do state, sem TradingBot."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from trading_bot.core.bot_state_serde import BotStatePersistence
@@ -91,5 +91,11 @@ def test_build_payload_shape_and_excludes_history_arrays():
     # cooldowns de reentrada persistidos (sobrevivem a deploy)
     assert payload["symbol_reentry_cooldowns"] == {"BCHUSDT": 1717500000.0}
 
-    # daily_date é a data UTC de hoje (formato YYYY-MM-DD)
-    assert payload["daily_date"] == datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    # daily_date é a data UTC de hoje (formato YYYY-MM-DD). Tolera a virada de
+    # meia-noite UTC entre o build e o assert (senão flaka ~1x/dia nessa janela).
+    _now = datetime.now(timezone.utc)
+    _valid_dates = {
+        _now.strftime("%Y-%m-%d"),
+        (_now - timedelta(minutes=1)).strftime("%Y-%m-%d"),
+    }
+    assert payload["daily_date"] in _valid_dates
