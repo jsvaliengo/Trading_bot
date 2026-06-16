@@ -120,23 +120,6 @@
             <!-- DASHBOARD VIEW (default) -->
             <section class="view active" id="dashboard-view">
 
-                <!-- Equity Chart -->
-                <article class="card chart-card">
-                    <header class="card-head">
-                        <div>
-                            <h2>Equity</h2>
-                            <p class="card-sub" id="chart-range">—</p>
-                        </div>
-                        <div class="chart-tabs">
-                            <button class="chip active" data-range="all">Tudo</button>
-                            <button class="chip" data-range="24h">24h</button>
-                            <button class="chip" data-range="6h">6h</button>
-                            <button class="chip" data-range="1h">1h</button>
-                        </div>
-                    </header>
-                    <div id="equity-chart" class="chart-canvas"></div>
-                </article>
-
                 <!-- Posições compactas + Regime -->
                 <div class="two-col">
                     <article class="card">
@@ -167,6 +150,23 @@
                         </div>
                     </article>
                 </div>
+
+                <!-- Equity Chart -->
+                <article class="card chart-card">
+                    <header class="card-head">
+                        <div>
+                            <h2>Equity</h2>
+                            <p class="card-sub" id="chart-range">—</p>
+                        </div>
+                        <div class="chart-tabs">
+                            <button class="chip active" data-range="all">Tudo</button>
+                            <button class="chip" data-range="24h">24h</button>
+                            <button class="chip" data-range="6h">6h</button>
+                            <button class="chip" data-range="1h">1h</button>
+                        </div>
+                    </header>
+                    <div id="equity-chart" class="chart-canvas"></div>
+                </article>
             </section>
 
             <!-- POSITIONS VIEW (full) -->
