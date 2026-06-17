@@ -40,8 +40,21 @@ def collect_snapshot(bot) -> Dict[str, Any]:
         "regime": collect_regime(bot),
         "portfolio_history": collect_portfolio_history(bot, limit=200),
         "daily_history": collect_daily_history(bot),
+        "pnl_analysis": collect_pnl_analysis(bot),
         "server_time": datetime.utcnow().isoformat() + "Z",
     }
+
+
+def collect_pnl_analysis(bot) -> Dict[str, Any]:
+    """Agregados de P&L (Total Profit/Loss, win rate, dias, médias, volume) do
+    TradeStore durável — base do painel "Análise P&L". Vazio sem store."""
+    store = getattr(bot, "trade_store", None)
+    if store is None:
+        return {}
+    try:
+        return store.pnl_analysis()
+    except Exception:
+        return {}
 
 
 def collect_daily_history(bot, limit: int = 90) -> List[Dict[str, Any]]:

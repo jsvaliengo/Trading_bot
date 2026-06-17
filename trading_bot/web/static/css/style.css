@@ -431,6 +431,36 @@ html, body {
     align-items: start;
 }
 
+/* ════ Painel Análise de P&L (stats em 2 colunas) ════ */
+.pnl-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 4px 40px;
+}
+.pnl-stats-col {
+    display: flex;
+    flex-direction: column;
+}
+.pnl-stat {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border);
+}
+.pnl-stat:last-child { border-bottom: none; }
+.pnl-stat-label {
+    color: var(--text-muted);
+    font-size: 13px;
+}
+.pnl-stat-value {
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+.pnl-stat-value.pos { color: var(--success); }
+.pnl-stat-value.neg { color: var(--danger); }
+
 /* ════ Tables ════ */
 .table-scroll {
     overflow-x: auto;

@@ -493,6 +493,90 @@ class TradeStore:
             })
         return out[-int(limit):] if limit else out
 
+    def pnl_analysis(self, since_utc: Optional[str] = None) -> Dict[str, Any]:
+        """Agregados de P&L dos trades FECHADOS — base do painel "Análise P&L".
+
+        Retorna (todos derivados de pnl_net, líquido de taxas):
+          total_profit  : soma dos pnl_net positivos (ganhos)
+          total_loss    : soma dos pnl_net negativos (perdas, valor negativo)
+          net_pnl       : total_profit + total_loss
+          trades        : nº de trades fechados
+          wins / losses / breakeven : contagem por sinal de pnl_net
+          win_rate      : wins / trades * 100
+          avg_profit    : total_profit / wins
+          avg_loss      : total_loss / losses (negativo)
+          profit_loss_ratio : avg_profit / |avg_loss| (0 se não há perdas)
+          trading_volume    : soma do notional (value) dos trades fechados
+          winning_days / losing_days / breakeven_days : dias por sinal do net diário
+
+        since_utc: 'YYYY-MM-DD' opcional pra limitar ao período (exit_at >= data).
+        """
+        where = "status='closed' AND exit_at IS NOT NULL"
+        params: tuple = ()
+        if since_utc:
+            where += " AND substr(exit_at, 1, 10) >= ?"
+            params = (since_utc,)
+        try:
+            with self._lock:
+                row = self._conn.execute(
+                    f"""
+                    SELECT
+                        COUNT(*)                                              AS trades,
+                        SUM(CASE WHEN pnl_net > 0 THEN 1 ELSE 0 END)          AS wins,
+                        SUM(CASE WHEN pnl_net < 0 THEN 1 ELSE 0 END)          AS losses,
+                        SUM(CASE WHEN pnl_net = 0 THEN 1 ELSE 0 END)          AS breakeven,
+                        COALESCE(SUM(CASE WHEN pnl_net > 0 THEN pnl_net END), 0) AS total_profit,
+                        COALESCE(SUM(CASE WHEN pnl_net < 0 THEN pnl_net END), 0) AS total_loss,
+                        COALESCE(SUM(pnl_net), 0)                             AS net_pnl,
+                        COALESCE(SUM(value), 0)                               AS trading_volume
+                      FROM trades
+                     WHERE {where}
+                    """,
+                    params,
+                ).fetchone()
+        except Exception:
+            logger.exception("🗃️ Falha ao agregar análise de P&L")
+            row = None
+
+        trades = int(row["trades"] or 0) if row else 0
+        wins = int(row["wins"] or 0) if row else 0
+        losses = int(row["losses"] or 0) if row else 0
+        breakeven = int(row["breakeven"] or 0) if row else 0
+        total_profit = float(row["total_profit"] or 0.0) if row else 0.0
+        total_loss = float(row["total_loss"] or 0.0) if row else 0.0
+        net_pnl = float(row["net_pnl"] or 0.0) if row else 0.0
+        trading_volume = float(row["trading_volume"] or 0.0) if row else 0.0
+
+        avg_profit = total_profit / wins if wins else 0.0
+        avg_loss = total_loss / losses if losses else 0.0
+        pl_ratio = (avg_profit / abs(avg_loss)) if avg_loss else 0.0
+
+        # Dias ganhos/perdas/breakeven — reusa o net diário já agregado.
+        daily = self.daily_pnl_history(limit=0)
+        if since_utc:
+            daily = [d for d in daily if d["day"] >= since_utc]
+        winning_days = sum(1 for d in daily if d["net"] > 0)
+        losing_days = sum(1 for d in daily if d["net"] < 0)
+        breakeven_days = sum(1 for d in daily if d["net"] == 0)
+
+        return {
+            "trades": trades,
+            "wins": wins,
+            "losses": losses,
+            "breakeven": breakeven,
+            "win_rate": round(wins / trades * 100.0, 2) if trades else 0.0,
+            "total_profit": round(total_profit, 4),
+            "total_loss": round(total_loss, 4),
+            "net_pnl": round(net_pnl, 4),
+            "avg_profit": round(avg_profit, 4),
+            "avg_loss": round(avg_loss, 4),
+            "profit_loss_ratio": round(pl_ratio, 2),
+            "trading_volume": round(trading_volume, 2),
+            "winning_days": winning_days,
+            "losing_days": losing_days,
+            "breakeven_days": breakeven_days,
+        }
+
     def count_trades(self) -> int:
         try:
             with self._lock:
