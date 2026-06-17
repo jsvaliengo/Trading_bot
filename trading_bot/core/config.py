@@ -521,6 +521,11 @@ class TradingConfig:
     # Faixas de capital e configurações
     # Formato: (capital_min, capital_max, order_size, stop_loss, num_coins)
     BINANCE_STRATEGY_TIERS: list = None  # Será definido no __post_init__
+
+    # Piso de moedas operadas: num_coins do tier nunca cai abaixo disto. Bancas
+    # pequenas (ex: ~$117) caem no tier de 1 moeda; com o piso em 3, o bot
+    # mantém ao menos 3 pares na rotação independentemente do saldo.
+    BINANCE_MIN_NUM_COINS: int = _env_int("TRADING_BOT_BINANCE_MIN_NUM_COINS", 3)
     
     # Universo de moedas Binance (preenchido dinamicamente em runtime)
     # O bot usa as primeiras N moedas ordenadas por score conforme a faixa de capital
@@ -1146,10 +1151,14 @@ class TradingConfig:
         Returns:
             dict com: order_size, stop_loss, num_coins, coins
         """
+        # Piso: bancas pequenas caem em tier de 1 moeda; o piso garante o mínimo.
+        floor = max(0, int(getattr(self, "BINANCE_MIN_NUM_COINS", 0) or 0))
+
         # Encontra a faixa correta
         for tier in self.BINANCE_STRATEGY_TIERS:
             min_cap, max_cap, order_size, stop_loss, num_coins = tier
             if min_cap <= capital < max_cap:
+                num_coins = max(num_coins, floor)
                 # Seleciona as primeiras N moedas da lista
                 coins = self.get_enabled_binance_coin_list()[:num_coins]
                 return {
@@ -1159,10 +1168,11 @@ class TradingConfig:
                     'num_coins': num_coins,
                     'coins': coins
                 }
-        
+
         # Se não encontrar faixa (capital muito baixo), usa a primeira
         tier = self.BINANCE_STRATEGY_TIERS[0]
         min_cap, max_cap, order_size, stop_loss, num_coins = tier
+        num_coins = max(num_coins, floor)
         coins = self.get_enabled_binance_coin_list()[:num_coins]
         return {
             'capital_range': f"${min_cap}-${max_cap}",

@@ -56,6 +56,10 @@
         equityChart: null,
         equitySeries: null,
         chartRange: 'all',
+        dailyPnlChart: null,
+        dailyPnlSeries: null,
+        cumPnlChart: null,
+        cumPnlSeries: null,
     };
 
     function classify(value) {
@@ -79,6 +83,13 @@
             destroyChart();
             renderEquity(state.snapshot.portfolio_history || []);
         }
+        if ((state.dailyPnlChart || state.cumPnlChart) && state.snapshot) {
+            destroyAnalysisCharts();
+            const analysisView = $('analysis-view');
+            if (analysisView && analysisView.classList.contains('active')) {
+                renderAnalysisCharts(state.snapshot.daily_history || []);
+            }
+        }
     }
     function initTheme() {
         const stored = localStorage.getItem(THEME_KEY) || 'dark';
@@ -95,6 +106,8 @@
         'positions-view': 'Posições abertas',
         'trades-view': 'Trades recentes',
         'regime-view': 'Regime Classifier',
+        'analysis-view': 'Análise de P&L',
+        'historico-view': 'Histórico por dia',
     };
     function showView(targetId) {
         $$('.view').forEach(v => v.classList.remove('active'));
@@ -103,6 +116,11 @@
         const navBtn = document.querySelector(`.nav-item[data-target="${targetId}"]`);
         if (navBtn) navBtn.classList.add('active');
         $('page-title').textContent = titles[targetId] || 'Dashboard';
+        // Os gráficos da Análise vivem numa view escondida (clientWidth=0 até
+        // exibir). Renderiza ao abrir, quando o container já tem largura.
+        if (targetId === 'analysis-view' && state.snapshot) {
+            renderAnalysisCharts(state.snapshot.daily_history || []);
+        }
     }
     function initRouter() {
         $$('.nav-item').forEach(btn => {
@@ -356,6 +374,114 @@
         }).join('');
     }
 
+    // ───────── Render: Análise P&L (stats + 2 gráficos) ─────────
+    function renderPnlAnalysis(an) {
+        const set = (id, txt) => { const el = $(id); if (el) el.textContent = txt; };
+        const setSigned = (id, value) => {
+            const el = $(id);
+            if (!el) return;
+            el.textContent = fmt.usd(value, { signed: true });
+            setPnlClass(el, value);
+        };
+        if (!an || an.trades === undefined) {
+            ['an-total-profit', 'an-total-loss', 'an-net-pnl', 'an-volume', 'an-win-rate',
+             'an-winning-days', 'an-losing-days', 'an-breakeven-days', 'an-avg-profit',
+             'an-avg-loss', 'an-pl-ratio', 'an-trades'].forEach(id => set(id, '—'));
+            const sub = $('analysis-summary'); if (sub) sub.textContent = '—';
+            return;
+        }
+        setSigned('an-total-profit', an.total_profit);
+        setSigned('an-total-loss', an.total_loss);
+        setSigned('an-net-pnl', an.net_pnl);
+        set('an-volume', fmt.usd(an.trading_volume));
+        set('an-win-rate', Number(an.win_rate || 0).toFixed(2) + ' %');
+        set('an-winning-days', an.winning_days + ' dias');
+        set('an-losing-days', an.losing_days + ' dias');
+        set('an-breakeven-days', an.breakeven_days + ' dias');
+        setSigned('an-avg-profit', an.avg_profit);
+        setSigned('an-avg-loss', an.avg_loss);
+        set('an-pl-ratio', Number(an.profit_loss_ratio || 0).toFixed(2));
+        set('an-trades', `${an.trades} (${an.wins}W / ${an.losses}L)`);
+        const sub = $('analysis-summary');
+        if (sub) sub.textContent = `${an.trades} trade(s) · ${Number(an.win_rate || 0).toFixed(1)}% win rate`;
+    }
+
+    function ensureBarChart(containerId, key, seriesKey) {
+        if (state[key]) return state[key];
+        const container = $(containerId);
+        if (!container || typeof LightweightCharts === 'undefined') return null;
+        const c = chartColors();
+        const chart = LightweightCharts.createChart(container, {
+            layout: { background: { color: 'transparent' }, textColor: c.text, fontFamily: 'Inter, sans-serif', fontSize: 11 },
+            grid: { vertLines: { color: c.grid }, horzLines: { color: c.grid } },
+            timeScale: { timeVisible: false, secondsVisible: false, borderVisible: false },
+            rightPriceScale: { borderVisible: false },
+            crosshair: { mode: 1 },
+            handleScroll: false,
+            handleScale: false,
+        });
+        state[seriesKey] = chart.addHistogramSeries({ priceFormat: { type: 'price', precision: 2, minMove: 0.01 } });
+        window.addEventListener('resize', () => chart.applyOptions({ width: container.clientWidth }));
+        chart.applyOptions({ width: container.clientWidth, height: 320 });
+        state[key] = chart;
+        return chart;
+    }
+
+    function ensureLineChart(containerId, key, seriesKey) {
+        if (state[key]) return state[key];
+        const container = $(containerId);
+        if (!container || typeof LightweightCharts === 'undefined') return null;
+        const c = chartColors();
+        const chart = LightweightCharts.createChart(container, {
+            layout: { background: { color: 'transparent' }, textColor: c.text, fontFamily: 'Inter, sans-serif', fontSize: 11 },
+            grid: { vertLines: { color: c.grid }, horzLines: { color: c.grid } },
+            timeScale: { timeVisible: false, secondsVisible: false, borderVisible: false },
+            rightPriceScale: { borderVisible: false },
+            crosshair: { mode: 1 },
+            handleScroll: false,
+            handleScale: false,
+        });
+        state[seriesKey] = chart.addAreaSeries({
+            lineColor: '#f0b90b', topColor: 'rgba(240,185,11,0.25)', bottomColor: 'rgba(240,185,11,0.02)', lineWidth: 2,
+            priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
+        });
+        window.addEventListener('resize', () => chart.applyOptions({ width: container.clientWidth }));
+        chart.applyOptions({ width: container.clientWidth, height: 320 });
+        state[key] = chart;
+        return chart;
+    }
+
+    function renderAnalysisCharts(daily) {
+        const data = (daily || []).filter(d => d && d.day);
+        // Daily PNL — barras verde/vermelho por dia
+        const bar = ensureBarChart('daily-pnl-chart', 'dailyPnlChart', 'dailyPnlSeries');
+        if (bar && state.dailyPnlSeries) {
+            state.dailyPnlSeries.setData(data.map(d => ({
+                time: d.day,
+                value: Number(d.net || 0),
+                color: (d.net || 0) >= 0 ? '#26a69a' : '#ef5350',
+            })));
+            bar.timeScale().fitContent();
+        }
+        // Cumulative PNL — linha do acumulado
+        const line = ensureLineChart('cumulative-pnl-chart', 'cumPnlChart', 'cumPnlSeries');
+        if (line && state.cumPnlSeries) {
+            state.cumPnlSeries.setData(data.map(d => ({
+                time: d.day,
+                value: Number(d.cumulative || 0),
+            })));
+            line.timeScale().fitContent();
+        }
+    }
+
+    function destroyAnalysisCharts() {
+        [['dailyPnlChart', 'dailyPnlSeries'], ['cumPnlChart', 'cumPnlSeries']].forEach(([k, s]) => {
+            if (state[k]) { try { state[k].remove(); } catch (e) { /* ignore */ } }
+            state[k] = null;
+            state[s] = null;
+        });
+    }
+
     function renderRegime(regime) {
         if (!regime) return;
         const tbodyFull = $('regime-table').querySelector('tbody');
@@ -489,6 +615,13 @@
         renderRegime(snap.regime);
         renderEquity(snap.portfolio_history || []);
         renderDailyHistory(snap.daily_history || []);
+        renderPnlAnalysis(snap.pnl_analysis);
+        // Só re-desenha os gráficos da Análise se a view estiver visível
+        // (containers escondidos têm largura 0 e o chart fica quebrado).
+        const analysisView = $('analysis-view');
+        if (analysisView && analysisView.classList.contains('active')) {
+            renderAnalysisCharts(snap.daily_history || []);
+        }
         $('kpi-last-update').textContent = fmt.time(snap.server_time);
         resetRefreshCountdown();
     }

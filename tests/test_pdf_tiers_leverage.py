@@ -12,7 +12,7 @@ from trading_bot.core.config import TradingConfig, config
 
 def test_num_coins_scales_per_pdf():
     expected = {
-        100: 1,     # PDF 90-150
+        100: 3,     # tier PDF dá 1, mas o piso BINANCE_MIN_NUM_COINS=3 sobe p/ 3
         300: 3,     # PDF diz 2; subido p/ 3 (mais trades) em 13/06
         450: 3,     # PDF 500
         600: 3,     # PDF (500-1000)
@@ -33,6 +33,18 @@ def test_num_coins_is_monotonic_non_decreasing():
     tiers = config.BINANCE_STRATEGY_TIERS
     nums = [t[4] for t in tiers]
     assert nums == sorted(nums), f"num_coins deve ser não-decrescente: {nums}"
+
+
+def test_num_coins_never_below_min_floor():
+    """O piso BINANCE_MIN_NUM_COINS sobrepõe o tier em bancas pequenas, sem
+    rebaixar bancas grandes (onde o tier já é maior que o piso)."""
+    floor = config.BINANCE_MIN_NUM_COINS
+    assert floor >= 1
+    for capital in (50, 100, 150, 199, 300, 1200, 12000):
+        got = config.get_binance_strategy_for_capital(capital)["num_coins"]
+        assert got >= floor, f"capital ${capital}: {got} < piso {floor}"
+    # Banca grande não é limitada pelo piso (tier=12 > piso)
+    assert config.get_binance_strategy_for_capital(12000)["num_coins"] == 12
 
 
 def test_leverage_default_is_20():

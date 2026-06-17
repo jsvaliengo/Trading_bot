@@ -38,6 +38,9 @@
                 <button class="nav-item" data-target="regime-view">
                     <span class="nav-icon">🌀</span><span>Regime</span>
                 </button>
+                <button class="nav-item" data-target="analysis-view">
+                    <span class="nav-icon">📈</span><span>Análise</span>
+                </button>
                 <button class="nav-item" data-target="historico-view">
                     <span class="nav-icon">📅</span><span>Histórico</span>
                 </button>
@@ -228,6 +231,50 @@
                             <tbody><tr><td colspan="3" class="empty">Sem dados ainda.</td></tr></tbody>
                         </table>
                     </div>
+                </article>
+            </section>
+
+            <!-- ANÁLISE (P&L Analysis) VIEW -->
+            <section class="view" id="analysis-view">
+                <article class="card">
+                    <header class="card-head">
+                        <h2>Análise de P&amp;L</h2>
+                        <span class="card-sub" id="analysis-summary">—</span>
+                    </header>
+                    <div class="pnl-stats">
+                        <div class="pnl-stats-col">
+                            <div class="pnl-stat"><span class="pnl-stat-label">Total Profit</span><span class="pnl-stat-value" id="an-total-profit">—</span></div>
+                            <div class="pnl-stat"><span class="pnl-stat-label">Total Loss</span><span class="pnl-stat-value" id="an-total-loss">—</span></div>
+                            <div class="pnl-stat"><span class="pnl-stat-label">Net Profit/Loss</span><span class="pnl-stat-value" id="an-net-pnl">—</span></div>
+                            <div class="pnl-stat"><span class="pnl-stat-label">Trading Volume</span><span class="pnl-stat-value" id="an-volume">—</span></div>
+                            <div class="pnl-stat"><span class="pnl-stat-label">Win Rate</span><span class="pnl-stat-value" id="an-win-rate">—</span></div>
+                            <div class="pnl-stat"><span class="pnl-stat-label">Winning Days</span><span class="pnl-stat-value" id="an-winning-days">—</span></div>
+                        </div>
+                        <div class="pnl-stats-col">
+                            <div class="pnl-stat"><span class="pnl-stat-label">Losing Days</span><span class="pnl-stat-value" id="an-losing-days">—</span></div>
+                            <div class="pnl-stat"><span class="pnl-stat-label">Breakeven Days</span><span class="pnl-stat-value" id="an-breakeven-days">—</span></div>
+                            <div class="pnl-stat"><span class="pnl-stat-label">Average Profit</span><span class="pnl-stat-value" id="an-avg-profit">—</span></div>
+                            <div class="pnl-stat"><span class="pnl-stat-label">Average Loss</span><span class="pnl-stat-value" id="an-avg-loss">—</span></div>
+                            <div class="pnl-stat"><span class="pnl-stat-label">Profit/Loss Ratio</span><span class="pnl-stat-value" id="an-pl-ratio">—</span></div>
+                            <div class="pnl-stat"><span class="pnl-stat-label">Trades fechados</span><span class="pnl-stat-value" id="an-trades">—</span></div>
+                        </div>
+                    </div>
+                </article>
+
+                <article class="card chart-card">
+                    <header class="card-head">
+                        <h2>Daily PNL</h2>
+                        <span class="card-sub">P&amp;L líquido por dia (UTC)</span>
+                    </header>
+                    <div id="daily-pnl-chart" class="chart-canvas"></div>
+                </article>
+
+                <article class="card chart-card">
+                    <header class="card-head">
+                        <h2>Cumulative PNL</h2>
+                        <span class="card-sub">P&amp;L acumulado (líquido de taxas)</span>
+                    </header>
+                    <div id="cumulative-pnl-chart" class="chart-canvas"></div>
                 </article>
             </section>
 
