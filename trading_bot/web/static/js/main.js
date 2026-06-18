@@ -442,7 +442,7 @@
             handleScale: false,
         });
         state[seriesKey] = chart.addAreaSeries({
-            lineColor: '#f0b90b', topColor: 'rgba(240,185,11,0.25)', bottomColor: 'rgba(240,185,11,0.02)', lineWidth: 2,
+            lineColor: c.line, topColor: c.top, bottomColor: c.bottom, lineWidth: 2,
             priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
         });
         window.addEventListener('resize', () => chart.applyOptions({ width: container.clientWidth }));
@@ -459,7 +459,7 @@
             state.dailyPnlSeries.setData(data.map(d => ({
                 time: d.day,
                 value: Number(d.net || 0),
-                color: (d.net || 0) >= 0 ? '#26a69a' : '#ef5350',
+                color: (d.net || 0) >= 0 ? '#3fd99b' : '#ff5d73',
             })));
             bar.timeScale().fitContent();
         }
@@ -524,11 +524,11 @@
     function chartColors() {
         const isLight = document.documentElement.getAttribute('data-theme') === 'light';
         return {
-            text: isLight ? '#475569' : '#9aa4b8',
-            grid: isLight ? 'rgba(15,23,42,0.06)' : 'rgba(255,255,255,0.05)',
-            line: '#2c8eff',
-            top: isLight ? 'rgba(44,142,255,0.20)' : 'rgba(44,142,255,0.35)',
-            bottom: isLight ? 'rgba(44,142,255,0.01)' : 'rgba(44,142,255,0.02)',
+            text: isLight ? '#475467' : '#9aa4b8',
+            grid: isLight ? 'rgba(16,24,40,0.06)' : 'rgba(255,255,255,0.05)',
+            line: isLight ? '#2563eb' : '#4c8dff',
+            top: isLight ? 'rgba(37,99,235,0.16)' : 'rgba(76,141,255,0.28)',
+            bottom: isLight ? 'rgba(37,99,235,0.01)' : 'rgba(76,141,255,0.02)',
         };
     }
     function destroyChart() {
