@@ -1061,13 +1061,20 @@ class TradingConfig:
                     # permite o ATR respirar entre par calmo (BTC) e altcoin
                     # volátil. RR target 3.0 ("corda longa", 2026-05-29): casa
                     # com o trailing largo pra deixar os vencedores correrem
-                    # (TP fixo senta mais longe). TP escala junto; cap 2.50%
-                    # quase nunca clipa (SL_max 0.80 × 3 = 2.40).
+                    # (TP fixo senta mais longe).
+                    # Piso 1.0% (antes 0.15): a banda 0.15-0.80 grampeava stops
+                    # de ruído (mainnet 06-17: 11/11 perdas foram stop-out, várias
+                    # a 0.23-0.51%); os únicos ganhos vieram com stop ≥1.4% (rota
+                    # estrutural). Sizing é risk-based (RISK_PER_TRADE_PCT), então
+                    # stop mais largo encolhe a posição e mantém o risco em $ por
+                    # trade constante — só corta o whipsaw. TP escala junto; cap
+                    # 4.50% acompanha SL_max 1.50 × 3 = 4.50 (a rota estrutural
+                    # não tem teto de TP). Ajustado 2026-06-18.
                     "risk_profile": {
-                        "stop_loss_min_percent": 0.15,
-                        "stop_loss_max_percent": 0.80,
+                        "stop_loss_min_percent": 1.0,
+                        "stop_loss_max_percent": 1.5,
                         "take_profit_min_percent": 0.30,
-                        "take_profit_max_percent": 2.50,
+                        "take_profit_max_percent": 4.50,
                         "risk_reward_target": 3.0,
                     },
                 },
