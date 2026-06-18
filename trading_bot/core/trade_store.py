@@ -58,7 +58,8 @@ CREATE TABLE IF NOT EXISTS trades (
     pnl_net       REAL,
     fees          REAL,
     close_reason  TEXT,
-    status        TEXT    NOT NULL DEFAULT 'open'
+    status        TEXT    NOT NULL DEFAULT 'open',
+    mfe_pct       REAL
 );
 CREATE INDEX IF NOT EXISTS idx_trades_open_lookup ON trades (symbol, side, status);
 CREATE INDEX IF NOT EXISTS idx_trades_exit_at      ON trades (exit_at);
@@ -110,8 +111,19 @@ class TradeStore:
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA synchronous=NORMAL")
             self._conn.executescript(_SCHEMA)
+            self._ensure_column("trades", "mfe_pct", "REAL")
             self._conn.commit()
         logger.info("🗃️ TradeStore inicializado em %s", db_path)
+
+    def _ensure_column(self, table: str, column: str, decl: str) -> None:
+        """Migração idempotente: ADD COLUMN se ainda não existir (DB antigo).
+
+        CREATE TABLE IF NOT EXISTS não altera tabela já existente, então colunas
+        novas precisam deste backfill. Chamado sob self._lock.
+        """
+        cols = {r[1] for r in self._conn.execute(f"PRAGMA table_info({table})")}
+        if column not in cols:
+            self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
 
     # ------------------------------------------------------------------ write
 
@@ -165,6 +177,7 @@ class TradeStore:
         fees: float,
         close_reason: str,
         strategy_name: str,
+        mfe_pct: Optional[float] = None,
     ) -> bool:
         """Fecha o trade aberto mais recente (symbol+side) — lookup indexado.
 
@@ -193,11 +206,11 @@ class TradeStore:
                         """
                         UPDATE trades
                            SET exit_at=?, exit_price=?, pnl_gross=?, pnl_net=?,
-                               fees=?, close_reason=?, status='closed'
+                               fees=?, close_reason=?, mfe_pct=?, status='closed'
                          WHERE id=?
                         """,
                         (exit_at, exit_price, pnl_gross, pnl_net, fees,
-                         close_reason, row["id"]),
+                         close_reason, mfe_pct, row["id"]),
                     )
                 else:
                     # Close-only: não havia open correspondente.
@@ -206,12 +219,12 @@ class TradeStore:
                         INSERT INTO trades (
                             opened_at, symbol, side, entry_price, strategy_name,
                             exit_at, exit_price, pnl_gross, pnl_net, fees,
-                            close_reason, status
-                        ) VALUES (?,?,?,?,?,?,?,?,?,?,?, 'closed')
+                            close_reason, mfe_pct, status
+                        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?, 'closed')
                         """,
                         (exit_at, symbol, side or "", entry_price,
                          str(strategy_name or "primary"), exit_at, exit_price,
-                         pnl_gross, pnl_net, fees, close_reason),
+                         pnl_gross, pnl_net, fees, close_reason, mfe_pct),
                     )
                 self._conn.commit()
                 return True
@@ -789,6 +802,7 @@ class TradeStore:
                     "pnl_net": r["pnl_net"],
                     "fees": r["fees"],
                     "close_reason": r["close_reason"],
+                    "mfe_pct": (r["mfe_pct"] if "mfe_pct" in r.keys() else None),
                 }
             )
         return rec

@@ -67,6 +67,34 @@ def test_close_updates_matching_open(tmp_path):
     assert t["exit_time"] == "2026-05-31T11:00:00"
 
 
+def test_close_persists_mfe_pct(tmp_path):
+    """MFE (excursão favorável) é gravado no fechamento e volta no read."""
+    store = _store(tmp_path)
+    store.record_open(_open_record())
+
+    assert store.record_close(
+        symbol="ETHUSDT", side="LONG", entry_price=2500.0, exit_price=2480.0,
+        exit_at="2026-05-31T11:00:00", pnl_gross=-20.0, pnl_net=-21.5, fees=1.5,
+        close_reason="Stop Loss (Binance)", strategy_name="primary",
+        mfe_pct=0.48,
+    ) is True
+
+    t = store.recent_trades()[0]
+    assert t["mfe_pct"] == 0.48  # pico +0.48% mesmo fechando no loss
+
+
+def test_close_mfe_pct_defaults_to_none(tmp_path):
+    """Sem mfe_pct informado, persiste None (compat com chamadas antigas)."""
+    store = _store(tmp_path)
+    store.record_open(_open_record())
+    store.record_close(
+        symbol="ETHUSDT", side="LONG", entry_price=2500.0, exit_price=2600.0,
+        exit_at="2026-05-31T11:00:00", pnl_gross=10.0, pnl_net=8.5, fees=1.5,
+        close_reason="take_profit", strategy_name="primary",
+    )
+    assert store.recent_trades()[0]["mfe_pct"] is None
+
+
 def test_close_without_open_inserts_close_only(tmp_path):
     store = _store(tmp_path)
     assert store.record_close(

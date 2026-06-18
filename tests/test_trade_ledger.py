@@ -39,6 +39,23 @@ def _make_bot() -> SimpleNamespace:
     )
 
 
+def test_compute_mfe_pct_long_short_and_missing():
+    bot = _make_bot()
+    bot.peak_prices = {
+        "ETHUSDT_LONG": 2512.0,   # +0.48% sobre 2500
+        "XRPUSDT_SHORT": 1.194,   # -0.50% sobre 1.20 → MFE +0.50%
+        "BCHUSDT_LONG": 99.0,     # pico ABAIXO da entrada 100 → nunca a favor
+    }
+    ledger = TradeLedger(bot)
+
+    assert ledger._compute_mfe_pct("ETHUSDT", "LONG", 2500.0) == pytest.approx(0.48, abs=0.001)
+    assert ledger._compute_mfe_pct("XRPUSDT", "SHORT", 1.20) == pytest.approx(0.50, abs=0.001)
+    # pico desfavorável → floor em 0 (nunca ficou no lucro)
+    assert ledger._compute_mfe_pct("BCHUSDT", "LONG", 100.0) == 0.0
+    # sem peak rastreado → None
+    assert ledger._compute_mfe_pct("DOGEUSDT", "SHORT", 0.08) is None
+
+
 def test_record_winning_trade_increments_win_counters():
     bot = _make_bot()
     ledger = TradeLedger(bot)
