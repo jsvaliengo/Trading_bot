@@ -6,7 +6,7 @@
     <title>Trading Bot — {{ environment|upper }}</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
 <body data-environment="{{ environment }}" data-poll-interval="{{ poll_interval }}">
@@ -75,7 +75,7 @@
             <section class="kpi-row">
                 <article class="card kpi kpi-split">
                     <div class="kpi-head">
-                        <span class="kpi-icon" style="background:linear-gradient(135deg,#5cf2a8,#00b894)">💰</span>
+                        <span class="kpi-icon ic-pos">◈</span>
                         <span class="kpi-label">Saldo</span>
                     </div>
                     <div class="kpi-pair">
@@ -94,7 +94,7 @@
 
                 <article class="card kpi">
                     <div class="kpi-head">
-                        <span class="kpi-icon" style="background:linear-gradient(135deg,#4fd6ff,#2196f3)">📊</span>
+                        <span class="kpi-icon ic-info">▤</span>
                         <span class="kpi-label">P&amp;L Total</span>
                     </div>
                     <div class="kpi-value" id="kpi-pnl-total">—</div>
@@ -103,7 +103,7 @@
 
                 <article class="card kpi">
                     <div class="kpi-head">
-                        <span class="kpi-icon" style="background:linear-gradient(135deg,#ffb84f,#ff8c00)">📆</span>
+                        <span class="kpi-icon ic-warn">◷</span>
                         <span class="kpi-label">P&amp;L Hoje</span>
                     </div>
                     <div class="kpi-value" id="kpi-pnl-daily">—</div>
@@ -112,7 +112,7 @@
 
                 <article class="card kpi">
                     <div class="kpi-head">
-                        <span class="kpi-icon" style="background:linear-gradient(135deg,#a78bfa,#7c3aed)">⚡</span>
+                        <span class="kpi-icon ic-info">⚡</span>
                         <span class="kpi-label">Funding Fee (acumulado)</span>
                     </div>
                     <div class="kpi-value" id="kpi-funding">—</div>
