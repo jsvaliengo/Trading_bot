@@ -689,9 +689,15 @@ class TradingBot:
                 logger.warning(f"⚠️ Estado carregado do backup: {source_path}")
 
             # Carrega overrides de pares antes da inicialização da estratégia.
+            # disabled_pairs é UNIÃO config ∪ state: um par desabilitado no
+            # config.py (safety: min-notional, par perdedor) NUNCA é re-habilitado
+            # por state antigo — bug que já religou o BTC (erro -4164, 06-07). O
+            # state só ADICIONA desabilitados (ex.: auto-disable runtime), nunca
+            # remove os do config.
             saved_disabled_pairs = state.get('disabled_pairs')
             if saved_disabled_pairs is not None:
-                config.DISABLED_PAIRS = config.normalize_pair_list(saved_disabled_pairs)
+                merged_disabled = list(config.DISABLED_PAIRS or []) + list(saved_disabled_pairs)
+                config.DISABLED_PAIRS = config.normalize_pair_list(merged_disabled)
 
             saved_binance_coin_list = state.get('binance_coin_list')
             if saved_binance_coin_list:
