@@ -293,6 +293,36 @@ def test_load_state_does_not_let_stale_risk_profile_shadow_config(tmp_path):
         config.STRATEGY_PROFILES = original_profiles
 
 
+def test_load_state_disabled_pairs_is_union_config_and_state(tmp_path, monkeypatch):
+    """Regressão: disabled_pairs é UNIÃO config ∪ state, não replace.
+
+    Bug 2026-06-07 (erro -4164): o state sobrescrevia config.DISABLED_PAIRS por
+    completo, então um par desabilitado no config.py (safety) era RE-HABILITADO
+    por um state antigo que não o listava. O load deve manter os do config E
+    somar os do state — nunca remover os do config.
+    """
+    monkeypatch.setattr(config, "DISABLED_PAIRS", ["BTCUSDT", "BNBUSDT"])
+    bot = _make_light_bot()
+    state_file = tmp_path / "bot_state.json"
+    bot._state_file_path = str(state_file)
+    state_file.write_text(
+        json.dumps(
+            {
+                "daily_date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+                # State antigo só tem BTC — NÃO pode religar o BNB do config.
+                "disabled_pairs": ["BTCUSDT", "RIVERUSDT"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert bot.load_state() is True
+
+    disabled = set(config.get_disabled_pairs_set())
+    # BNB do config sobrevive; RIVER do state é somado; BTC em ambos.
+    assert {"BTCUSDT", "BNBUSDT", "RIVERUSDT"}.issubset(disabled)
+
+
 def test_load_state_tolerates_missing_known_positions(tmp_path):
     """State antigo sem o campo known_positions não pode quebrar o load."""
     bot = _make_light_bot()

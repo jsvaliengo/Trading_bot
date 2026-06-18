@@ -977,9 +977,13 @@ class TradingConfig:
                 [p.strip() for p in _raw_uni.split(",") if p.strip()]
             ) if _raw_uni else []
 
-        # Pares desabilitados por padrão (podem ser reabilitados via Telegram)
+        # Pares desabilitados por padrão (safety). BNBUSDT add 2026-06-18:
+        # na mainnet (06-17/18) foi -$2,18 de -$2,27 do prejuízo — 4× LONG
+        # stop-out num downtrend, com slippage de 0,65-0,92% além do stop em
+        # STOP_MARKET. Ver bot.py: disabled_pairs é UNIÃO config ∪ state, então
+        # este default não é desfeito por state antigo.
         if self.DISABLED_PAIRS is None:
-            self.DISABLED_PAIRS = ["BTCUSDT", "RIVERUSDT", "SIGNUSDT"]
+            self.DISABLED_PAIRS = ["BTCUSDT", "RIVERUSDT", "SIGNUSDT", "BNBUSDT"]
         self.DISABLED_PAIRS = self.normalize_pair_list(self.DISABLED_PAIRS)
 
         # Buckets do alerta de drawdown intraday — % do capital, ordem crescente.
