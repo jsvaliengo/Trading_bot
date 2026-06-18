@@ -5,8 +5,9 @@ Cobre:
 - calculate_dca_levels: modo ATR (BASE + (i-1)*INCREMENT) com clamp em
   [MIN_STEP, MAX_STEP], e fallback legado quando ATR é None / USE_ATR_DCA=False.
 - compute_atr_based_trailing: cálculo, clamp em [MIN_PERCENT, MAX_PERCENT],
-  invariante activation >= distance + 0.15% fee_floor, retorna None quando
-  desabilitado ou ATR inválido.
+  activation e distance independentes (sem forçar activation ≥ distance +
+  fee_floor — "breakeven cedo" 2026-06-18), retorna None quando desabilitado
+  ou ATR inválido.
 """
 
 import pytest
@@ -213,12 +214,12 @@ def test_trailing_atr_clamps_low_volatility_to_min(monkeypatch):
     assert distance == pytest.approx(0.20, abs=0.001)
 
 
-def test_trailing_atr_enforces_breakeven_invariant(monkeypatch):
+def test_trailing_atr_does_not_force_activation_above_distance(monkeypatch):
     """
-    Bounds em que activation < distance + 0.15%: deve PUXAR activation pra cima.
-
-    Cenário: bounds desbalanceados (act_max=0.5, dist_min=0.4) com ATR pequeno.
-    Sem o enforcement, activation=0.4 e distance=0.4 violam o invariante.
+    2026-06-18 ("breakeven cedo"): removido o enforcement que puxava a activation
+    pra activation ≥ distance + 0.15%. Agora activation e distance são
+    independentes (cada um no seu clamp); quem protege quando activation <
+    distance é o piso de breakeven em _trailing_stop_price (testado à parte).
     """
     monkeypatch.setattr(config, "USE_ATR_TRAILING", True)
     monkeypatch.setattr(config, "TRAILING_ACTIVATION_ATR_MULT", 2.0)
@@ -228,21 +229,19 @@ def test_trailing_atr_enforces_breakeven_invariant(monkeypatch):
     monkeypatch.setattr(config, "TRAILING_DISTANCE_MIN_PERCENT", 0.20)
     monkeypatch.setattr(config, "TRAILING_DISTANCE_MAX_PERCENT", 1.0)
 
-    # ATR=0.1% → act=0.2% → clamp em 0.40%
-    #        → dist=0.2% → clamp em 0.20%
-    # activation (0.40) ≥ distance (0.20) + 0.15% = 0.35% ✓ (já cumpre)
-    activation, distance = TechnicalAnalysis.compute_atr_based_trailing(100.0, 0.1)
-    assert activation >= distance + 0.15 - 0.001  # margem de float
-
-    # Cenário pior: ATR=0.5%, dist sobe pra 1.0%, act ficaria em 1.0% (= dist) — viola.
+    # ATR=0.5%: act = 0.5×2 = 1.0 (clamp [0.40, 2.0]); dist = 0.5×2 = 1.0 (clamp [0.20, 1.0]).
+    # Antes a activation seria puxada pra 1.15 (= dist + 0.15). Agora fica em 1.0.
     activation, distance = TechnicalAnalysis.compute_atr_based_trailing(100.0, 0.5)
-    assert activation >= distance + 0.15 - 0.001
+    assert activation == pytest.approx(1.0, abs=0.001)
+    assert distance == pytest.approx(1.0, abs=0.001)
 
 
 def test_trailing_atr_uses_default_config_values():
-    """Sanity: com config default do projeto, valores devem estar nos bounds."""
+    """Sanity: com config default do projeto, valores ficam nos bounds atuais."""
     activation, distance = TechnicalAnalysis.compute_atr_based_trailing(100.0, 0.5)
-    assert 0.40 <= activation <= 2.50
-    assert 0.20 <= distance <= 1.50
-    # Invariante de breakeven
-    assert activation >= distance + 0.15 - 0.001
+    assert 1.00 <= activation <= 3.50
+    assert 1.20 <= distance <= 2.50
+    # "breakeven cedo": activation NÃO é mais forçada a ≥ distance + 0.15.
+    # Com os defaults arma em +1.0% (< distance 1.2%); o piso de breakeven protege.
+    assert activation == pytest.approx(1.0, abs=0.001)
+    assert activation < distance + 0.15

@@ -614,12 +614,18 @@ class TradingConfig:
     # cortando 84% dos trades a 0.20-0.47% do pico (avg win $0.13), enquanto
     # os SLs caminhavam até 4-5%. RR realizado=0.12. Distance mínima de 0.50
     # deixa o trade respirar até o TP (1.0-1.8% do risk_profile).
-    # 2026-05-29 ("corda longa"): RR realizado ainda ficava ~0.5:1 porque o
-    # trailing ativava em +0.8% e perseguia a 0.5%, fechando vencedores bem
-    # antes do TP de 2:1. Subimos activation 0.80→1.50 e distance 0.50→1.20
-    # pra deixar os vencedores correrem até o TP (agora 3:1). Breakeven floor
-    # segue protegendo saída ≥ fees depois de ativar. Reavaliar com dados novos.
-    TRAILING_ACTIVATION_MIN_PERCENT: float = _env_float("TRADING_BOT_TRAILING_ACTIVATION_MIN_PERCENT", 1.50)
+    # 2026-05-29 ("corda longa"): RR realizado ficava ~0.5:1 porque o trailing
+    # ativava em +0.8% e perseguia a 0.5%, fechando vencedores antes do TP.
+    # Subimos activation 0.80→1.50 e distance 0.50→1.20 — mas aí surgiu a
+    # assimetria: o trade precisava de +1.5% pra proteger qualquer coisa, então
+    # um "quase-vencedor" (+1.4%) devolvia tudo.
+    # 2026-06-18 ("breakeven cedo"): baixamos só a ACTIVATION (1.50→1.00),
+    # mantendo a DISTANCE em 1.20. Como removemos a regra que empurrava a
+    # activation pra cima (strategy.compute_atr_based_trailing), agora o trailing
+    # ARMA em +1.0% e o piso de breakeven trava a saída em entrada+fees na hora
+    # — protege o quase-vencedor — enquanto a distância larga (1.20%) deixa os
+    # vencedores correrem até o pico passar de ~1.35% e o trail largar normal.
+    TRAILING_ACTIVATION_MIN_PERCENT: float = _env_float("TRADING_BOT_TRAILING_ACTIVATION_MIN_PERCENT", 1.00)
     TRAILING_ACTIVATION_MAX_PERCENT: float = _env_float("TRADING_BOT_TRAILING_ACTIVATION_MAX_PERCENT", 3.50)
     TRAILING_DISTANCE_MIN_PERCENT: float = _env_float("TRADING_BOT_TRAILING_DISTANCE_MIN_PERCENT", 1.20)
     TRAILING_DISTANCE_MAX_PERCENT: float = _env_float("TRADING_BOT_TRAILING_DISTANCE_MAX_PERCENT", 2.50)

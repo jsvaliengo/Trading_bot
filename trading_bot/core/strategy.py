@@ -368,15 +368,15 @@ class TechnicalAnalysis:
         activation = max(act_min, min(atr_pct * act_mult, act_max))
         distance = max(dist_min, min(atr_pct * dist_mult, dist_max))
 
-        # Invariante de breakeven (mesmo fee_floor usado em validate_params)
-        fee_floor_pct = 0.15
-        min_activation = distance + fee_floor_pct
-        if activation < min_activation:
-            activation = min(min_activation, act_max)
-            # Se o teto da activation não cobre o piso, encolhe a distância
-            if activation < min_activation:
-                distance = max(dist_min, activation - fee_floor_pct)
-
+        # NÃO forçamos mais activation ≥ distance + fee_floor (era a regra
+        # "corda longa", que pinava a activation no piso e impedia armar cedo).
+        # Objetivo 2026-06-18 ("breakeven cedo"): deixar o trailing ARMAR mais
+        # cedo (activation pode ser < distance) mantendo a distância larga pros
+        # vencedores correrem. Quando activation < distance, o piso de breakeven
+        # em _trailing_stop_price pina o stop em entrada+fees assim que arma —
+        # protege o "quase-vencedor" sem virar prejuízo — e o trailing larga
+        # normal quando o pico passa de distance+fee_floor. activation e distance
+        # ficam independentes, cada um no seu clamp.
         return (round(activation, 4), round(distance, 4))
 
     @staticmethod
