@@ -2962,3 +2962,42 @@ def test_global_stop_loss_triggers_on_real_drawdown(monkeypatch):
     )
     # -50 / 300 = 16.7% >= 15% → dispara
     assert bot.check_global_stop_loss() is True
+
+
+def test_execute_signal_trade_blocks_opposite_side_same_pair(monkeypatch):
+    """#173: não abrir o lado OPOSTO se já há posição aberta nesse par (anti-hedge)."""
+    bot = _make_light_bot()
+    placed = []
+    notify_block = MagicMock(return_value=True)
+
+    bot.exchange = SimpleNamespace(
+        get_symbol_price=lambda _s: 100.0,
+        get_symbol_info=lambda _s: {"minNotional": 5.0, "pricePrecision": 2},
+        place_market_order=lambda **k: placed.append(k) or {"orderId": 1},
+        set_stop_loss_take_profit=lambda **_k: True,
+        get_account_balance=lambda: 1000.0,
+        get_symbol_cooldown_info=lambda _s: None,
+    )
+    bot.telegram = SimpleNamespace(send_trade_alert=lambda **_k: True, send_message=MagicMock(return_value=True))
+    bot._get_total_open_notional_percent = lambda: 0.0
+    bot.block_reporter.notify_blocked = notify_block
+
+    monkeypatch.setattr(config, "CHECK_FUNDING_RATE", False)
+    monkeypatch.setattr(config, "USE_BINANCE_STRATEGY", False)
+    monkeypatch.setattr(config, "MAX_TOTAL_NOTIONAL_PERCENT", 999.0)
+    monkeypatch.setattr(config, "MAX_POSITION_CONCENTRATION_PERCENT", 100.0)
+
+    # Já existe ETHUSDT LONG aberta
+    bot.known_positions["ETHUSDT_LONG"] = {
+        "symbol": "ETHUSDT", "side": "LONG", "entry_price": 100.0, "quantity": 1.0,
+    }
+
+    short_setup = TradeSetup(
+        symbol="ETHUSDT", signal=Signal.STRONG_SELL, long_size=3.0, short_size=3.0,
+        entry_price=100.0, stop_loss=101.0, take_profit=98.0, dca_levels=[],
+    )
+    # SHORT no mesmo par deve ser BLOQUEADO
+    assert bot.execute_signal_trade(short_setup, open_short=True, strategy_name="trend_strong") is False
+    assert placed == []  # nenhuma ordem enviada
+    assert notify_block.called
+    assert "oposta" in (notify_block.call_args.kwargs.get("reason", "").lower())
