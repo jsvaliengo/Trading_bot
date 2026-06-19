@@ -6,343 +6,182 @@
     <title>Trading Bot — {{ environment|upper }}</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
 <body data-environment="{{ environment }}" data-poll-interval="{{ poll_interval }}">
 
-    <div class="app-shell">
+    <!-- ═══════════ COMMAND BAR ═══════════ -->
+    <header class="cmd">
+        <div class="brand"><span class="brand-mark">⟁</span><span class="brand-name">Trading Bot</span></div>
+        <span class="env-pill env-{{ environment }}">{{ environment|upper }}</span>
+        <div class="cmd-status">
+            <span class="status-pill" id="status-running">—</span>
+            <span class="status-pill" id="status-ai">AI: —</span>
+        </div>
+        <div class="cmd-spacer"></div>
+        <span class="cmd-update" id="page-sub">Atualizado <span id="kpi-last-update">—</span> · <span id="kpi-next-update" class="next-update">próxima em —</span></span>
+        <div class="cmd-ctrls">
+            <button class="btn btn-warning" id="btn-pause" data-action="pause"><span>⏸</span><span class="btn-lbl">Pausar</span></button>
+            <button class="btn btn-success" id="btn-resume" data-action="resume"><span>▶</span><span class="btn-lbl">Retomar</span></button>
+            <button class="btn btn-danger" id="btn-close-all" data-action="close_all"><span>⚠</span><span class="btn-lbl">Fechar tudo</span></button>
+            <button class="btn btn-icon" id="theme-toggle" title="Alternar tema">
+                <span class="theme-icon-dark">🌙</span><span class="theme-icon-light">☀</span>
+            </button>
+        </div>
+        <span class="status-pill conn-pill" id="status-connection">conectando…</span>
+    </header>
 
-        <!-- ═══════════════ SIDEBAR ═══════════════ -->
-        <aside class="sidebar" id="sidebar">
-            <div class="sidebar-top">
-                <div class="brand">
-                    <span class="brand-mark">⟁</span>
-                    <span class="brand-name">Trading Bot</span>
+    <div class="wrap">
+
+        <!-- ═══════════ KPIs com sparkline ═══════════ -->
+        <section class="kpis">
+            <article class="card kpi">
+                <div class="kpi-l">Equity</div>
+                <div class="kpi-v" id="kpi-balance">—</div>
+                <div class="kpi-d">
+                    <span id="kpi-balance-delta">—</span>
+                    <svg class="spark" id="sp-equity" aria-hidden="true"></svg>
                 </div>
-                <button class="nav-toggle" id="nav-toggle" aria-label="Abrir menu" aria-expanded="false">☰</button>
-            </div>
+                <div class="kpi-foot">inicial <span id="kpi-initial">—</span></div>
+            </article>
 
-            <div class="env-pill env-{{ environment }}">{{ environment|upper }}</div>
-
-            <nav class="nav">
-                <button class="nav-item active" data-target="dashboard-view">
-                    <span class="nav-icon">⌂</span><span>Dashboard</span>
-                </button>
-                <button class="nav-item" data-target="positions-view">
-                    <span class="nav-icon">▣</span><span>Posições</span>
-                </button>
-                <button class="nav-item" data-target="trades-view">
-                    <span class="nav-icon">⇄</span><span>Trades</span>
-                </button>
-                <button class="nav-item" data-target="regime-view">
-                    <span class="nav-icon">🌀</span><span>Regime</span>
-                </button>
-                <button class="nav-item" data-target="analysis-view">
-                    <span class="nav-icon">📈</span><span>Análise</span>
-                </button>
-                <button class="nav-item" data-target="historico-view">
-                    <span class="nav-icon">📅</span><span>Histórico</span>
-                </button>
-            </nav>
-
-            <div class="sidebar-footer">
-                <button id="theme-toggle" class="theme-toggle" title="Alternar tema">
-                    <span class="theme-icon-dark">🌙</span>
-                    <span class="theme-icon-light">☀</span>
-                </button>
-                <div class="connection-indicator">
-                    <span class="status-pill" id="status-connection">conectando…</span>
+            <article class="card kpi">
+                <div class="kpi-l">P&amp;L Total</div>
+                <div class="kpi-v" id="kpi-pnl-total">—</div>
+                <div class="kpi-d">
+                    <span id="kpi-roi">ROI —</span>
+                    <svg class="spark" id="sp-pnl" aria-hidden="true"></svg>
                 </div>
-            </div>
-        </aside>
+            </article>
 
-        <!-- ═══════════════ MAIN ═══════════════ -->
-        <main class="main">
-
-            <header class="topbar">
-                <div>
-                    <h1 class="page-title" id="page-title">Dashboard</h1>
-                    <p class="page-sub" id="page-sub">Atualizado: <span id="kpi-last-update">—</span> · <span id="kpi-next-update" class="next-update">próxima em —</span></p>
+            <article class="card kpi">
+                <div class="kpi-l">P&amp;L Hoje</div>
+                <div class="kpi-v" id="kpi-pnl-daily">—</div>
+                <div class="kpi-d">
+                    <span id="kpi-closed-trades">— trades</span>
+                    <svg class="spark" id="sp-daily" aria-hidden="true"></svg>
                 </div>
-                <div class="topbar-actions">
-                    <span class="status-pill" id="status-running">—</span>
-                    <span class="status-pill" id="status-ai">AI: —</span>
+            </article>
+
+            <article class="card kpi">
+                <div class="kpi-l">Win rate</div>
+                <div class="kpi-v" id="kpi-winrate">—</div>
+                <div class="kpi-d">
+                    <span id="kpi-winloss">—</span>
+                    <canvas class="donut-mini" id="dm-winrate" width="36" height="36"></canvas>
                 </div>
-            </header>
+            </article>
 
-            <!-- KPIs -->
-            <section class="kpi-row">
-                <article class="card kpi kpi-split">
-                    <div class="kpi-head">
-                        <span class="kpi-icon ic-pos">◈</span>
-                        <span class="kpi-label">Saldo</span>
-                    </div>
-                    <div class="kpi-pair">
-                        <div class="kpi-pair-col">
-                            <span class="kpi-pair-label">Atual</span>
-                            <span class="kpi-value" id="kpi-balance">—</span>
-                        </div>
-                        <div class="kpi-pair-sep"></div>
-                        <div class="kpi-pair-col">
-                            <span class="kpi-pair-label">Inicial</span>
-                            <span class="kpi-value kpi-value-muted" id="kpi-initial">—</span>
-                        </div>
-                    </div>
-                    <div class="kpi-sub" id="kpi-balance-delta">—</div>
-                </article>
+            <article class="card kpi">
+                <div class="kpi-l">MFE médio</div>
+                <div class="kpi-v" id="kpi-mfe">—</div>
+                <div class="kpi-d"><span id="kpi-mfe-sub" class="kpi-mfe-sub">—</span></div>
+            </article>
 
-                <article class="card kpi">
-                    <div class="kpi-head">
-                        <span class="kpi-icon ic-info">▤</span>
-                        <span class="kpi-label">P&amp;L Total</span>
-                    </div>
-                    <div class="kpi-value" id="kpi-pnl-total">—</div>
-                    <div class="kpi-sub" id="kpi-roi">ROI: —</div>
-                </article>
+            <article class="card kpi">
+                <div class="kpi-l">Funding acum.</div>
+                <div class="kpi-v" id="kpi-funding">—</div>
+                <div class="kpi-d"><span id="kpi-funding-sub">—</span></div>
+            </article>
+        </section>
 
-                <article class="card kpi">
-                    <div class="kpi-head">
-                        <span class="kpi-icon ic-warn">◷</span>
-                        <span class="kpi-label">P&amp;L Hoje</span>
-                    </div>
-                    <div class="kpi-value" id="kpi-pnl-daily">—</div>
-                    <div class="kpi-sub" id="kpi-closed-trades">Trades fechados: —</div>
-                </article>
+        <!-- ═══════════ BODY: main + side ═══════════ -->
+        <section class="body">
 
-                <article class="card kpi">
-                    <div class="kpi-head">
-                        <span class="kpi-icon ic-info">⚡</span>
-                        <span class="kpi-label">Funding Fee (acumulado)</span>
-                    </div>
-                    <div class="kpi-value" id="kpi-funding">—</div>
-                    <div class="kpi-sub" id="kpi-funding-sub">—</div>
-                </article>
-            </section>
-
-            <!-- DASHBOARD VIEW (default) -->
-            <section class="view active" id="dashboard-view">
-
-                <!-- Posições compactas + Regime -->
-                <div class="two-col">
-                    <article class="card">
-                        <header class="card-head">
-                            <h2>Posições abertas</h2>
-                            <span class="badge" id="positions-count">0</span>
-                        </header>
-                        <div class="table-scroll compact">
-                            <table class="table" id="positions-table-compact">
-                                <thead>
-                                    <tr><th>Par</th><th>Lado</th><th>Entrada</th><th>P&amp;L</th></tr>
-                                </thead>
-                                <tbody><tr><td colspan="4" class="empty">Sem posições.</td></tr></tbody>
-                            </table>
-                        </div>
-                    </article>
-
-                    <article class="card">
-                        <header class="card-head">
-                            <h2>Regime Classifier</h2>
-                            <span class="card-sub" id="regime-status">—</span>
-                        </header>
-                        <div class="table-scroll compact">
-                            <table class="table" id="regime-table-compact">
-                                <thead><tr><th>Par</th><th>Regime</th></tr></thead>
-                                <tbody><tr><td colspan="2" class="empty">Sem dados ainda.</td></tr></tbody>
-                            </table>
-                        </div>
-                    </article>
-                </div>
-
-                <!-- Equity Chart -->
+            <!-- MAIN -->
+            <div class="col">
                 <article class="card chart-card">
-                    <header class="card-head">
-                        <div>
-                            <h2>Equity</h2>
-                            <p class="card-sub" id="chart-range">—</p>
-                        </div>
-                        <div class="chart-tabs">
-                            <button class="chip active" data-range="all">Tudo</button>
+                    <header class="ch">
+                        <div><h2>Equity</h2><p class="cs" id="chart-range">—</p></div>
+                        <div class="chips">
+                            <button class="chip on" data-range="all">Tudo</button>
                             <button class="chip" data-range="24h">24h</button>
                             <button class="chip" data-range="6h">6h</button>
                             <button class="chip" data-range="1h">1h</button>
                         </div>
                     </header>
-                    <div id="equity-chart" class="chart-canvas"></div>
+                    <div class="cv" style="height:210px"><canvas id="equity-chart"></canvas></div>
                 </article>
-            </section>
 
-            <!-- POSITIONS VIEW (full) -->
-            <section class="view" id="positions-view">
                 <article class="card">
-                    <header class="card-head">
-                        <h2>Posições abertas</h2>
-                        <span class="badge" id="positions-count-full">0</span>
-                    </header>
-                    <div class="table-scroll">
-                        <table class="table" id="positions-table">
-                            <thead>
-                                <tr>
-                                    <th>Par</th><th>Lado</th><th>Entrada</th><th>Atual</th>
-                                    <th>Qtd</th><th>P&amp;L</th><th>Estratégia</th>
-                                    <th>SL</th><th>TP</th><th>Trailing</th>
-                                </tr>
-                            </thead>
-                            <tbody><tr><td colspan="10" class="empty">Sem posições.</td></tr></tbody>
-                        </table>
-                    </div>
+                    <header class="ch"><h2>Posições abertas</h2><span class="badge" id="positions-count">0</span></header>
+                    <div id="positions-list"><div class="empty">Sem posições.</div></div>
                 </article>
-            </section>
 
-            <!-- TRADES VIEW (full) -->
-            <section class="view" id="trades-view">
                 <article class="card">
-                    <header class="card-head">
-                        <h2>Trades recentes</h2>
-                        <span class="badge" id="trades-count">0</span>
-                    </header>
+                    <header class="ch"><div><h2>Trades recentes</h2><p class="cs">régua = excursão favorável (MFE)</p></div><span class="badge" id="trades-count">0</span></header>
                     <div class="table-scroll">
                         <table class="table" id="trades-table">
-                            <thead>
-                                <tr>
-                                    <th>Horário</th><th>Par</th><th>Lado</th><th>Entrada</th>
-                                    <th>Saída</th><th>Taxas</th><th>P&amp;L bruto</th>
-                                    <th>P&amp;L líquido</th><th>Motivo</th>
-                                </tr>
-                            </thead>
-                            <tbody><tr><td colspan="9" class="empty">Sem trades ainda.</td></tr></tbody>
+                            <thead><tr>
+                                <th>Horário</th><th>Par</th><th>Lado</th><th class="r">Entrada</th>
+                                <th class="r">Saída</th><th class="r">P&amp;L líq.</th><th>MFE</th><th>Motivo</th>
+                            </tr></thead>
+                            <tbody><tr><td colspan="8" class="empty">Sem trades ainda.</td></tr></tbody>
                         </table>
                     </div>
                 </article>
-            </section>
+            </div>
 
-            <!-- REGIME VIEW (full) -->
-            <section class="view" id="regime-view">
+            <!-- SIDE -->
+            <div class="col">
                 <article class="card">
-                    <header class="card-head">
-                        <h2>Regime Classifier</h2>
-                        <span class="card-sub" id="regime-status-full">—</span>
-                    </header>
-                    <div class="table-scroll">
-                        <table class="table" id="regime-table">
-                            <thead>
-                                <tr><th>Par</th><th>Regime comitado</th><th>Janela (hysteresis)</th></tr>
-                            </thead>
-                            <tbody><tr><td colspan="3" class="empty">Sem dados ainda.</td></tr></tbody>
-                        </table>
-                    </div>
-                </article>
-            </section>
-
-            <!-- ANÁLISE (P&L Analysis) VIEW -->
-            <section class="view" id="analysis-view">
-                <article class="card">
-                    <header class="card-head">
-                        <h2>Análise de P&amp;L</h2>
-                        <span class="card-sub" id="analysis-summary">—</span>
-                    </header>
-                    <div class="pnl-stats">
-                        <div class="pnl-stats-col">
-                            <div class="pnl-stat"><span class="pnl-stat-label">Total Profit</span><span class="pnl-stat-value" id="an-total-profit">—</span></div>
-                            <div class="pnl-stat"><span class="pnl-stat-label">Total Loss</span><span class="pnl-stat-value" id="an-total-loss">—</span></div>
-                            <div class="pnl-stat"><span class="pnl-stat-label">Net Profit/Loss</span><span class="pnl-stat-value" id="an-net-pnl">—</span></div>
-                            <div class="pnl-stat"><span class="pnl-stat-label">Trading Volume</span><span class="pnl-stat-value" id="an-volume">—</span></div>
-                            <div class="pnl-stat"><span class="pnl-stat-label">Win Rate</span><span class="pnl-stat-value" id="an-win-rate">—</span></div>
-                            <div class="pnl-stat"><span class="pnl-stat-label">Winning Days</span><span class="pnl-stat-value" id="an-winning-days">—</span></div>
-                        </div>
-                        <div class="pnl-stats-col">
-                            <div class="pnl-stat"><span class="pnl-stat-label">Losing Days</span><span class="pnl-stat-value" id="an-losing-days">—</span></div>
-                            <div class="pnl-stat"><span class="pnl-stat-label">Breakeven Days</span><span class="pnl-stat-value" id="an-breakeven-days">—</span></div>
-                            <div class="pnl-stat"><span class="pnl-stat-label">Average Profit</span><span class="pnl-stat-value" id="an-avg-profit">—</span></div>
-                            <div class="pnl-stat"><span class="pnl-stat-label">Average Loss</span><span class="pnl-stat-value" id="an-avg-loss">—</span></div>
-                            <div class="pnl-stat"><span class="pnl-stat-label">Profit/Loss Ratio</span><span class="pnl-stat-value" id="an-pl-ratio">—</span></div>
-                            <div class="pnl-stat"><span class="pnl-stat-label">Trades fechados</span><span class="pnl-stat-value" id="an-trades">—</span></div>
+                    <header class="ch"><h2>Win / Loss</h2><span class="cs" id="winloss-sub">—</span></header>
+                    <div class="winloss">
+                        <canvas id="winloss-chart" width="92" height="92"></canvas>
+                        <div class="wl-txt">
+                            <span class="wl-big" id="an-win-rate">—</span>
+                            <span class="wl-sub" id="an-trades">—</span>
+                            <span class="wl-sub">P/L ratio <b id="an-pl-ratio">—</b></span>
                         </div>
                     </div>
-                </article>
-
-                <article class="card chart-card">
-                    <header class="card-head">
-                        <h2>Daily PNL</h2>
-                        <span class="card-sub">P&amp;L líquido por dia (UTC)</span>
-                    </header>
-                    <div id="daily-pnl-chart" class="chart-canvas"></div>
-                </article>
-
-                <article class="card chart-card">
-                    <header class="card-head">
-                        <h2>Cumulative PNL</h2>
-                        <span class="card-sub">P&amp;L acumulado (líquido de taxas)</span>
-                    </header>
-                    <div id="cumulative-pnl-chart" class="chart-canvas"></div>
-                </article>
-            </section>
-
-            <!-- HISTÓRICO POR DIA VIEW -->
-            <section class="view" id="historico-view">
-                <article class="card">
-                    <header class="card-head">
-                        <h2>Histórico por dia</h2>
-                        <span class="card-sub" id="historico-summary">—</span>
-                    </header>
-                    <div class="table-scroll">
-                        <table class="table" id="historico-table">
-                            <thead>
-                                <tr>
-                                    <th>Dia (UTC)</th><th>Trades</th><th>Win rate</th>
-                                    <th>Taxas</th><th>P&amp;L do dia</th><th>Acumulado</th>
-                                </tr>
-                            </thead>
-                            <tbody><tr><td colspan="6" class="empty">Sem histórico ainda.</td></tr></tbody>
-                        </table>
+                    <div class="stat-grid">
+                        <div class="stat"><span class="stat-l">Total Profit</span><span class="stat-v" id="an-total-profit">—</span></div>
+                        <div class="stat"><span class="stat-l">Total Loss</span><span class="stat-v" id="an-total-loss">—</span></div>
+                        <div class="stat"><span class="stat-l">Avg Profit</span><span class="stat-v" id="an-avg-profit">—</span></div>
+                        <div class="stat"><span class="stat-l">Avg Loss</span><span class="stat-v" id="an-avg-loss">—</span></div>
+                        <div class="stat"><span class="stat-l">Volume</span><span class="stat-v" id="an-volume">—</span></div>
+                        <div class="stat"><span class="stat-l">Dias +/−</span><span class="stat-v" id="an-days">—</span></div>
                     </div>
                 </article>
-            </section>
-        </main>
 
-        <!-- ═══════════════ RIGHT PANEL ═══════════════ -->
-        <aside class="rightbar">
+                <article class="card">
+                    <header class="ch"><h2>P&amp;L por moeda</h2><span class="cs">líquido</span></header>
+                    <div id="pnl-symbol-list"><div class="empty">Sem dados.</div></div>
+                </article>
 
-            <!-- Hero Equity card (gradient) -->
-            <article class="card hero-card">
-                <div class="hero-bg"></div>
-                <span class="hero-label">Equity total</span>
-                <div class="hero-value" id="hero-balance">—</div>
-                <div class="hero-meta">
-                    <span class="hero-meta-label">Posições abertas</span>
-                    <span class="hero-meta-value" id="hero-positions">—</span>
-                </div>
-            </article>
+                <article class="card">
+                    <header class="ch"><div><h2>Distribuição do MFE</h2><p class="cs">até onde os trades vão</p></div></header>
+                    <div class="cv" style="height:140px"><canvas id="mfe-chart"></canvas></div>
+                    <div class="mfe-note" id="mfe-note">—</div>
+                </article>
 
-            <!-- Controles -->
-            <article class="card">
-                <header class="card-head">
-                    <h2>Controles</h2>
-                </header>
-                <div class="controls-grid">
-                    <button class="btn btn-warning" id="btn-pause" data-action="pause">
-                        <span class="btn-icon">⏸</span><span>Pausar</span>
-                    </button>
-                    <button class="btn btn-success" id="btn-resume" data-action="resume">
-                        <span class="btn-icon">▶</span><span>Retomar</span>
-                    </button>
-                    <button class="btn btn-danger btn-full" id="btn-close-all" data-action="close_all">
-                        <span class="btn-icon">🚨</span><span>Fechar Tudo</span>
-                    </button>
-                </div>
-            </article>
+                <article class="card">
+                    <header class="ch"><h2>Regime</h2><span class="cs" id="regime-status">—</span></header>
+                    <div id="regime-list"><div class="empty">Sem dados ainda.</div></div>
+                </article>
+            </div>
+        </section>
 
-            <!-- Atividade compact -->
-            <article class="card">
-                <header class="card-head">
-                    <h2>Atividade</h2>
-                    <span class="card-sub">Últimos trades</span>
-                </header>
-                <div class="activity-list" id="activity-list">
-                    <div class="activity-empty">Sem trades ainda.</div>
-                </div>
-            </article>
-        </aside>
+        <!-- ═══════════ DRAWDOWN ═══════════ -->
+        <article class="card chart-card">
+            <header class="ch"><div><h2>Drawdown</h2><p class="cs">recuo desde o pico de equity</p></div></header>
+            <div class="cv" style="height:150px"><canvas id="drawdown-chart"></canvas></div>
+        </article>
+
+        <!-- ═══════════ HISTÓRICO POR DIA ═══════════ -->
+        <article class="card">
+            <header class="ch"><h2>Histórico por dia</h2><span class="cs" id="historico-summary">—</span></header>
+            <div class="table-scroll">
+                <table class="table" id="historico-table">
+                    <thead><tr>
+                        <th>Dia (UTC)</th><th class="r">Trades</th><th class="r">Win rate</th>
+                        <th class="r">Taxas</th><th class="r">P&amp;L do dia</th><th class="r">Acumulado</th>
+                    </tr></thead>
+                    <tbody><tr><td colspan="6" class="empty">Sem histórico ainda.</td></tr></tbody>
+                </table>
+            </div>
+        </article>
     </div>
 
     <!-- Modal de confirmação -->
@@ -357,7 +196,7 @@
         </div>
     </div>
 
-    <script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"></script>
+    <script src="https://unpkg.com/chart.js@4.4.1/dist/chart.umd.js"></script>
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script src="{{ url_for('static', filename='js/main.js') }}"></script>
 </body>

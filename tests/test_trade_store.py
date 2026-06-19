@@ -2,6 +2,8 @@
 
 from datetime import datetime
 
+import pytest
+
 from trading_bot.core.trade_store import TradeStore
 
 
@@ -93,6 +95,41 @@ def test_close_mfe_pct_defaults_to_none(tmp_path):
         close_reason="take_profit", strategy_name="primary",
     )
     assert store.recent_trades()[0]["mfe_pct"] is None
+
+
+def _mk_close(store, symbol, side, pnl, mfe=None):
+    store.record_open(_open_record(symbol=symbol, side=side))
+    store.record_close(
+        symbol=symbol, side=side, entry_price=100.0, exit_price=101.0,
+        exit_at="2026-06-18T11:00:00", pnl_gross=pnl, pnl_net=pnl, fees=0.0,
+        close_reason="x", strategy_name="primary", mfe_pct=mfe,
+    )
+
+
+def test_pnl_by_symbol_aggregates_and_sorts(tmp_path):
+    store = _store(tmp_path)
+    _mk_close(store, "BNBUSDT", "LONG", -2.0)
+    _mk_close(store, "BNBUSDT", "LONG", -0.18)
+    _mk_close(store, "ETHUSDT", "SHORT", 0.51)
+    rows = store.pnl_by_symbol()
+    by = {r["symbol"]: r for r in rows}
+    assert by["BNBUSDT"]["net"] == -2.18 and by["BNBUSDT"]["trades"] == 2
+    assert by["ETHUSDT"]["net"] == 0.51
+    # ordena por |net| desc → BNB primeiro
+    assert rows[0]["symbol"] == "BNBUSDT"
+
+
+def test_mfe_distribution_buckets_and_avg(tmp_path):
+    store = _store(tmp_path)
+    for v in [0.1, 0.3, 0.4, 0.6, 1.2, 2.0]:
+        _mk_close(store, "ETHUSDT", "LONG", 0.1, mfe=v)
+    _mk_close(store, "ETHUSDT", "LONG", 0.1, mfe=None)  # ignorado (sem MFE)
+    d = store.mfe_distribution(edges=[0.25, 0.5, 0.75, 1.0, 1.5])
+    assert d["n"] == 6
+    # buckets: [<.25]=0.1 →1 ; [.25-.5]=0.3,0.4 →2 ; [.5-.75]=0.6 →1 ; [.75-1]=0 ; [1-1.5]=1.2 →1 ; [1.5+]=2.0 →1
+    assert d["counts"] == [1, 2, 1, 0, 1, 1]
+    assert d["avg"] == pytest.approx((0.1 + 0.3 + 0.4 + 0.6 + 1.2 + 2.0) / 6, abs=0.001)
+    assert len(d["labels"]) == 6
 
 
 def test_close_without_open_inserts_close_only(tmp_path):
