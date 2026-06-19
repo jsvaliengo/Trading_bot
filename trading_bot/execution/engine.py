@@ -174,6 +174,33 @@ class ExecutionEngine:
             )
             return False
 
+        # Guard anti-hedge: não abrir o lado OPOSTO se já há posição aberta nesse
+        # par. Estratégia é direcional — carregar LONG e SHORT no mesmo símbolo ao
+        # mesmo tempo paga fee dos dois lados com exposição líquida ~zero e gera
+        # SL/TP conflitantes (issue #173). O lado existente segue até fechar por
+        # SL/TP/trailing; só então o oposto pode entrar.
+        if requested_side in ("LONG", "SHORT"):
+            opposite = "SHORT" if requested_side == "LONG" else "LONG"
+            # PositionTracker.get retorna {} (falsy) quando não há posição — usar
+            # truthiness, NÃO `is not None` (dict vazio não é None).
+            if bot.positions.get(f"{symbol}_{opposite}"):
+                logger.info(
+                    f"🚫 {symbol}: já existe posição {opposite} aberta — "
+                    f"entrada {requested_side} cancelada (sem hedge no mesmo par)"
+                )
+                bot.block_reporter.notify_blocked(
+                    symbol=symbol,
+                    side=requested_side,
+                    strategy_name=strategy_name,
+                    reason="Posição oposta já aberta no mesmo par",
+                    detail=(
+                        f"Já existe {symbol} {opposite} aberta; não abrir o lado "
+                        f"oposto (estratégia direcional, sem hedge)."
+                    ),
+                    setup_metadata=setup_metadata,
+                )
+                return False
+
         def _safe_float(value):
             try:
                 return float(value)
