@@ -41,8 +41,37 @@ def collect_snapshot(bot) -> Dict[str, Any]:
         "portfolio_history": collect_portfolio_history(bot, limit=200),
         "daily_history": collect_daily_history(bot),
         "pnl_analysis": collect_pnl_analysis(bot),
+        "pnl_by_symbol": collect_pnl_by_symbol(bot),
+        "mfe_distribution": collect_mfe_distribution(bot),
         "server_time": datetime.utcnow().isoformat() + "Z",
     }
+
+
+def collect_pnl_by_symbol(bot) -> List[Dict[str, Any]]:
+    """P&L líquido por moeda (trades fechados) — viz "P&L por moeda"."""
+    store = getattr(bot, "trade_store", None)
+    if store is None:
+        return []
+    try:
+        return store.pnl_by_symbol()
+    except Exception:
+        return []
+
+
+def collect_mfe_distribution(bot) -> Dict[str, Any]:
+    """Distribuição do MFE + o gatilho de ativação do trailing (linha de
+    referência na viz)."""
+    store = getattr(bot, "trade_store", None)
+    base = {"labels": [], "counts": [], "edges": [], "avg": 0.0, "n": 0}
+    if store is not None:
+        try:
+            base = store.mfe_distribution()
+        except Exception:
+            pass
+    base["activation_pct"] = _safe_float(
+        getattr(config, "TRAILING_ACTIVATION_MIN_PERCENT", 0.0)
+    )
+    return base
 
 
 def collect_pnl_analysis(bot) -> Dict[str, Any]:
@@ -282,7 +311,35 @@ def collect_positions(bot) -> List[Dict[str, Any]]:
 
 
 def collect_recent_trades(bot, limit: int = 20) -> List[Dict[str, Any]]:
-    """Últimos trades fechados (do trade_history do bot)."""
+    """Últimos trades — fonte: TradeStore durável (traz o mfe_pct, fonte de
+    verdade). Fallback no trade_history em memória se não houver store."""
+    store = getattr(bot, "trade_store", None)
+    if store is not None:
+        try:
+            rows = store.recent_trades(limit)  # cronológico
+            out = [
+                {
+                    "timestamp": _iso(e.get("timestamp")) or e.get("timestamp"),
+                    "symbol": e.get("symbol", ""),
+                    "side": e.get("side", ""),
+                    "signal": e.get("signal", ""),
+                    "entry_price": _safe_float(e.get("entry_price")),
+                    "exit_price": _safe_float(e.get("exit_price")),
+                    "pnl_net": _safe_float(e.get("pnl_net")),
+                    "pnl_gross": _safe_float(e.get("pnl_gross")),
+                    "fees": _safe_float(e.get("fees")),
+                    "strategy_name": e.get("strategy_name", "primary"),
+                    "close_reason": e.get("close_reason", ""),
+                    "mfe_pct": e.get("mfe_pct"),
+                }
+                for e in rows
+                if isinstance(e, dict)
+            ]
+            out.reverse()  # mais recentes primeiro
+            return out
+        except Exception:
+            pass
+
     history = getattr(bot, "trade_history", []) or []
     out: List[Dict[str, Any]] = []
     for entry in history[-limit:]:
@@ -301,9 +358,9 @@ def collect_recent_trades(bot, limit: int = 20) -> List[Dict[str, Any]]:
                 "fees": _safe_float(entry.get("fees")),
                 "strategy_name": entry.get("strategy_name", "primary"),
                 "close_reason": entry.get("close_reason", ""),
+                "mfe_pct": entry.get("mfe_pct"),
             }
         )
-    # Mais recentes primeiro
     out.reverse()
     return out
 

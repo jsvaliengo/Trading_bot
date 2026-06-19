@@ -590,6 +590,67 @@ class TradeStore:
             "breakeven_days": breakeven_days,
         }
 
+    def pnl_by_symbol(self) -> List[Dict[str, Any]]:
+        """P&L líquido acumulado por símbolo (trades fechados), do maior |valor|
+        pro menor. Base da viz "P&L por moeda" do dashboard."""
+        try:
+            with self._lock:
+                rows = self._conn.execute(
+                    "SELECT symbol, COALESCE(SUM(pnl_net),0) AS net, COUNT(*) AS trades "
+                    "FROM trades WHERE status='closed' GROUP BY symbol"
+                ).fetchall()
+        except Exception:
+            logger.exception("🗃️ Falha ao agregar P&L por símbolo")
+            return []
+        out = [
+            {
+                "symbol": r["symbol"],
+                "net": round(float(r["net"] or 0.0), 4),
+                "trades": int(r["trades"] or 0),
+            }
+            for r in rows
+        ]
+        out.sort(key=lambda d: abs(d["net"]), reverse=True)
+        return out
+
+    def mfe_distribution(self, edges: Optional[List[float]] = None) -> Dict[str, Any]:
+        """Histograma da Maximum Favorable Excursion (mfe_pct) dos trades fechados.
+
+        edges: limites dos buckets em % (ex.: [0.25,0.5,0.75,1.0,1.5]). Retorna
+        labels, counts (1 bucket a mais que edges, p/ "acima do último"), avg e n
+        (trades com MFE medido). Base da viz "até onde os trades vão" — calibra o
+        gatilho do trailing com dado, não com impressão."""
+        if not edges:
+            edges = [0.25, 0.5, 0.75, 1.0, 1.5]
+        try:
+            with self._lock:
+                rows = self._conn.execute(
+                    "SELECT mfe_pct FROM trades "
+                    "WHERE status='closed' AND mfe_pct IS NOT NULL"
+                ).fetchall()
+        except Exception:
+            logger.exception("🗃️ Falha ao ler MFE para distribuição")
+            rows = []
+        vals = [float(r["mfe_pct"]) for r in rows if r["mfe_pct"] is not None]
+        counts = [0] * (len(edges) + 1)
+        for v in vals:
+            placed = False
+            for i, e in enumerate(edges):
+                if v < e:
+                    counts[i] += 1
+                    placed = True
+                    break
+            if not placed:
+                counts[-1] += 1
+        labels: List[str] = []
+        prev = 0.0
+        for e in edges:
+            labels.append(f"{prev:g}-{e:g}")
+            prev = e
+        labels.append(f"{prev:g}+")
+        avg = round(sum(vals) / len(vals), 4) if vals else 0.0
+        return {"labels": labels, "counts": counts, "edges": edges, "avg": avg, "n": len(vals)}
+
     def count_trades(self) -> int:
         try:
             with self._lock:
