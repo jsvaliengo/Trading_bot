@@ -92,14 +92,17 @@ b { font-weight:600; }
 .empty { text-align:center; color:var(--text-muted); padding:22px; font-style:italic; font-size:12px; }
 
 /* ════ KPIs ════ */
-.kpis { display:grid; grid-template-columns:repeat(6,1fr); gap:13px; }
+.kpis { display:grid; grid-template-columns:repeat(6,1fr); gap:13px; margin-bottom:18px; }
 @media(max-width:1180px){ .kpis{ grid-template-columns:repeat(3,1fr); } }
 @media(max-width:680px){ .kpis{ grid-template-columns:repeat(2,1fr); } }
-.kpis .card { margin-bottom:0; overflow:hidden; }
+/* flex column + margin-top:auto na linha do sparkline = todos os cards preenchem
+   uniforme até a mesma altura (o card Equity tem a linha "inicial" e é o mais
+   alto); sem isso os outros ficavam com vazio embaixo. */
+.kpis .card { margin-bottom:0; overflow:hidden; display:flex; flex-direction:column; }
 .kpi-l { font-size:10.5px; font-weight:600; letter-spacing:.05em; text-transform:uppercase; color:var(--text-muted); }
-.kpi-v { font-size:23px; font-weight:600; letter-spacing:-.02em; margin-top:7px; }
+.kpi-v { font-size:23px; font-weight:600; letter-spacing:-.02em; margin-top:7px; margin-bottom:6px; }
 .kpi-v.pos { color:var(--success); } .kpi-v.neg { color:var(--danger); }
-.kpi-d { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-top:8px; font-size:11px; color:var(--text-dim); min-height:24px; }
+.kpi-d { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-top:auto; font-size:11px; color:var(--text-dim); min-height:24px; }
 .kpi-foot { font-size:10.5px; color:var(--text-muted); margin-top:5px; font-variant-numeric:tabular-nums; }
 .kpi-tag { font-size:10.5px; font-weight:600; padding:2px 6px; border-radius:5px; font-variant-numeric:tabular-nums; }
 .kpi-tag.pos { background:var(--success-soft); color:var(--success); } .kpi-tag.neg { background:var(--danger-soft); color:var(--danger); }
