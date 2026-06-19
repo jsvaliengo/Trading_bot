@@ -3023,3 +3023,42 @@ def test_force_exit_calls_os_exit_outside_pytest(monkeypatch):
 
     bot._force_exit(7)
     assert calls == [7]
+
+
+def test_execute_signal_trade_blocks_same_side_pyramid(monkeypatch):
+    """#130: não empilhar no MESMO par/lado (position_key colide, sobrescreve SL/TP)."""
+    bot = _make_light_bot()
+    placed = []
+    notify_block = MagicMock(return_value=True)
+
+    bot.exchange = SimpleNamespace(
+        get_symbol_price=lambda _s: 100.0,
+        get_symbol_info=lambda _s: {"minNotional": 5.0, "pricePrecision": 2},
+        place_market_order=lambda **k: placed.append(k) or {"orderId": 1},
+        set_stop_loss_take_profit=lambda **_k: True,
+        get_account_balance=lambda: 1000.0,
+        get_symbol_cooldown_info=lambda _s: None,
+    )
+    bot.telegram = SimpleNamespace(send_trade_alert=lambda **_k: True, send_message=MagicMock(return_value=True))
+    bot._get_total_open_notional_percent = lambda: 0.0
+    bot.block_reporter.notify_blocked = notify_block
+
+    monkeypatch.setattr(config, "CHECK_FUNDING_RATE", False)
+    monkeypatch.setattr(config, "USE_BINANCE_STRATEGY", False)
+    monkeypatch.setattr(config, "MAX_TOTAL_NOTIONAL_PERCENT", 999.0)
+    monkeypatch.setattr(config, "MAX_POSITION_CONCENTRATION_PERCENT", 100.0)
+
+    # Já existe XRPUSDT SHORT aberta
+    bot.known_positions["XRPUSDT_SHORT"] = {
+        "symbol": "XRPUSDT", "side": "SHORT", "entry_price": 1.2, "quantity": 10.0,
+    }
+
+    short_setup = TradeSetup(
+        symbol="XRPUSDT", signal=Signal.STRONG_SELL, long_size=3.0, short_size=3.0,
+        entry_price=1.2, stop_loss=1.21, take_profit=1.18, dca_levels=[],
+    )
+    # Novo SHORT no MESMO par/lado deve ser BLOQUEADO
+    assert bot.execute_signal_trade(short_setup, open_short=True, strategy_name="trend_strong") is False
+    assert placed == []
+    assert notify_block.called
+    assert "mesmo par/lado" in (notify_block.call_args.kwargs.get("reason", "").lower())

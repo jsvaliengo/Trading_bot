@@ -174,15 +174,37 @@ class ExecutionEngine:
             )
             return False
 
-        # Guard anti-hedge: não abrir o lado OPOSTO se já há posição aberta nesse
-        # par. Estratégia é direcional — carregar LONG e SHORT no mesmo símbolo ao
-        # mesmo tempo paga fee dos dois lados com exposição líquida ~zero e gera
-        # SL/TP conflitantes (issue #173). O lado existente segue até fechar por
-        # SL/TP/trailing; só então o oposto pode entrar.
+        # Guard estrutural: no máximo UMA posição por símbolo/lado (estratégia
+        # direcional). Última linha de defesa usando known_positions (fonte de
+        # verdade IMEDIATA do bot, sem o cache de 5s do get_open_positions — a
+        # checagem da camada de decisão depende desse cache e pode escapar).
+        # PositionTracker.get retorna {} (falsy) quando não há posição — usar
+        # truthiness, NÃO `is not None` (dict vazio não é None).
         if requested_side in ("LONG", "SHORT"):
+            # (a) MESMO lado já aberto → pirâmide: o position_key (symbol_side)
+            #     colide, sobrescreve as ordens de SL/TP na Binance e gera pnl
+            #     não-confiável (4 XRP SHORT em 18min, #130).
+            if bot.positions.get(f"{symbol}_{requested_side}"):
+                logger.info(
+                    f"🚫 {symbol}: já existe posição {requested_side} aberta — "
+                    f"reentrada cancelada (sem pirâmide no mesmo par/lado)"
+                )
+                bot.block_reporter.notify_blocked(
+                    symbol=symbol,
+                    side=requested_side,
+                    strategy_name=strategy_name,
+                    reason="Posição já aberta no mesmo par/lado",
+                    detail=(
+                        f"Já existe {symbol} {requested_side} aberta; não empilhar "
+                        f"(position_key colide e sobrescreve SL/TP)."
+                    ),
+                    setup_metadata=setup_metadata,
+                )
+                return False
+
+            # (b) lado OPOSTO já aberto → hedge no mesmo par (fee dos dois lados,
+            #     exposição líquida ~zero, SL/TP conflitantes, #173).
             opposite = "SHORT" if requested_side == "LONG" else "LONG"
-            # PositionTracker.get retorna {} (falsy) quando não há posição — usar
-            # truthiness, NÃO `is not None` (dict vazio não é None).
             if bot.positions.get(f"{symbol}_{opposite}"):
                 logger.info(
                     f"🚫 {symbol}: já existe posição {opposite} aberta — "
