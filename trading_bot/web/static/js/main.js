@@ -162,7 +162,10 @@
         charts[id] = new Chart(el, {
             type: 'doughnut',
             data: { datasets: [{ data, backgroundColor: colors, borderWidth: 0 }] },
-            options: { cutout: '70%', plugins: { legend: { display: false }, tooltip: { enabled: id !== 'dm-winrate' } } },
+            // responsive:false → respeita o width/height fixo do <canvas> (36/92px).
+            // Sem isso o Chart.js infla o canvas pra preencher o flex e estoura o card.
+            options: { responsive: false, maintainAspectRatio: false, cutout: '70%',
+                plugins: { legend: { display: false }, tooltip: { enabled: id !== 'dm-winrate' } } },
         });
     }
 
