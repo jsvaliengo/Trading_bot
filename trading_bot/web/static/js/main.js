@@ -173,8 +173,13 @@
     function posBar(p) {
         const sl = p.custom_stop_loss, tp = p.custom_take_profit, en = p.entry_price, mk = p.mark_price;
         if (!sl || !tp || !en) return '';
-        const lo = Math.min(sl, tp), hi = Math.max(sl, tp), rng = (hi - lo) || 1;
-        const at = (v) => Math.max(0, Math.min(100, ((v - lo) / rng) * 100));
+        // Ancora SL=0% (esquerda) e TP=100% (direita) nos DOIS lados. Para SHORT,
+        // SL é o preço MAIOR e TP o MENOR — usar min/max de preço invertia a barra
+        // (marcador/rótulo trocados, preço aparecia "perto do TP" perdendo). Com
+        // (v−SL)/(TP−SL) o eixo segue a direção do trade: vermelho=stop à esquerda,
+        // verde=alvo à direita, preço/entrada proporcionais entre eles.
+        const span = (tp - sl) || 1;
+        const at = (v) => Math.max(0, Math.min(100, ((v - sl) / span) * 100));
         const mkPart = (mk && mk > 0) ? `<span class="mk pr" style="left:${at(mk)}%"></span>` : '';
         const prLbl = (mk && mk > 0) ? `<span>preço <b>${fmt.num(mk, 4)}</b></span>` : '';
         return `<div class="bar">
