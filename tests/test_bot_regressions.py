@@ -3001,3 +3001,25 @@ def test_execute_signal_trade_blocks_opposite_side_same_pair(monkeypatch):
     assert placed == []  # nenhuma ordem enviada
     assert notify_block.called
     assert "oposta" in (notify_block.call_args.kwargs.get("reason", "").lower())
+
+
+def test_force_exit_skipped_under_pytest():
+    """#131: sob pytest (PYTEST_CURRENT_TEST setado), _force_exit NÃO encerra o
+    processo — senão mataria o test runner. Chegar na asserção = guard funcionou."""
+    bot = _make_light_bot()
+    assert bot._force_exit(0) is None
+
+
+def test_force_exit_calls_os_exit_outside_pytest(monkeypatch):
+    """#131: fora do pytest, _force_exit chama os._exit (exit determinístico que
+    permite o respawn pelo wrapper)."""
+    import trading_bot.core.bot as bot_module
+
+    bot = _make_light_bot()
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    calls = []
+    monkeypatch.setattr(bot_module.os, "_exit", lambda code: calls.append(code))
+    monkeypatch.setattr(bot_module.logging, "shutdown", lambda: None)
+
+    bot._force_exit(7)
+    assert calls == [7]
