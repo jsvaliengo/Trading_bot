@@ -1737,56 +1737,92 @@ class TelegramCommandHandler:
             f"{suffix}"
         )
 
+    def _describe_trailing_effective(self) -> tuple:
+        """Retorna (str ativação, str distância, atr_on) com os valores REALMENTE
+        usados. Sob ATR-trailing (padrão) os efetivos são os *_MIN/MAX_PERCENT,
+        NÃO os globais TRAILING_*_PERCENT (que viram fallback morto)."""
+        c = self.config
+        atr_on = bool(getattr(c, "USE_ATR_TRAILING", False))
+        if atr_on:
+            a_min = getattr(c, "TRAILING_ACTIVATION_MIN_PERCENT", None)
+            a_max = getattr(c, "TRAILING_ACTIVATION_MAX_PERCENT", None)
+            d_min = getattr(c, "TRAILING_DISTANCE_MIN_PERCENT", None)
+            d_max = getattr(c, "TRAILING_DISTANCE_MAX_PERCENT", None)
+            act = f"{a_min}%" if a_min == a_max else f"{a_min}–{a_max}%"
+            dist = f"{d_min}%" if d_min == d_max else f"{d_min}–{d_max}%"
+            return (act, dist, True)
+        return (
+            f"{getattr(c, 'TRAILING_ACTIVATION_PERCENT', '?')}%",
+            f"{getattr(c, 'TRAILING_DISTANCE_PERCENT', '?')}%",
+            False,
+        )
+
     def cmd_trailing(self, args: list):
-        """Altera configurações do Trailing Stop."""
+        """Altera o Trailing Stop — edita os knobs REAIS usados (MIN/MAX sob ATR)."""
         if self.config is None:
             self.send_message("❌ Config não disponível")
             return
-        
+
         if not args:
+            act, dist, atr_on = self._describe_trailing_effective()
+            modo = "ATR (MIN/MAX)" if atr_on else "fixo (global)"
             self.send_message(
-                f"🔄 <b>TRAILING STOP</b>\n\n"
-                f"   Ativação: <code>{self.config.TRAILING_ACTIVATION_PERCENT}%</code>\n"
-                f"   Distância: <code>{self.config.TRAILING_DISTANCE_PERCENT}%</code>\n\n"
+                f"🔄 <b>TRAILING STOP</b> — modo {modo}\n\n"
+                f"   Ativação efetiva: <code>{act}</code>\n"
+                f"   Distância efetiva: <code>{dist}</code>\n\n"
                 f"Para alterar, use:\n<code>/trailing [ativação] [distância]</code>\n\n"
-                f"Exemplo: <code>/trailing 0.5 0.25</code>"
+                f"Exemplo: <code>/trailing 0.5 0.4</code>"
             )
             return
-        
+
         try:
             if len(args) >= 2:
                 new_activation = float(args[0])
                 new_distance = float(args[1])
             else:
-                self.send_message("❌ Informe ativação e distância.\n\nExemplo: <code>/trailing 0.5 0.25</code>")
+                self.send_message("❌ Informe ativação e distância.\n\nExemplo: <code>/trailing 0.5 0.4</code>")
                 return
-            
-            if new_activation < 0.01 or new_activation > 50:
+
+            if not (0.01 <= new_activation <= 50):
                 self.send_message("❌ Ativação deve ser entre 0.01% e 50%")
                 return
-            
-            if new_distance < 0.01 or new_distance > 50:
+            if not (0.01 <= new_distance <= 50):
                 self.send_message("❌ Distância deve ser entre 0.01% e 50%")
                 return
-            
-            old_activation = self.config.TRAILING_ACTIVATION_PERCENT
-            old_distance = self.config.TRAILING_DISTANCE_PERCENT
-            
+
+            act_old, dist_old, atr_on = self._describe_trailing_effective()
+
+            # Pina MIN=MAX nos knobs do ATR (o que REALMENTE vale sob ATR-trailing),
+            # espelhando a semântica de /sl e /tp. Também ajusta os globais (fallback
+            # quando o ATR-trailing está OFF). Sem invariante activation≥distance
+            # (removido em 2026-06-18; o piso de breakeven protege).
+            self.config.TRAILING_ACTIVATION_MIN_PERCENT = new_activation
+            self.config.TRAILING_ACTIVATION_MAX_PERCENT = new_activation
+            self.config.TRAILING_DISTANCE_MIN_PERCENT = new_distance
+            self.config.TRAILING_DISTANCE_MAX_PERCENT = new_distance
             self.config.TRAILING_ACTIVATION_PERCENT = new_activation
             self.config.TRAILING_DISTANCE_PERCENT = new_distance
-            
+
+            try:
+                self._persist_runtime_state()
+            except Exception:
+                pass
+
+            nota = (
+                "Pina o trailing nesses valores (suspende a adaptação ao ATR)."
+                if atr_on else
+                "ATR-trailing está OFF — usa estes valores fixos."
+            )
             self.send_message(
                 f"✅ <b>TRAILING STOP ALTERADO</b>\n\n"
-                f"<b>Ativação:</b>\n"
-                f"   Anterior: <code>{old_activation}%</code>\n"
-                f"   Novo: <code>{new_activation}%</code>\n\n"
-                f"<b>Distância:</b>\n"
-                f"   Anterior: <code>{old_distance}%</code>\n"
-                f"   Novo: <code>{new_distance}%</code>"
+                f"<b>Ativação:</b> <code>{act_old}</code> → <code>{new_activation}%</code>\n"
+                f"<b>Distância:</b> <code>{dist_old}</code> → <code>{new_distance}%</code>\n\n"
+                f"{nota}\n"
+                f"⚠️ Vale para NOVAS posições; some no restart (use .env/config p/ persistir)."
             )
-            
+
         except ValueError:
-            self.send_message("❌ Valores inválidos.\n\nExemplo: <code>/trailing 0.5 0.25</code>")
+            self.send_message("❌ Valores inválidos.\n\nExemplo: <code>/trailing 0.5 0.4</code>")
 
     def cmd_double(self, args: list):
         """

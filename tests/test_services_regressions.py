@@ -1120,3 +1120,61 @@ def test_sentiment_command_toggles_mode_and_supports_normal_alias():
 
     handler.cmd_sentiment(["SOL"])
     assert "VIÉS DE MERCADO - SOLUSDT" in messages[-1]
+
+
+def _trailing_handler(**cfg_over):
+    from types import SimpleNamespace
+
+    cfg = dict(
+        USE_ATR_TRAILING=True,
+        TRAILING_ACTIVATION_MIN_PERCENT=0.5,
+        TRAILING_ACTIVATION_MAX_PERCENT=3.5,
+        TRAILING_DISTANCE_MIN_PERCENT=0.4,
+        TRAILING_DISTANCE_MAX_PERCENT=2.5,
+        TRAILING_ACTIVATION_PERCENT=0.7,
+        TRAILING_DISTANCE_PERCENT=0.4,
+    )
+    cfg.update(cfg_over)
+    config = SimpleNamespace(**cfg)
+    handler = TelegramCommandHandler(token="token", chat_id="123")
+    handler.set_bot_reference(SimpleNamespace(), config)
+    handler._persist_runtime_state = lambda: None
+    msgs = []
+    handler.send_message = lambda text: msgs.append(text) or True
+    return handler, config, msgs
+
+
+def test_cmd_trailing_edits_real_atr_knobs():
+    """Regressão #170: /trailing deve editar os *_MIN/MAX_PERCENT reais (sob ATR),
+    não só os globais mortos. Pina MIN=MAX como /sl e /tp."""
+    handler, config, msgs = _trailing_handler()
+    handler.cmd_trailing(["0.8", "0.6"])
+
+    assert config.TRAILING_ACTIVATION_MIN_PERCENT == 0.8
+    assert config.TRAILING_ACTIVATION_MAX_PERCENT == 0.8
+    assert config.TRAILING_DISTANCE_MIN_PERCENT == 0.6
+    assert config.TRAILING_DISTANCE_MAX_PERCENT == 0.6
+    # globais (fallback) também atualizados
+    assert config.TRAILING_ACTIVATION_PERCENT == 0.8
+    assert config.TRAILING_DISTANCE_PERCENT == 0.6
+    assert any("ALTERADO" in m for m in msgs)
+
+
+def test_cmd_trailing_no_args_mostra_efetivo_do_atr():
+    """Sem args mostra o valor EFETIVO (MIN/MAX do ATR), não o global morto."""
+    handler, _config, msgs = _trailing_handler(
+        TRAILING_ACTIVATION_MIN_PERCENT=0.5,
+        TRAILING_ACTIVATION_MAX_PERCENT=3.5,
+    )
+    handler.cmd_trailing([])
+    assert msgs and "0.5–3.5%" in msgs[-1]
+    assert "ATR" in msgs[-1]
+
+
+def test_cmd_trailing_permite_activation_menor_que_distance():
+    """Sem o invariante antigo: aceita activation < distance (breakeven floor protege)."""
+    handler, config, msgs = _trailing_handler()
+    handler.cmd_trailing(["0.5", "0.8"])
+    assert config.TRAILING_ACTIVATION_MIN_PERCENT == 0.5
+    assert config.TRAILING_DISTANCE_MIN_PERCENT == 0.8
+    assert any("ALTERADO" in m for m in msgs)
