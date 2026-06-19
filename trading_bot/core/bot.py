@@ -5680,11 +5680,40 @@ class TradingBot:
         
         logger.info("💾 Salvando estado...")
         self.save_state()
-        
-        self.telegram.send_shutdown_message(
-            total_pnl=self.total_pnl + total_unrealized,
-            total_trades=self.closed_trades_count
-        )
+
+        # Mensagem de shutdown é best-effort (send_message tem timeout=10 + retry).
+        # Envolto em try pra NUNCA impedir o exit determinístico abaixo.
+        try:
+            self.telegram.send_shutdown_message(
+                total_pnl=self.total_pnl + total_unrealized,
+                total_trades=self.closed_trades_count
+            )
+        except Exception as exc:
+            logger.warning(f"⚠️ Falha ao enviar shutdown message: {exc}")
+
+        # Exit determinístico: o ThreadedWebsocketManager do python-binance
+        # (asyncio + threads não-daemon) nem sempre encerra no .stop(), deixando
+        # o processo ZUMBI após "Estado salvo" — o wrapper run_bot_loop.sh então
+        # não respawna (#131). Estado já salvo atomicamente acima, então forçamos.
+        self._force_exit(0)
+
+    def _force_exit(self, code: int = 0) -> None:
+        """Encerra o processo de forma determinística após o shutdown (#131).
+
+        Necessário porque threads não-daemon (TWM/websocket) podem manter o
+        interpretador vivo mesmo após o stop gracioso, impedindo o respawn pelo
+        wrapper. Como o estado já foi persistido, `os._exit` é seguro aqui.
+        Pulado sob pytest (PYTEST_CURRENT_TEST) pra não matar o test runner.
+        """
+        if os.environ.get("PYTEST_CURRENT_TEST"):
+            logger.info("🧪 _force_exit pulado sob pytest.")
+            return
+        logger.info("🚪 Encerrando o processo (exit determinístico)...")
+        try:
+            logging.shutdown()
+        except Exception:
+            pass
+        os._exit(code)
 
 
 def main():
