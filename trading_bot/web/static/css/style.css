@@ -95,7 +95,7 @@ b { font-weight:600; }
 .kpis { display:grid; grid-template-columns:repeat(6,1fr); gap:13px; }
 @media(max-width:1180px){ .kpis{ grid-template-columns:repeat(3,1fr); } }
 @media(max-width:680px){ .kpis{ grid-template-columns:repeat(2,1fr); } }
-.kpis .card { margin-bottom:0; }
+.kpis .card { margin-bottom:0; overflow:hidden; }
 .kpi-l { font-size:10.5px; font-weight:600; letter-spacing:.05em; text-transform:uppercase; color:var(--text-muted); }
 .kpi-v { font-size:23px; font-weight:600; letter-spacing:-.02em; margin-top:7px; }
 .kpi-v.pos { color:var(--success); } .kpi-v.neg { color:var(--danger); }
