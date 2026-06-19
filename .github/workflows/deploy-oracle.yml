@@ -14,6 +14,12 @@ on:
   push:
     branches:
       - main
+    # Mudanças só-de-documentação não reiniciam o bot em produção.
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.reversa/**'
+      - 'LICENSE'
 
 concurrency:
   group: deploy-oracle-prod
