@@ -238,10 +238,11 @@ def test_trailing_atr_does_not_force_activation_above_distance(monkeypatch):
 
 def test_trailing_atr_uses_default_config_values():
     """Sanity: com config default do projeto, valores ficam nos bounds atuais."""
+    # ATR=0.5%: activation = 0.5×2.0 = 1.0 (clamp [0.50, 3.50]);
+    #           distance = 0.5×0.5 = 0.25 → piso 0.40 (clamp [0.40, 2.50]).
     activation, distance = TechnicalAnalysis.compute_atr_based_trailing(100.0, 0.5)
-    assert 1.00 <= activation <= 3.50
-    assert 1.20 <= distance <= 2.50
-    # "breakeven cedo": activation NÃO é mais forçada a ≥ distance + 0.15.
-    # Com os defaults arma em +1.0% (< distance 1.2%); o piso de breakeven protege.
+    assert 0.50 <= activation <= 3.50
+    assert 0.40 <= distance <= 2.50
     assert activation == pytest.approx(1.0, abs=0.001)
-    assert activation < distance + 0.15
+    # 2026-06-19: distance segue o ATR×0.5 (piso 0.40), não mais grampeada em 1.20.
+    assert distance == pytest.approx(0.4, abs=0.001)

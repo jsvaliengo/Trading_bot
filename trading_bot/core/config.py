@@ -609,7 +609,10 @@ class TradingConfig:
     # enforced em compute_atr_based_trailing pra preservar o breakeven floor.
     USE_ATR_TRAILING: bool = _env_bool("TRADING_BOT_USE_ATR_TRAILING", True)
     TRAILING_ACTIVATION_ATR_MULT: float = _env_float("TRADING_BOT_TRAILING_ACTIVATION_ATR_MULT", 2.0)
-    TRAILING_DISTANCE_ATR_MULT: float = _env_float("TRADING_BOT_TRAILING_DISTANCE_ATR_MULT", 1.0)
+    # 1.0→0.5 em 2026-06-19: com mult 1.0 a distância seguia o ATR cheio (~0.5-0.8%)
+    # e devolvia o pico de 0.84% até o breakeven. Com 0.5 a distância vira ~0.4%
+    # (atr%×0.5, piso 0.40) e trava o ganho perto do pico real. Activation segue 2.0×.
+    TRAILING_DISTANCE_ATR_MULT: float = _env_float("TRADING_BOT_TRAILING_DISTANCE_ATR_MULT", 0.5)
     # Pisos ajustados em 2026-05-22 após análise do testnet: dist=0.20 estava
     # cortando 84% dos trades a 0.20-0.47% do pico (avg win $0.13), enquanto
     # os SLs caminhavam até 4-5%. RR realizado=0.12. Distance mínima de 0.50
@@ -626,12 +629,20 @@ class TradingConfig:
     # o quase-vencedor — enquanto a distância larga (1.20%) deixa os vencedores
     # correrem até o pico passar de ~1.35% e o trail largar normal.
     # 0.50 (18/06 fim do dia): usuário observou que a maioria dos trades pica em
-    # +0.4-0.5% e recua, abaixo do gatilho de 1.0%. Baixado pra 0.50 pra travar
-    # breakeven nesses picos. EM MEDIÇÃO: mfe_pct no TradeStore registra a
-    # excursão favorável real pra calibrar isto com dado (ver trade_ledger).
+    # +0.4-0.5% e recua, abaixo do gatilho de 1.0%. Baixado pra 0.50.
+    # 2026-06-19 (MFE medido, n=10): os picos reais ficam em 0.56-1.33% (média
+    # 0.84%), NÃO em 0.4-0.5%. Todos passam do gatilho 0.50 e o breakeven floor
+    # segura (0 perdas pós-ativação). O problema virou a DISTANCE: com 1.20 o
+    # stop do trailing fica abaixo da entrada num pico de 0.84% → o piso de
+    # breakeven prende em +0.23% e o trade DEVOLVE ~0.6% (vencedores fechando em
+    # ~breakeven, avg +$0.18 vs perda média -$0.40, RR realizado ~0.44:1). A
+    # premissa "corda longa" (deixar correr até TP 3%) não vale neste regime — o
+    # MFE morre em ~1.3%. Baixamos DISTANCE_MIN 1.20→0.40: a distância passa a
+    # seguir o ATR (dist=atr%×1.0, piso 0.40) e trava o ganho perto do pico
+    # (pico 0.84% → stop ~+0.44% em vez de +0.23%).
     TRAILING_ACTIVATION_MIN_PERCENT: float = _env_float("TRADING_BOT_TRAILING_ACTIVATION_MIN_PERCENT", 0.50)
     TRAILING_ACTIVATION_MAX_PERCENT: float = _env_float("TRADING_BOT_TRAILING_ACTIVATION_MAX_PERCENT", 3.50)
-    TRAILING_DISTANCE_MIN_PERCENT: float = _env_float("TRADING_BOT_TRAILING_DISTANCE_MIN_PERCENT", 1.20)
+    TRAILING_DISTANCE_MIN_PERCENT: float = _env_float("TRADING_BOT_TRAILING_DISTANCE_MIN_PERCENT", 0.40)
     TRAILING_DISTANCE_MAX_PERCENT: float = _env_float("TRADING_BOT_TRAILING_DISTANCE_MAX_PERCENT", 2.50)
 
     # --- Regime Classifier (ADX + Bollinger Band Width) ---
