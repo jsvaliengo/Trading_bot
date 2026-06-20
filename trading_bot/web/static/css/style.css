@@ -154,6 +154,13 @@ b { font-weight:600; }
 .mferul i { position:absolute; left:0; top:0; height:100%; border-radius:3px; background:var(--accent); opacity:.65; }
 .mf-t { font-size:11px; color:var(--text-dim); }
 
+/* paginação da tabela de trades */
+.pager { display:flex; align-items:center; justify-content:flex-end; gap:10px; padding:10px 2px 2px; }
+.pg-btn { width:28px; height:28px; border-radius:8px; border:1px solid var(--border); background:var(--bg-elevated); color:var(--text); font-size:15px; line-height:1; cursor:pointer; display:grid; place-items:center; }
+.pg-btn:hover:not(:disabled) { border-color:var(--accent); color:var(--accent); }
+.pg-btn:disabled { opacity:.35; cursor:not-allowed; }
+.pg-info { font-size:12px; color:var(--text-dim); font-variant-numeric:tabular-nums; min-width:42px; text-align:center; }
+
 /* ════ Win/Loss + análise ════ */
 .winloss { display:flex; align-items:center; gap:14px; margin-bottom:14px; }
 .winloss canvas { width:92px; height:92px; flex:none; }
