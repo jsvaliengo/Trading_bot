@@ -4125,6 +4125,34 @@ class TradingBot:
         
         logger.info(f"💵 P&L Total não realizado: ${total_pnl:.2f}")
     
+    def _fetch_realized_pnl_with_retry(self, symbol, start_time_ms, attempts=3, delay=2.0):
+        """Busca o REALIZED_PNL agregado da Binance, com retry.
+
+        O income REALIZED_PNL aparece com latência de alguns segundos após o
+        fill — a 1ª query costuma vir vazia. Sem retry, o caller caía no fallback
+        que estima o P&L pelo preço ATUAL, fabricando o resultado quando o preço
+        se moveu após o fechamento (XRP #37, 20/06: fechou ~zero/loss, preço
+        quicou pra +0.84%, fallback registrou +$0.44 "Take Profit"). Tenta algumas
+        vezes antes de desistir. Retorna o gross (float) ou None se não apareceu.
+        """
+        for i in range(1, int(attempts) + 1):
+            try:
+                income_list = self.exchange.get_income_history(
+                    income_type='REALIZED_PNL', symbol=symbol, limit=100,
+                    start_time=start_time_ms,
+                )
+                gross = _aggregate_realized_pnl(income_list)
+            except Exception as exc:
+                logger.error(f"❌ Erro ao buscar P&L da Binance para {symbol}: {exc}")
+                gross = None
+            if gross is not None:
+                if i > 1:
+                    logger.info(f"   ✓ REALIZED_PNL de {symbol} disponível na tentativa {i}")
+                return gross
+            if i < int(attempts):
+                time.sleep(delay)
+        return None
+
     def _process_binance_closed_position(self, pos_info: dict):
         """
         Processa uma posição que foi fechada pela Binance (via SL/TP).
@@ -4141,19 +4169,14 @@ class TradingBot:
         entry_time = pos_info.get('entry_time')
         start_time_ms = int(entry_time.timestamp() * 1000) if entry_time else None
 
-        pnl_gross = None
-        try:
-            income_list = self.exchange.get_income_history(
-                income_type='REALIZED_PNL',
-                symbol=symbol,
-                limit=100,
-                start_time=start_time_ms,
+        # O REALIZED_PNL tem latência de alguns segundos após o fill — busca com
+        # retry antes de cair no fallback (ver _fetch_realized_pnl_with_retry).
+        pnl_gross = self._fetch_realized_pnl_with_retry(symbol, start_time_ms)
+        if pnl_gross is None:
+            logger.warning(
+                f"⚠️ REALIZED_PNL não encontrado para {symbol} após retries — "
+                f"usando estimativa por preço atual (P&L pode ficar impreciso)"
             )
-            pnl_gross = _aggregate_realized_pnl(income_list)
-            if pnl_gross is None:
-                logger.warning(f"⚠️ REALIZED_PNL não encontrado para {symbol} após {entry_time} — usando estimativa")
-        except Exception as e:
-            logger.error(f"❌ Erro ao buscar P&L da Binance para {symbol}: {e} — usando estimativa")
 
         taker_fee_rate = self.get_taker_fee_rate()
         notional = entry_price * quantity
