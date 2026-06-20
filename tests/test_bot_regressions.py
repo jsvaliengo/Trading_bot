@@ -3062,3 +3062,43 @@ def test_execute_signal_trade_blocks_same_side_pyramid(monkeypatch):
     assert placed == []
     assert notify_block.called
     assert "mesmo par/lado" in (notify_block.call_args.kwargs.get("reason", "").lower())
+
+
+def test_fetch_realized_pnl_retries_until_income_appears(monkeypatch):
+    """#181: REALIZED_PNL tem latência; o helper faz retry antes de desistir,
+    evitando o fallback que fabricava P&L pelo preço atual."""
+    import trading_bot.core.bot as bot_module
+
+    bot = _make_light_bot()
+    calls = {"n": 0}
+
+    def fake_income(**_kwargs):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            return []  # latência: vazio nas 2 primeiras
+        return [{"incomeType": "REALIZED_PNL", "income": "-0.30"}]  # loss real na 3ª
+
+    bot.exchange = SimpleNamespace(get_income_history=fake_income)
+    monkeypatch.setattr(bot_module.time, "sleep", lambda *_a, **_k: None)
+
+    gross = bot._fetch_realized_pnl_with_retry("XRPUSDT", 123, attempts=3, delay=0)
+    assert calls["n"] == 3
+    assert gross == pytest.approx(-0.30)
+
+
+def test_fetch_realized_pnl_returns_none_after_attempts(monkeypatch):
+    """Income nunca aparece → None (caller só então cai no fallback)."""
+    import trading_bot.core.bot as bot_module
+
+    bot = _make_light_bot()
+    calls = {"n": 0}
+
+    def empty(**_kwargs):
+        calls["n"] += 1
+        return []
+
+    bot.exchange = SimpleNamespace(get_income_history=empty)
+    monkeypatch.setattr(bot_module.time, "sleep", lambda *_a, **_k: None)
+
+    assert bot._fetch_realized_pnl_with_retry("XRPUSDT", 123, attempts=3, delay=0) is None
+    assert calls["n"] == 3
