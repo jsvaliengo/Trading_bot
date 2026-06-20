@@ -36,7 +36,7 @@ def collect_snapshot(bot) -> Dict[str, Any]:
     return {
         "summary": collect_summary(bot),
         "positions": collect_positions(bot),
-        "recent_trades": collect_recent_trades(bot, limit=20),
+        "recent_trades": collect_recent_trades(bot, limit=50),
         "regime": collect_regime(bot),
         "portfolio_history": collect_portfolio_history(bot, limit=200),
         "daily_history": collect_daily_history(bot),

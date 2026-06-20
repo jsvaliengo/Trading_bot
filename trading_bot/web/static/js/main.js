@@ -23,7 +23,8 @@
         dateTime(iso) { if (!iso) return '—'; const d = new Date(iso); return isNaN(d) ? iso : d.toLocaleString('pt-BR', { hour12: false }); },
     };
 
-    const state = { snapshot: null, chartRange: 'all' };
+    const state = { snapshot: null, chartRange: 'all', tradesPage: 1 };
+    const TRADES_PER_PAGE = 10;
     const charts = {};
 
     function classify(v) { return v > 0 ? 'pos' : v < 0 ? 'neg' : ''; }
@@ -220,9 +221,28 @@
     // ───────── Trades (régua de MFE) ─────────
     function renderTrades(trades) {
         const tb = $('trades-table').querySelector('tbody');
+        const pager = $('trades-pager');
         $('trades-count').textContent = trades.length;
-        if (!trades.length) { tb.innerHTML = '<tr><td colspan="8" class="empty">Sem trades ainda.</td></tr>'; return; }
-        tb.innerHTML = trades.map(t => {
+        if (!trades.length) {
+            tb.innerHTML = '<tr><td colspan="8" class="empty">Sem trades ainda.</td></tr>';
+            if (pager) pager.style.display = 'none';
+            return;
+        }
+        const totalPages = Math.ceil(trades.length / TRADES_PER_PAGE);
+        state.tradesPage = Math.max(1, Math.min(state.tradesPage, totalPages));
+        const start = (state.tradesPage - 1) * TRADES_PER_PAGE;
+        const pageItems = trades.slice(start, start + TRADES_PER_PAGE);
+        if (pager) {
+            if (totalPages <= 1) {
+                pager.style.display = 'none';
+            } else {
+                pager.style.display = '';
+                $('trades-page').textContent = `${state.tradesPage} / ${totalPages}`;
+                $('trades-prev').disabled = state.tradesPage <= 1;
+                $('trades-next').disabled = state.tradesPage >= totalPages;
+            }
+        }
+        tb.innerHTML = pageItems.map(t => {
             const sc = t.side === 'LONG' ? 'l' : 's';
             const closed = t.exit_price != null && t.exit_price > 0;
             const dim = '<span class="dim">—</span>';
@@ -389,6 +409,16 @@
         }));
     }
 
+    function initTradesPager() {
+        const go = (delta) => {
+            state.tradesPage += delta;
+            if (state.snapshot) renderTrades(state.snapshot.recent_trades || []);
+        };
+        const prev = $('trades-prev'), next = $('trades-next');
+        if (prev) prev.addEventListener('click', () => go(-1));
+        if (next) next.addEventListener('click', () => go(1));
+    }
+
     // ───────── Controls + modal ─────────
     const modal = $('confirm-modal');
     let pending = null;
@@ -435,6 +465,7 @@
     // ───────── Boot ─────────
     initTheme();
     initChips();
+    initTradesPager();
     if (typeof io !== 'undefined') {
         socket = io({ transports: ['polling', 'websocket'], reconnectionDelayMax: 10000 });
         socket.on('connect', () => { setConn('connected'); stopPolling(); socket.emit('request_snapshot'); });
