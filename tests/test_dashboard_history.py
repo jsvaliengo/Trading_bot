@@ -88,6 +88,36 @@ def test_daily_history_groups_by_day_with_running_cumulative(tmp_path):
     assert [d["cumulative"] for d in hist] == [2.0, 0.5, 4.5]
 
 
+def test_daily_history_groups_by_local_tz(tmp_path):
+    """Com offset -3 (BRT), trades antes das 03:00 UTC caem no dia BRT anterior."""
+    store = _store(tmp_path)
+    # 01:00 UTC = 22:00 BRT (2026-06-20) ; 05:00 UTC = 02:00 BRT (2026-06-21)
+    _close(store, entry=2500, pnl_net=1.0, fees=0.0, exit_at="2026-06-21T01:00:00")
+    _close(store, entry=2510, pnl_net=2.0, fees=0.0, exit_at="2026-06-21T05:00:00")
+    # UTC (offset 0): ambos no mesmo dia
+    utc = store.daily_pnl_history()
+    assert [d["day"] for d in utc] == ["2026-06-21"]
+    assert utc[0]["net"] == pytest.approx(3.0)
+    # BRT (offset -3): dias separados
+    brt = store.daily_pnl_history(tz_offset_hours=-3.0)
+    assert [d["day"] for d in brt] == ["2026-06-20", "2026-06-21"]
+    assert brt[0]["net"] == pytest.approx(1.0)
+    assert brt[1]["net"] == pytest.approx(2.0)
+    # acumulado segue correto no novo agrupamento
+    assert [d["cumulative"] for d in brt] == [pytest.approx(1.0), pytest.approx(3.0)]
+
+
+def test_realized_pnl_today_respects_tz(tmp_path):
+    store = _store(tmp_path)
+    _close(store, entry=2500, pnl_net=1.0, fees=0.0, exit_at="2026-06-21T01:00:00")
+    _close(store, entry=2510, pnl_net=2.0, fees=0.0, exit_at="2026-06-21T05:00:00")
+    # BRT: 01:00 UTC pertence ao dia 20; 05:00 UTC ao dia 21
+    assert store.realized_pnl_today("2026-06-20", tz_offset_hours=-3.0) == pytest.approx(1.0)
+    assert store.realized_pnl_today("2026-06-21", tz_offset_hours=-3.0) == pytest.approx(2.0)
+    # UTC: ambos no dia 21
+    assert store.realized_pnl_today("2026-06-21", tz_offset_hours=0.0) == pytest.approx(3.0)
+
+
 def test_daily_history_aggregates_multiple_trades_same_day(tmp_path):
     store = _store(tmp_path)
     _close(store, entry=2500, pnl_net=1.0, fees=0.1, exit_at="2026-06-01T08:00:00")

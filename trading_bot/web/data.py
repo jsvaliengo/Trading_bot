@@ -81,7 +81,8 @@ def collect_pnl_analysis(bot) -> Dict[str, Any]:
     if store is None:
         return {}
     try:
-        return store.pnl_analysis()
+        tz = _safe_float(getattr(config, "DAILY_PNL_TZ_OFFSET_HOURS", 0.0))
+        return store.pnl_analysis(tz_offset_hours=tz)
     except Exception:
         return {}
 
@@ -97,7 +98,8 @@ def collect_daily_history(bot, limit: int = 90) -> List[Dict[str, Any]]:
     if store is None:
         return []
     try:
-        return store.daily_pnl_history(limit=limit)
+        tz = _safe_float(getattr(config, "DAILY_PNL_TZ_OFFSET_HOURS", 0.0))
+        return store.daily_pnl_history(limit=limit, tz_offset_hours=tz)
     except Exception:
         return []
 
