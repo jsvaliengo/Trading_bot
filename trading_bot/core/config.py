@@ -394,6 +394,18 @@ class TradingConfig:
     TREND_STRONG_SHORT_RSI_MAX: float = 75.0  # Evita entrar já oversold
     TREND_STRONG_MIN_VOLUME_RATIO: float = 0.80
 
+    # Viés de timeframe maior (#168): a direção LONG/SHORT é escolhida em TFs
+    # curtos (1m/3m/5m), mas em mercado de baixa/choppy o LONG dispara num
+    # repique curto DENTRO de uma queda maior → reverte na hora (MFE~0) → stop.
+    # Este filtro exige que a tendência de um TF maior CONCORDE com a direção do
+    # sinal: só LONG se o macro está de alta, só SHORT se de baixa. Bloqueia
+    # entradas contra a maré (só reduz trades, nunca cria). Fail-open se faltar
+    # candle do HTF (gap de dados não barra; só barra divergência real de regime).
+    TREND_STRONG_HTF_BIAS_ENABLED: bool = True
+    TREND_STRONG_HTF_TIMEFRAME: str = "1h"
+    TREND_STRONG_HTF_EMA_PERIOD: int = 200
+    TREND_STRONG_HTF_SLOPE_LOOKBACK: int = 5   # barras p/ medir inclinação da EMA
+
     # ============================================
     # RANGE SCALPING (segunda estratégia)
     # ============================================
