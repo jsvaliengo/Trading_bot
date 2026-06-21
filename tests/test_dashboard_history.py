@@ -149,6 +149,37 @@ def test_collect_daily_history_uses_store(tmp_path):
     assert len(hist) == 1 and hist[0]["net"] == 2.0
 
 
+# ─────────────────────────── trailing live state (barra) ───────────────────────────
+
+def test_trailing_live_state_short_armed():
+    """SHORT armado: activation_price abaixo da entrada, stop atual vindo do bot."""
+    key = "DOGEUSDT_SHORT"
+    bot = SimpleNamespace(
+        peak_prices={key: 0.0825},
+        trailing_activated={key: True},
+        _trailing_stop_price=lambda side, entry, peak, distance_pct=None: 0.08283,
+    )
+    payload = {"trailing_activation_pct": 0.5, "trailing_distance_pct": 0.4}
+    out = dashboard_data._trailing_live_state(bot, key, "SHORT", 0.0830, payload)
+    assert out["trailing_activated"] is True
+    assert out["trailing_peak_price"] == pytest.approx(0.0825)
+    assert out["trailing_stop_price"] == pytest.approx(0.08283)
+    # SHORT arma quando o preço cai 0.5% abaixo da entrada
+    assert out["trailing_activation_price"] == pytest.approx(0.0830 * (1 - 0.005))
+
+
+def test_trailing_live_state_long_not_armed():
+    """LONG sem trailing armado: só o activation_price (acima da entrada); sem stop."""
+    key = "ETHUSDT_LONG"
+    bot = SimpleNamespace(peak_prices={}, trailing_activated={})
+    payload = {"trailing_activation_pct": 1.0, "trailing_distance_pct": 0.5}
+    out = dashboard_data._trailing_live_state(bot, key, "LONG", 2000.0, payload)
+    assert out["trailing_activated"] is False
+    assert out["trailing_peak_price"] is None
+    assert out["trailing_stop_price"] is None
+    assert out["trailing_activation_price"] == pytest.approx(2000.0 * 1.01)
+
+
 def test_collect_summary_uses_store_cumulative(tmp_path, monkeypatch):
     """Com trade_store, o saldo/P&L total usa o acumulado do store (não o do dia)."""
     monkeypatch.setattr(global_config, "SIMULATED_BALANCE_USD", 100.0, raising=False)
