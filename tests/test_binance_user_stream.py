@@ -1,5 +1,6 @@
 """Testes do UserStreamMonitor (roteamento de eventos para invalidação de cache)."""
 
+import pytest
 from unittest.mock import MagicMock
 
 from trading_bot.infra.binance_user_stream import UserStreamMonitor
@@ -259,3 +260,53 @@ def test_binance_connection_ignores_non_filled_orders():
 
     conn._on_user_order_update({"o": {"X": "FILLED"}})
     assert conn._positions_cache is None  # invalidou
+
+
+def _conn_with_realized():
+    from trading_bot.infra.binance_client import BinanceConnection
+    import threading
+    conn = BinanceConnection.__new__(BinanceConnection)
+    conn._cache_lock = threading.Lock()
+    conn._positions_cache = {"data": [], "ts": 100.0}
+    conn._balance_cache = {"wallet": 1000.0, "available": 800.0, "ts": 100.0}
+    conn._realized_lock = threading.Lock()
+    conn._realized_close_buffer = {}
+    return conn
+
+
+def test_realized_close_buffer_accumulates_and_pops():
+    """#183: fills parciais somam o gross e o exit vira VWAP; pop consome."""
+    conn = _conn_with_realized()
+    # dois fills parciais fechando um LONG de XRP
+    conn._record_realized_fill("XRPUSDT", "LONG", rp=-0.20, price=1.150, qty=5.0)
+    conn._record_realized_fill("XRPUSDT", "LONG", rp=-0.10, price=1.140, qty=5.0)
+    out = conn.pop_realized_close("XRPUSDT", "LONG")
+    assert out["gross"] == pytest.approx(-0.30)
+    assert out["qty"] == pytest.approx(10.0)
+    assert out["exit_price"] == pytest.approx((1.150 * 5 + 1.140 * 5) / 10)  # VWAP = 1.145
+    # consumido: 2ª chamada retorna None
+    assert conn.pop_realized_close("XRPUSDT", "LONG") is None
+
+
+def test_on_user_order_update_captures_realized_on_close_fill():
+    """ORDER_TRADE_UPDATE com x=TRADE e rp!=0 (SELL fecha LONG) entra no buffer."""
+    conn = _conn_with_realized()
+    conn._on_user_order_update({"o": {
+        "s": "XRPUSDT", "S": "SELL", "x": "TRADE", "X": "FILLED",
+        "rp": "-0.30", "L": "1.1450", "l": "10",
+    }})
+    out = conn.pop_realized_close("XRPUSDT", "LONG")
+    assert out is not None
+    assert out["gross"] == pytest.approx(-0.30)
+    assert out["exit_price"] == pytest.approx(1.1450)
+
+
+def test_on_user_order_update_ignores_non_realizing_fill():
+    """Fill de ABERTURA (rp=0) não entra no buffer de fechamento."""
+    conn = _conn_with_realized()
+    conn._on_user_order_update({"o": {
+        "s": "XRPUSDT", "S": "BUY", "x": "TRADE", "X": "FILLED",
+        "rp": "0", "L": "1.1492", "l": "10",
+    }})
+    assert conn.pop_realized_close("XRPUSDT", "SHORT") is None
+    assert conn.pop_realized_close("XRPUSDT", "LONG") is None

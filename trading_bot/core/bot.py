@@ -4169,14 +4169,31 @@ class TradingBot:
         entry_time = pos_info.get('entry_time')
         start_time_ms = int(entry_time.timestamp() * 1000) if entry_time else None
 
-        # O REALIZED_PNL tem latência de alguns segundos após o fill — busca com
-        # retry antes de cair no fallback (ver _fetch_realized_pnl_with_retry).
-        pnl_gross = self._fetch_realized_pnl_with_retry(symbol, start_time_ms)
+        pnl_gross = None
+        stream_exit_price = None
+        # 1ª fonte (sem latência, #183): P&L realizado capturado dos fills de
+        # fechamento via user-stream (ORDER_TRADE_UPDATE). Exato e instantâneo.
+        if hasattr(self.exchange, "pop_realized_close"):
+            try:
+                realized = self.exchange.pop_realized_close(symbol, side)
+            except Exception:
+                realized = None
+            if realized is not None:
+                pnl_gross = realized.get("gross")
+                stream_exit_price = realized.get("exit_price")
+                logger.info(
+                    f"   ✓ P&L realizado via user-stream: bruto=${pnl_gross:+.4f} "
+                    f"exit≈${stream_exit_price:.6f}"
+                )
+
+        # 2ª fonte: income REST com retry (tem latência de alguns segundos).
         if pnl_gross is None:
-            logger.warning(
-                f"⚠️ REALIZED_PNL não encontrado para {symbol} após retries — "
-                f"usando estimativa por preço atual (P&L pode ficar impreciso)"
-            )
+            pnl_gross = self._fetch_realized_pnl_with_retry(symbol, start_time_ms)
+            if pnl_gross is None:
+                logger.warning(
+                    f"⚠️ REALIZED_PNL não encontrado para {symbol} (user-stream + retries) — "
+                    f"usando estimativa por preço atual (P&L pode ficar impreciso)"
+                )
 
         taker_fee_rate = self.get_taker_fee_rate()
         notional = entry_price * quantity
@@ -4202,9 +4219,12 @@ class TradingBot:
         logger.info(f"   Taxas: ${total_fees:.4f}")
         logger.info(f"   P&L Líquido: ${pnl_net:.4f}")
 
-        # exit_price IMPLÍCITO pelo gross agregado (não é fill real; ver helper).
-        # Consistente com pnl por construção agora que o gross soma todos os fills.
-        exit_price = _implied_exit_price(side, entry_price, pnl_gross, quantity)
+        # exit_price: usa o VWAP REAL dos fills (user-stream) quando disponível;
+        # senão cai no implícito pelo gross (não é fill real; ver helper).
+        if stream_exit_price and stream_exit_price > 0:
+            exit_price = stream_exit_price
+        else:
+            exit_price = _implied_exit_price(side, entry_price, pnl_gross, quantity)
 
         pos_meta = self._get_known_position(f"{symbol}_{side}")
 
