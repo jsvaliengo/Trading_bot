@@ -183,9 +183,25 @@
         const at = (v) => Math.max(0, Math.min(100, ((v - sl) / span) * 100));
         const mkPart = (mk && mk > 0) ? `<span class="mk pr" style="left:${at(mk)}%"></span>` : '';
         const prLbl = (mk && mk > 0) ? `<span>preço <b>${fmt.num(mk, 4)}</b></span>` : '';
+        // Trailing: marco de ATIVAÇÃO (onde arma) e STOP ATUAL (sobe/trava lucro).
+        const tsa = p.trailing_activation_price, ts = p.trailing_stop_price, armed = p.trailing_activated;
+        const actPart = (tsa && tsa > 0)
+            ? `<span class="mk act" style="left:${at(tsa)}%" title="trailing ativa em ${fmt.num(tsa, 4)}"></span>` : '';
+        const tsPart = (armed && ts && ts > 0)
+            ? `<span class="mk ts" style="left:${at(ts)}%" title="trailing stop atual ${fmt.num(ts, 4)}"></span>` : '';
+        let trailNote = '';
+        if (armed && ts && ts > 0 && en) {
+            const lp = (p.side === 'LONG') ? ((ts - en) / en) * 100 : ((en - ts) / en) * 100;
+            const lock = lp >= 0 ? `trava +${lp.toFixed(2)}%` : `ainda −${Math.abs(lp).toFixed(2)}%`;
+            trailNote = `<div class="trailnote on">🔒 trailing armado · stop <b>${fmt.num(ts, 4)}</b> (${lock}) · sobe com o preço</div>`;
+        } else if (tsa && tsa > 0 && p.trailing_activation_pct != null) {
+            trailNote = `<div class="trailnote">trailing arma em <b>${fmt.num(tsa, 4)}</b> (+${Number(p.trailing_activation_pct).toFixed(1)}% de lucro)</div>`;
+        }
         return `<div class="bar">
             <span class="mk sl" style="left:${at(sl)}%"></span>
             <span class="mk en" style="left:${at(en)}%"></span>
+            ${actPart}
+            ${tsPart}
             ${mkPart}
             <span class="mk tp" style="left:${at(tp)}%"></span>
         </div>
@@ -194,7 +210,8 @@
             <span>entrada <b>${fmt.num(en, 4)}</b></span>
             ${prLbl}
             <span>TP <b>${fmt.num(tp, 4)}</b></span>
-        </div>`;
+        </div>
+        ${trailNote}`;
     }
     function renderPositions(positions) {
         const root = $('positions-list');

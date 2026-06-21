@@ -233,6 +233,50 @@ def collect_summary(bot) -> Dict[str, Any]:
     }
 
 
+def _trailing_live_state(
+    bot, position_key: str, side: str, entry_price: float, payload: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Estado vivo do trailing por posição p/ a barra do dashboard.
+
+    Expõe onde o trailing ARMA (activation_price), se já armou, o pico alcançado
+    e o STOP ATUAL (que sobe/trava lucro conforme o preço anda a favor). O stop
+    é o mesmo cálculo do bot (`_trailing_stop_price`, com piso de breakeven).
+    """
+    out: Dict[str, Any] = {
+        "trailing_activated": False,
+        "trailing_peak_price": None,
+        "trailing_stop_price": None,
+        "trailing_activation_price": None,
+    }
+    act_pct = _safe_float(payload.get("trailing_activation_pct"))
+    dist_pct = _safe_float(payload.get("trailing_distance_pct"))
+
+    # Onde o trailing arma: activation_pct de lucro a partir da entrada.
+    if entry_price > 0 and act_pct > 0:
+        if side == "LONG":
+            out["trailing_activation_price"] = entry_price * (1 + act_pct / 100.0)
+        else:
+            out["trailing_activation_price"] = entry_price * (1 - act_pct / 100.0)
+
+    peak = (getattr(bot, "peak_prices", {}) or {}).get(position_key)
+    out["trailing_activated"] = bool(
+        (getattr(bot, "trailing_activated", {}) or {}).get(position_key, False)
+    )
+    if peak is not None:
+        out["trailing_peak_price"] = _safe_float(peak)
+        # Stop atual: usa o cálculo autoritativo do bot (piso de breakeven incluso).
+        try:
+            out["trailing_stop_price"] = _safe_float(
+                bot._trailing_stop_price(
+                    side, entry_price, _safe_float(peak),
+                    distance_pct=(dist_pct if dist_pct > 0 else None),
+                )
+            )
+        except Exception:
+            out["trailing_stop_price"] = None
+    return out
+
+
 def collect_positions(bot) -> List[Dict[str, Any]]:
     """Posições conhecidas + mark_price e P&L unrealized do cache da exchange.
 
@@ -299,6 +343,7 @@ def collect_positions(bot) -> List[Dict[str, Any]]:
                 "trailing_distance_pct": payload.get("trailing_distance_pct"),
                 "last_seen": _iso(payload.get("last_seen")),
                 "entry_time": _iso(payload.get("entry_time")),
+                **_trailing_live_state(bot, position_key, side, entry_price, payload),
             }
         )
 
