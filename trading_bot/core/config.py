@@ -1032,10 +1032,10 @@ class TradingConfig:
                 # bancas pequenas, subindo até 12. order_size/stop_loss são moot
                 # com USE_RISK_BASED_SIZING (o sizing por risco sobrescreve).
                 (90,    200,    3,    180,   1),   # PDF 90-150 → 1 moeda
-                (200,   350,    6,    360,   6),   # 2→3 (13/06)→6 (20/06, user): mais diversificação na banca atual
-                (350,   500,    9,    540,   6),   # subido p/ 6 junto (mantém monotonicidade)
-                (500,   750,    15,   900,   6),   # subido p/ 6 junto
-                (750,   1000,   20,   1200,  6),   # subido p/ 6 junto
+                (200,   350,    6,    360,   3),   # 6→3 (21/06): pares extras sangravam (AVAX/BCH/AAVE/SUI/SAND net -7)
+                (350,   500,    9,    540,   3),   # revertido p/ 3 junto (mantém monotonicidade)
+                (500,   750,    15,   900,   3),   # revertido p/ 3 junto
+                (750,   1000,   20,   1200,  3),   # revertido p/ 3 junto
                 (1000,  1500,   30,   1800,  6),   # PDF 1000   → 6
                 (1500,  2500,   45,   2700,  9),   # PDF 2000   → 9
                 (2500,  4000,   60,   3600,  9),   # PDF 3000   → 9

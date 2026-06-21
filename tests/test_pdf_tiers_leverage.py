@@ -13,9 +13,9 @@ from trading_bot.core.config import TradingConfig, config
 def test_num_coins_scales_per_pdf():
     expected = {
         100: 3,     # tier PDF dá 1, mas o piso BINANCE_MIN_NUM_COINS=3 sobe p/ 3
-        300: 6,     # 2→3 (13/06)→6 (20/06, user): mais diversificação na banca atual
-        450: 6,     # subido p/ 6 junto (mantém monotonicidade)
-        600: 6,     # subido p/ 6 junto
+        300: 3,     # 6→3 (21/06): pares extras sangravam; volta ao núcleo de majors
+        450: 3,     # revertido p/ 3 junto
+        600: 3,     # revertido p/ 3 junto
         1200: 6,    # PDF 1000
         2000: 9,    # PDF 2000
         3000: 9,    # PDF 3000
