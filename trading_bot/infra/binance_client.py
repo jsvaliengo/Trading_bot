@@ -966,11 +966,17 @@ class BinanceConnection:
 
         metrics.record_cache_miss("daily_pnl")
         try:
-            from datetime import datetime, timezone
+            from datetime import datetime, timezone, timedelta
 
-            # Início do dia UTC (00:00:00 UTC)
-            now = datetime.now(timezone.utc)
-            start_of_day = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
+            # Início do dia no FUSO LOCAL configurado (0 = UTC). O app da Binance
+            # mostra o realizado de hoje no fuso da conta (ex: Brasília UTC-3);
+            # alinhar a janela evita divergência dos trades entre 00:00 e o offset.
+            offset_h = float(getattr(self.config, "DAILY_PNL_TZ_OFFSET_HOURS", 0.0) or 0.0)
+            tz = timezone(timedelta(hours=offset_h))
+            now_local = datetime.now(tz)
+            start_of_day = datetime(
+                now_local.year, now_local.month, now_local.day, tzinfo=tz
+            )
             start_timestamp = int(start_of_day.timestamp() * 1000)
 
             income_list = self._api_call(
