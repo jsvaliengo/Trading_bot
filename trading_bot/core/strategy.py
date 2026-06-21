@@ -557,6 +557,38 @@ class HedgeStrategy:
             "volume_ok": bool(volume_ok),
         }
 
+    def _htf_bias(self, htf_klines: Optional[List[Dict]]) -> Optional[str]:
+        """Viés de tendência do timeframe maior (#168).
+
+        Retorna "LONG"/"SHORT"/"NEUTRAL" (regime macro real) ou None quando não
+        há candles suficientes (fail-open: o chamador não deve barrar por falta
+        de dado, só por divergência de regime). Bias = preço vs EMA(period) com
+        confirmação de inclinação da própria EMA:
+          - LONG : preço > EMA  e EMA subindo
+          - SHORT: preço < EMA  e EMA descendo
+          - NEUTRAL: caso contrário (macro lateral/ambíguo)
+        """
+        period = max(2, int(getattr(self.config, "TREND_STRONG_HTF_EMA_PERIOD", 200)))
+        slope_lb = max(1, int(getattr(self.config, "TREND_STRONG_HTF_SLOPE_LOOKBACK", 5)))
+        if not htf_klines or len(htf_klines) < period + slope_lb:
+            return None
+
+        closes = [self._to_float(k.get("close")) for k in htf_klines]
+        price = closes[-1]
+        if price <= 0:
+            return None
+
+        ema_now = self.ta.calculate_ema(closes, period)
+        ema_prev = self.ta.calculate_ema(closes[:-slope_lb], period)
+        rising = ema_now > ema_prev
+        falling = ema_now < ema_prev
+
+        if price > ema_now and rising:
+            return "LONG"
+        if price < ema_now and falling:
+            return "SHORT"
+        return "NEUTRAL"
+
     def _is_pullback_to_ema_long(self, candle: Dict[str, Any], ema9: float, ema21: float) -> bool:
         tolerance_pct = max(0.0, float(getattr(self.config, "TREND_STRONG_PULLBACK_TOLERANCE_PERCENT", 0.10)))
         tolerance = tolerance_pct / 100.0
@@ -643,10 +675,12 @@ class HedgeStrategy:
         self,
         execution_klines: List[Dict],
         confirmation_klines: List[Dict],
+        htf_klines: Optional[List[Dict]] = None,
     ) -> Signal:
         """
         Sinal do trend_strong:
         - tendência alinhada em execução (1m/3m) e confirmação (5m)
+        - viés de timeframe maior (#168): a direção precisa concordar com o macro
         - entrada apenas em pullback para EMA9/EMA21
         - RSI em faixa + candle de rejeição/engolfo + filtro de volume
         """
@@ -662,6 +696,13 @@ class HedgeStrategy:
         confirm_direction = str(confirm_ctx.get("direction", "NEUTRAL"))
         if exec_direction == "NEUTRAL" or exec_direction != confirm_direction:
             return Signal.NEUTRAL
+
+        # Viés de timeframe maior (#168): bloqueia entradas contra a maré.
+        # Fail-open quando o bias é None (faltam candles do HTF).
+        if bool(getattr(self.config, "TREND_STRONG_HTF_BIAS_ENABLED", True)):
+            htf_bias = self._htf_bias(htf_klines)
+            if htf_bias is not None and htf_bias != exec_direction:
+                return Signal.NEUTRAL
 
         previous_candle = execution_klines[-2]
         current_candle = execution_klines[-1]
@@ -1115,25 +1156,27 @@ class HedgeStrategy:
         confirmation_klines: Optional[List[Dict]] = None,
         execution_timeframe: Optional[str] = None,
         confirmation_timeframe: Optional[str] = None,
+        htf_klines: Optional[List[Dict]] = None,
     ) -> Optional[TradeSetup]:
         """
         Gera uma configuração completa de trade.
-        
+
         Este é o método principal que combina toda a análise
         e retorna uma estrutura pronta para execução.
-        
+
         Args:
             symbol: Par de trading (ex: 'ETHUSDT')
             klines: Dados de candles
             available_capital: Saldo disponível atual (usa X% deste valor)
             min_notional: Valor mínimo exigido pela Binance para este par
+            htf_klines: Candles do timeframe maior p/ o viés de direção (#168)
         """
         if not klines:
             return None
-        
+
         # Analisa o mercado (pullback multi-timeframe para trend_strong, fallback legado para demais casos).
         if confirmation_klines:
-            signal = self.analyze_market_pullback(klines, confirmation_klines)
+            signal = self.analyze_market_pullback(klines, confirmation_klines, htf_klines)
         else:
             signal = self.analyze_market(klines)
         
@@ -1386,6 +1429,7 @@ class RangeScalpingStrategy:
         confirmation_klines: Optional[List[Dict]] = None,
         execution_timeframe: Optional[str] = None,
         confirmation_timeframe: Optional[str] = None,
+        htf_klines: Optional[List[Dict]] = None,  # ignorado (sem viés HTF no range)
     ) -> Optional[TradeSetup]:
         if not klines or len(klines) < 12:
             return None

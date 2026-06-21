@@ -164,15 +164,17 @@ def test_desired_ws_subscriptions_includes_all_trend_strong_timeframes(monkeypat
     monkeypatch.setattr(bot_module.config, "TIMEFRAME", "5m")
     monkeypatch.setattr(bot_module.config, "TREND_STRONG_EXECUTION_TIMEFRAME", "3m")
     monkeypatch.setattr(bot_module.config, "TREND_STRONG_CONFIRM_TIMEFRAME", "5m")
+    monkeypatch.setattr(bot_module.config, "TREND_STRONG_HTF_BIAS_ENABLED", True)
+    monkeypatch.setattr(bot_module.config, "TREND_STRONG_HTF_TIMEFRAME", "1h")
     monkeypatch.setattr(bot_module.config, "STRATEGY_PROFILES", [
         {"name": "trend_strong", "enabled": True},
     ])
 
     desired = bot._desired_ws_subscriptions()
-    # 2 pares × 2 intervalos distintos (3m + 5m — o 5m do TIMEFRAME dedupa com CONFIRM)
+    # 2 pares × 3 intervalos (3m exec + 5m confirm/TIMEFRAME + 1h viés HTF #168)
     assert desired == {
-        ("ETHUSDT", "3m"), ("ETHUSDT", "5m"),
-        ("BTCUSDT", "3m"), ("BTCUSDT", "5m"),
+        ("ETHUSDT", "3m"), ("ETHUSDT", "5m"), ("ETHUSDT", "1h"),
+        ("BTCUSDT", "3m"), ("BTCUSDT", "5m"), ("BTCUSDT", "1h"),
     }
 
 
@@ -189,6 +191,8 @@ def test_sync_ws_subscriptions_adds_and_removes_delta(monkeypatch):
     monkeypatch.setattr(bot_module.config, "TIMEFRAME", "5m")
     monkeypatch.setattr(bot_module.config, "TREND_STRONG_EXECUTION_TIMEFRAME", "3m")
     monkeypatch.setattr(bot_module.config, "TREND_STRONG_CONFIRM_TIMEFRAME", "5m")
+    # Isola o delta de sub/unsub do viés HTF (testado à parte).
+    monkeypatch.setattr(bot_module.config, "TREND_STRONG_HTF_BIAS_ENABLED", False)
     monkeypatch.setattr(bot_module.config, "STRATEGY_PROFILES", [])
 
     exchange = MagicMock()

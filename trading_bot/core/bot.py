@@ -925,6 +925,9 @@ class TradingBot:
         if trend_strong_active:
             intervals.add(str(getattr(config, "TREND_STRONG_EXECUTION_TIMEFRAME", "3m") or "3m"))
             intervals.add(str(getattr(config, "TREND_STRONG_CONFIRM_TIMEFRAME", "5m") or "5m"))
+            # Viés de timeframe maior (#168): mantém o HTF quente no WS.
+            if bool(getattr(config, "TREND_STRONG_HTF_BIAS_ENABLED", True)):
+                intervals.add(str(getattr(config, "TREND_STRONG_HTF_TIMEFRAME", "1h") or "1h"))
 
         return {(sym, interval) for sym in pairs for interval in intervals if sym}
 
@@ -3518,6 +3521,9 @@ class TradingBot:
         analysis_lookback = int(config.CANDLES_LOOKBACK)
         confirmation_timeframe = None
         confirmation_klines = None
+        htf_timeframe = None
+        htf_lookback = 0
+        htf_klines = None
 
         is_trend_strong = strategy_type == "trend_signal" and strategy_label == "trend_strong"
         if is_trend_strong:
@@ -3528,19 +3534,38 @@ class TradingBot:
                 int(config.CANDLES_LOOKBACK),
             )
             confirmation_timeframe = str(getattr(config, "TREND_STRONG_CONFIRM_TIMEFRAME", "5m"))
+            # Viés de timeframe maior (#168): busca candles do HTF p/ filtrar direção.
+            if bool(getattr(config, "TREND_STRONG_HTF_BIAS_ENABLED", True)):
+                htf_timeframe = str(getattr(config, "TREND_STRONG_HTF_TIMEFRAME", "1h"))
+                htf_lookback = max(
+                    250,
+                    int(getattr(config, "TREND_STRONG_HTF_EMA_PERIOD", 200))
+                    + int(getattr(config, "TREND_STRONG_HTF_SLOPE_LOOKBACK", 5))
+                    + 50,
+                )
 
         logger.info(f"🔍 [{strategy_label}] Analisando {symbol}...")
-        
+
         # Improvement 5: busca klines em paralelo quando há timeframe de confirmação
         if is_trend_strong and confirmation_timeframe:
             def _fetch_klines(interval, limit):
                 return self.exchange.get_klines(symbol=symbol, interval=interval, limit=limit)
 
-            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as _kl_executor:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=3) as _kl_executor:
                 _exec_future = _kl_executor.submit(_fetch_klines, execution_timeframe, analysis_lookback)
                 _conf_future = _kl_executor.submit(_fetch_klines, confirmation_timeframe, analysis_lookback)
+                _htf_future = (
+                    _kl_executor.submit(_fetch_klines, htf_timeframe, htf_lookback)
+                    if htf_timeframe else None
+                )
                 klines = _exec_future.result()
                 confirmation_klines = _conf_future.result()
+                if _htf_future is not None:
+                    try:
+                        htf_klines = _htf_future.result()
+                    except Exception as exc:  # fail-open: sem HTF não barra entrada
+                        logger.warning(f"⚠️  Falha ao buscar HTF ({htf_timeframe}) p/ {symbol}: {exc}")
+                        htf_klines = None
         else:
             klines = self.exchange.get_klines(
                 symbol=symbol,
@@ -3595,6 +3620,8 @@ class TradingBot:
             setup_kwargs["confirmation_klines"] = confirmation_klines
             setup_kwargs["execution_timeframe"] = execution_timeframe
             setup_kwargs["confirmation_timeframe"] = confirmation_timeframe
+        if htf_klines is not None:
+            setup_kwargs["htf_klines"] = htf_klines
 
         setup = strategy_engine.generate_trade_setup(
             **setup_kwargs,
