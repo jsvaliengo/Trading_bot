@@ -145,11 +145,13 @@ def collect_summary(bot) -> Dict[str, Any]:
     if exchange is not None:
         try:
             daily = exchange.get_daily_pnl_from_binance()
-            # Subtrai o baseline ancorado no reset/rollover de dia UTC para
-            # que o display comece em $0 após /reset. Funding e commission
-            # ficam no valor raw (são breakdowns informativos).
-            baseline = _safe_float(getattr(bot, "daily_pnl_binance_baseline", 0.0))
-            binance_daily_realized = _safe_float(daily.get("total")) - baseline
+            # `total` já é o income de HOJE desde 00:00 UTC (realized+funding+
+            # commission) = exatamente o P&L do dia da Binance. NÃO subtrair o
+            # daily_pnl_binance_baseline: ele re-ancora a cada restart e zerava o
+            # card no meio do dia (#136). Como reiniciamos o bot a cada deploy, o
+            # baseline ficava ≈ o total do dia e o card mostrava ~$0 numa perda
+            # real. O dia já reseta naturalmente à meia-noite UTC.
+            binance_daily_realized = _safe_float(daily.get("total"))
             # funding_fee é negativo quando paga, positivo quando recebe.
             # commission é sempre negativo (custo).
             binance_funding_fee = _safe_float(daily.get("funding_fee"))
