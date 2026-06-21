@@ -67,6 +67,13 @@ class BinanceConnection:
         self._symbol_cooldowns_lock = threading.Lock()
         self._symbol_cooldowns: Dict[str, Dict[str, Any]] = {}
 
+        # Buffer de P&L realizado capturado dos fills de fechamento via user-stream
+        # (ORDER_TRADE_UPDATE). Fonte SEM latência do income REST (#183): key
+        # "{symbol}_{side}" -> {"gross","notional","qty","ts"}. Escrito pela thread
+        # do TWM (_on_user_order_update), lido/consumido pelo monitor (pop_realized_close).
+        self._realized_lock = threading.Lock()
+        self._realized_close_buffer: Dict[str, Dict[str, float]] = {}
+
         # Improvement 6: TTL cache para get_symbol_info e get_exchange_info
         self._symbol_info_cache: Dict[str, Dict] = {}
         self._symbol_info_cache_ts: Dict[str, float] = {}
@@ -793,10 +800,56 @@ class BinanceConnection:
         puro de NEW/CANCELED não muda estado.
         """
         order_data = msg.get("o") or {}
-        status = order_data.get("X")  # execution type (FILLED, PARTIALLY_FILLED, ...)
+        status = order_data.get("X")  # order status (FILLED, PARTIALLY_FILLED, ...)
         if status in ("FILLED", "PARTIALLY_FILLED"):
             self.invalidate_positions_cache()
             self.invalidate_balance_cache()
+
+        # Captura o P&L realizado dos fills de FECHAMENTO (sem latência do income
+        # REST — #183). `x`=TRADE => um fill ocorreu; `rp`!=0 => realizou P&L, logo
+        # é um fill que fecha posição. SELL fecha LONG, BUY fecha SHORT.
+        try:
+            if order_data.get("x") == "TRADE":
+                rp = float(order_data.get("rp", 0) or 0)
+                if rp != 0.0:
+                    symbol = order_data.get("s")
+                    closed_side = "LONG" if order_data.get("S") == "SELL" else "SHORT"
+                    price = float(order_data.get("L", 0) or 0)
+                    qty = float(order_data.get("l", 0) or 0)
+                    self._record_realized_fill(symbol, closed_side, rp, price, qty)
+        except (TypeError, ValueError):
+            pass
+
+    def _record_realized_fill(self, symbol: str, side: str, rp: float, price: float, qty: float) -> None:
+        """Acumula um fill de fechamento no buffer de realizado (thread do TWM)."""
+        if not symbol:
+            return
+        key = f"{symbol}_{side}"
+        with self._realized_lock:
+            entry = self._realized_close_buffer.get(key) or {"gross": 0.0, "notional": 0.0, "qty": 0.0, "ts": 0.0}
+            entry["gross"] += rp
+            entry["notional"] += price * qty
+            entry["qty"] += qty
+            entry["ts"] = time.time()
+            self._realized_close_buffer[key] = entry
+
+    def pop_realized_close(self, symbol: str, side: str) -> Optional[Dict[str, float]]:
+        """Consome o P&L realizado acumulado dos fills de fechamento (user-stream).
+
+        Retorna {"gross", "exit_price" (VWAP dos fills), "qty"} ou None se não há
+        nada bufferizado. Fonte exata e instantânea — evita o fallback que estima
+        o P&L pelo preço atual quando o income REST ainda não populou (#181/#183).
+        """
+        key = f"{symbol}_{side}"
+        with self._realized_lock:
+            entry = self._realized_close_buffer.pop(key, None)
+        if not entry or entry.get("qty", 0) <= 0:
+            return None
+        return {
+            "gross": entry["gross"],
+            "exit_price": entry["notional"] / entry["qty"],
+            "qty": entry["qty"],
+        }
 
     def shutdown(self) -> None:
         """
