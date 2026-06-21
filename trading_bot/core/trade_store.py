@@ -528,6 +528,57 @@ class TradeStore:
             })
         return out[-int(limit):] if limit else out
 
+    def closed_trades_since(self, lookback_hours: float = 48.0) -> List[Dict[str, Any]]:
+        """Trades FECHADOS com exit_at nas últimas `lookback_hours` (p/ reconciliação).
+
+        Retorna os campos necessários p/ casar com o income da Binance e corrigir
+        o P&L (id, symbol, side, opened_at, exit_at, qty, entry_price, pnl_*).
+        """
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
+        ).strftime("%Y-%m-%dT%H:%M:%S")
+        try:
+            with self._lock:
+                rows = self._conn.execute(
+                    "SELECT id, symbol, side, opened_at, exit_at, qty, entry_price, "
+                    "       pnl_net, pnl_gross, fees "
+                    "  FROM trades "
+                    " WHERE status='closed' AND exit_at IS NOT NULL AND exit_at >= ? "
+                    " ORDER BY exit_at ASC",
+                    (cutoff,),
+                ).fetchall()
+            return [dict(r) for r in rows]
+        except Exception:
+            logger.exception("🗃️ Falha ao ler trades fechados recentes")
+            return []
+
+    def update_trade_pnl(
+        self,
+        trade_id: int,
+        *,
+        pnl_gross: float,
+        fees: float,
+        pnl_net: float,
+        exit_price: Optional[float] = None,
+    ) -> bool:
+        """Corrige o P&L de um trade fechado (reconciliação com a Binance).
+
+        exit_price só é sobrescrito quando fornecido (COALESCE). Idempotente:
+        reaplicar os mesmos valores é no-op efetivo.
+        """
+        try:
+            with self._lock:
+                self._conn.execute(
+                    "UPDATE trades SET pnl_gross=?, fees=?, pnl_net=?, "
+                    "exit_price=COALESCE(?, exit_price) WHERE id=?",
+                    (pnl_gross, fees, pnl_net, exit_price, trade_id),
+                )
+                self._conn.commit()
+            return True
+        except Exception:
+            logger.exception(f"🗃️ Falha ao atualizar P&L do trade {trade_id}")
+            return False
+
     def pnl_analysis(
         self, since_utc: Optional[str] = None, tz_offset_hours: float = 0.0
     ) -> Dict[str, Any]:

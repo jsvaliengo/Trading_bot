@@ -3051,6 +3051,36 @@ class TradingBot:
             self.update_commission_rates()
         return self.commission_rates.get('taker_rate', 0.0005)
 
+    def reconcile_recent_pnl(self):
+        """Auto-reconciliação: corrige no DB trades com P&L divergente da Binance.
+
+        Roda no loop a cada PNL_RECONCILE_INTERVAL_MINUTES. Cura a fabricação que
+        escapa quando o user-stream perde o fill do fechamento (#67). Avisa no
+        Telegram só quando corrige algo (sem spam). Fail-safe: nunca derruba o loop.
+        """
+        try:
+            from ..services.pnl_reconciler import reconcile_recent_pnl
+            lookback = float(getattr(config, "PNL_RECONCILE_LOOKBACK_HOURS", 48.0))
+            result = reconcile_recent_pnl(self, lookback_hours=lookback)
+        except Exception as exc:
+            logger.warning(f"🔁 Reconciliação P&L falhou: {exc}")
+            return
+        if result.get("corrected"):
+            # O dashboard faz polling do snapshot (lê o DB ao vivo) — sem emit.
+            try:
+                lines = "\n".join(
+                    f"• {d['symbol']} {d['side']}: ${d['old']:+.2f} → ${d['new']:+.2f}"
+                    for d in result.get("details", [])[:8]
+                )
+                self.telegram.send_message(
+                    f"🔁 <b>P&L reconciliado</b>\n"
+                    f"{result['corrected']} trade(s) corrigido(s) "
+                    f"(Δ ${result['total_delta']:+.2f}) — o bot havia gravado P&L "
+                    f"que divergia da Binance e ajustou sozinho.\n{lines}"
+                )
+            except Exception:
+                pass
+
     def set_sentiment_mode(self, enabled: bool, persist: bool = True) -> bool:
         """Liga/desliga o filtro de sentimento para entradas novas."""
         self.sentiment_mode_enabled = bool(enabled)
@@ -5419,6 +5449,11 @@ class TradingBot:
             max(5, int(getattr(config, "CAPITAL_TRANSFER_CHECK_INTERVAL_SECONDS", 60) or 60)),
         )
         self._loop_scheduler.add("strategy_check", base_interval * 60)
+        if bool(getattr(config, "PNL_RECONCILE_ENABLED", True)):
+            self._loop_scheduler.add(
+                "pnl_reconcile",
+                max(60.0, float(getattr(config, "PNL_RECONCILE_INTERVAL_MINUTES", 15.0)) * 60.0),
+            )
 
         now = time.monotonic()
         next_monitor_time = now
@@ -5573,6 +5608,10 @@ class TradingBot:
                     if config.USE_BINANCE_STRATEGY and self._loop_scheduler.due("strategy_check", now):
                         self.check_and_update_binance_strategy()
                         self._loop_scheduler.mark_ran("strategy_check", now)
+
+                    if self._loop_scheduler.due("pnl_reconcile", now):
+                        self.reconcile_recent_pnl()
+                        self._loop_scheduler.mark_ran("pnl_reconcile", now)
 
                     next_monitor_time = now + monitor_interval
                     monitor_duration = time.monotonic() - monitor_started_at
