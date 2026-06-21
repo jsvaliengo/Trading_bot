@@ -31,7 +31,7 @@ import json
 import logging
 import sqlite3
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -374,26 +374,43 @@ class TradeStore:
             logger.exception("🗃️ Falha ao somar pnl realizado acumulado")
             return 0.0
 
-    def realized_pnl_today(self, day_utc: Optional[str] = None) -> float:
-        """Soma de pnl_net dos trades fechados HOJE (UTC), do TradeStore durável.
+    @staticmethod
+    def _local_day_sql(tz_offset_hours: float) -> tuple[str, list]:
+        """(expr_sql, params) p/ o DIA LOCAL a partir de exit_at (gravado em UTC).
+
+        Com offset, desloca via SQLite `datetime(exit_at, '±N hours')` e cai pra
+        substr cru se o parse falhar. Sem offset, usa substr direto (UTC).
+        """
+        if not tz_offset_hours:
+            return "substr(exit_at, 1, 10)", []
+        mod = f"{tz_offset_hours:+g} hours"
+        return (
+            "COALESCE(substr(datetime(exit_at, ?), 1, 10), substr(exit_at, 1, 10))",
+            [mod],
+        )
+
+    def realized_pnl_today(
+        self, day: Optional[str] = None, tz_offset_hours: float = 0.0
+    ) -> float:
+        """Soma de pnl_net dos trades fechados HOJE (no fuso local), do TradeStore.
 
         MESMA fonte da coluna "P&L DO DIA" do dashboard (daily_pnl_history) e do
-        "P&L TOTAL" (cumulative_realized_pnl). O card "P&L HOJE" usa isto em vez
-        do income diário da Binance — que dependia de um baseline re-ancorado a
-        cada restart (zerava o contador no meio do dia UTC). Agrega por
-        date(exit_at), igual ao histórico diário.
+        "P&L TOTAL" (cumulative_realized_pnl). O dia segue `tz_offset_hours` (0 =
+        UTC; -3 = Brasília) p/ casar com o "Realizados de Hoje" do app da Binance.
 
-        day_utc: data 'YYYY-MM-DD' a consultar; default = hoje em UTC.
+        day: data 'YYYY-MM-DD' a consultar; default = hoje no fuso local.
         """
-        if day_utc is None:
-            day_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        if day is None:
+            tz = timezone(timedelta(hours=tz_offset_hours))
+            day = datetime.now(tz).strftime("%Y-%m-%d")
+        day_expr, params = self._local_day_sql(tz_offset_hours)
         try:
             with self._lock:
                 row = self._conn.execute(
                     "SELECT COALESCE(SUM(pnl_net), 0) FROM trades "
                     "WHERE status='closed' AND exit_at IS NOT NULL "
-                    "AND substr(exit_at, 1, 10) = ?",
-                    (day_utc,),
+                    f"AND {day_expr} = ?",
+                    [*params, day],
                 ).fetchone()
             return float(row[0] or 0.0) if row else 0.0
         except Exception:
@@ -459,20 +476,24 @@ class TradeStore:
             logger.exception("🗃️ Falha ao obter timestamp do primeiro trade")
             return None
 
-    def daily_pnl_history(self, limit: int = 90) -> List[Dict[str, Any]]:
-        """P&L agregado por dia (UTC) dos trades fechados, cronológico.
+    def daily_pnl_history(
+        self, limit: int = 90, tz_offset_hours: float = 0.0
+    ) -> List[Dict[str, Any]]:
+        """P&L agregado por dia (no fuso local) dos trades fechados, cronológico.
 
-        Agrega por date(exit_at): nº de trades, wins, net, fees, win_rate e o
-        acumulado corrido (`cumulative`). Base da tabela de histórico diário do
-        dashboard. O acumulado é computado sobre TODOS os dias e só então o
+        Agrega por dia: nº de trades, wins, net, fees, win_rate e o acumulado
+        corrido (`cumulative`). Base da tabela de histórico diário do dashboard.
+        O dia segue `tz_offset_hours` (0 = UTC; -3 = Brasília) p/ casar com o app
+        da Binance. O acumulado é computado sobre TODOS os dias e só então o
         resultado é cortado nos últimos `limit`, então fica correto mesmo com o
         corte.
         """
+        day_expr, params = self._local_day_sql(tz_offset_hours)
         try:
             with self._lock:
                 rows = self._conn.execute(
-                    """
-                    SELECT substr(exit_at, 1, 10)                       AS day,
+                    f"""
+                    SELECT {day_expr}                                   AS day,
                            COUNT(*)                                     AS trades,
                            SUM(CASE WHEN pnl_net > 0 THEN 1 ELSE 0 END) AS wins,
                            COALESCE(SUM(pnl_net), 0)                    AS net,
@@ -481,7 +502,8 @@ class TradeStore:
                      WHERE status='closed' AND exit_at IS NOT NULL
                      GROUP BY day
                      ORDER BY day
-                    """
+                    """,
+                    params,
                 ).fetchall()
         except Exception:
             logger.exception("🗃️ Falha ao agregar P&L diário")
@@ -506,7 +528,9 @@ class TradeStore:
             })
         return out[-int(limit):] if limit else out
 
-    def pnl_analysis(self, since_utc: Optional[str] = None) -> Dict[str, Any]:
+    def pnl_analysis(
+        self, since_utc: Optional[str] = None, tz_offset_hours: float = 0.0
+    ) -> Dict[str, Any]:
         """Agregados de P&L dos trades FECHADOS — base do painel "Análise P&L".
 
         Retorna (todos derivados de pnl_net, líquido de taxas):
@@ -564,8 +588,8 @@ class TradeStore:
         avg_loss = total_loss / losses if losses else 0.0
         pl_ratio = (avg_profit / abs(avg_loss)) if avg_loss else 0.0
 
-        # Dias ganhos/perdas/breakeven — reusa o net diário já agregado.
-        daily = self.daily_pnl_history(limit=0)
+        # Dias ganhos/perdas/breakeven — reusa o net diário já agregado (mesmo fuso).
+        daily = self.daily_pnl_history(limit=0, tz_offset_hours=tz_offset_hours)
         if since_utc:
             daily = [d for d in daily if d["day"] >= since_utc]
         winning_days = sum(1 for d in daily if d["net"] > 0)
