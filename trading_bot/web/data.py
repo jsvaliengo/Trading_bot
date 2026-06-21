@@ -175,33 +175,18 @@ def collect_summary(bot) -> Dict[str, Any]:
         except Exception:
             pass
 
-    # Realizado ACUMULADO (todos os dias), do TradeStore durável — não zera na
-    # virada do dia UTC. Antes o saldo/P&L usava só o realizado do DIA, então
-    # voltava pro capital inicial todo dia e escondia o progresso do bot.
-    # Fallback no contador interno do bot quando não há store.
+    # Realizado ACUMULADO do TradeStore — usado só no effective_balance do testnet
+    # simulado (cap fixo). Em mainnet o wallet real já reflete o realizado.
     cumulative_realized = bot_total_pnl
-    # P&L HOJE (card): realizado de HOJE do MESMO TradeStore durável — igual à
-    # coluna "P&L DO DIA" do histórico. Antes usava o income diário da Binance
-    # menos um baseline que era re-ancorado a cada restart, então o card zerava
-    # no meio do dia UTC e divergia do histórico/total. Fallback no realizado
-    # da Binance quando não há store.
-    daily_realized = binance_daily_realized
     store = getattr(bot, "trade_store", None)
     if store is not None:
         try:
             cumulative_realized = _safe_float(store.cumulative_realized_pnl())
         except Exception:
             pass
-        try:
-            daily_realized = _safe_float(store.realized_pnl_today())
-        except Exception:
-            pass
 
-    # P&L total = realizado ACUMULADO + não realizado das posições abertas.
-    total_pnl = cumulative_realized + binance_unrealized
-    # Equity = capital/wallet + acumulado + não realizado. No mainnet o wallet
-    # já reflete o realizado; no testnet simulated o cap é fixo, então somamos
-    # o realizado acumulado (não só o do dia) pra refletir o progresso real.
+    # Equity efetivo (card SALDO). No mainnet vem do wallet real + não-realizado;
+    # no testnet simulado, cap fixo + realizado acumulado + não-realizado.
     if getattr(config, "USE_TESTNET", False) and float(
         getattr(config, "SIMULATED_BALANCE_USD", 0.0) or 0.0
     ) > 0:
@@ -209,9 +194,18 @@ def collect_summary(bot) -> Dict[str, Any]:
     else:
         effective_balance = wallet_balance + binance_unrealized
 
+    # Os cards de P&L vêm da BINANCE (fonte de verdade do dinheiro), NÃO do DB —
+    # o DB tinha valores fabricados/estimados (#181) e divergia do extrato.
+    #  - P&L Hoje  = realizado do dia da Binance (income realized+funding+commission,
+    #    ajustado pelo baseline do /reset).
+    #  - P&L Total = equity atual − capital inicial (real; bate com o app).
+    # O DB segue alimentando trade list / MFE / win-loss / histórico por dia.
+    daily_realized = binance_daily_realized
     if initial_capital > 0:
+        total_pnl = effective_balance - initial_capital
         roi_percent = (total_pnl / initial_capital) * 100.0
     else:
+        total_pnl = cumulative_realized + binance_unrealized
         roi_percent = 0.0
 
     return {

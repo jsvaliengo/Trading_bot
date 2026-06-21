@@ -174,14 +174,16 @@ def test_collect_summary_uses_store_cumulative(tmp_path, monkeypatch):
     assert summary["daily_pnl"] == 0.0  # P&L HOJE diário, separado
 
 
-def test_collect_summary_daily_pnl_usa_store_nao_binance(tmp_path, monkeypatch):
-    """P&L HOJE (card) deve vir do realizado de HOJE no SQLite, NÃO do income
-    diário da Binance — que dependia de um baseline re-ancorado a cada restart.
+def test_collect_summary_pnl_vem_da_binance_nao_do_db(tmp_path, monkeypatch):
+    """P&L HOJE e P&L TOTAL (cards) vêm da BINANCE (fonte de verdade do dinheiro),
+    NÃO do DB — o DB tinha valores fabricados/estimados (#181) e divergia do
+    extrato. daily = income do dia; total = equity − capital inicial.
     """
-    monkeypatch.setattr(global_config, "SIMULATED_BALANCE_USD", 100.0, raising=False)
+    # SIMULATED_BALANCE_USD=0 → caminho mainnet (effective_balance = wallet real).
+    monkeypatch.setattr(global_config, "SIMULATED_BALANCE_USD", 0.0, raising=False)
     hoje = _freeze_trade_store_today(monkeypatch, year=2026, month=6, day=8)
     store = _store(tmp_path)
-    # Realizado de hoje no SQLite = -3.96 (o número honesto do dia)
+    # DB tem valores (potencialmente fabricados) que NÃO devem aparecer nos cards.
     _close(store, entry=2500, pnl_net=1.24, fees=0.0, exit_at=f"{hoje}T09:00:00")
     _close(store, entry=2510, pnl_net=-5.20, fees=0.0, exit_at=f"{hoje}T16:00:00")
     bot = SimpleNamespace(
@@ -189,14 +191,16 @@ def test_collect_summary_daily_pnl_usa_store_nao_binance(tmp_path, monkeypatch):
         daily_realized_pnl=0.0, closed_trades_count=2, paused=False, running=True,
         trade_store=store,
         exchange=SimpleNamespace(
-            # Binance reportaria +0.62 (baseline distorcido pós-restart) — ignorado.
-            get_daily_pnl_from_binance=lambda: {"total": 0.62, "funding_fee": 0.0, "commission": 0.0},
-            get_account_info=lambda: {"wallet_balance": 100.0, "unrealized_pnl": 0.0},
+            # Binance: dia real -1.99 (líquido); wallet real 94.64.
+            get_daily_pnl_from_binance=lambda: {"total": -1.99, "funding_fee": -0.01, "commission": -0.66},
+            get_account_info=lambda: {"wallet_balance": 94.64, "unrealized_pnl": 0.0},
             get_open_positions=lambda: [],
-            daily_pnl_binance_baseline=0.0,
         ),
         daily_pnl_binance_baseline=0.0,
     )
     summary = dashboard_data.collect_summary(bot)
-    # daily_pnl = realizado de hoje do store (-3.96), NÃO o +0.62 da Binance
-    assert summary["daily_pnl"] == pytest.approx(-3.96)
+    # daily = income do dia da Binance (-1.99), NÃO o do DB (-3.96)
+    assert summary["daily_pnl"] == pytest.approx(-1.99)
+    # total = equity (wallet 94.64) − inicial 100 = -5.36 (real), NÃO o do DB
+    assert summary["total_pnl"] == pytest.approx(-5.36)
+    assert summary["last_balance"] == pytest.approx(94.64)
