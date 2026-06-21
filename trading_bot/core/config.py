@@ -559,6 +559,15 @@ class TradingConfig:
     # caíam no dia errado). Offset em horas (-3 = Brasília). 0 = UTC.
     DAILY_PNL_TZ_OFFSET_HOURS: float = _env_float("TRADING_BOT_DAILY_PNL_TZ_OFFSET_HOURS", 0.0)
 
+    # Auto-reconciliação do P&L: periodicamente compara cada trade fechado recente
+    # com o income REAL da Binance (REALIZED_PNL+COMMISSION) e corrige o DB quando
+    # diverge. Cura a fabricação que escapa quando o user-stream perde o fill do
+    # fechamento (cai no fallback por preço atual, bug #181/#67). DB vira
+    # self-healing — dashboard/win-rate/P&L-por-moeda param de divergir do extrato.
+    PNL_RECONCILE_ENABLED: bool = _env_bool("TRADING_BOT_PNL_RECONCILE_ENABLED", True)
+    PNL_RECONCILE_INTERVAL_MINUTES: float = _env_float("TRADING_BOT_PNL_RECONCILE_INTERVAL_MINUTES", 15.0)
+    PNL_RECONCILE_LOOKBACK_HOURS: float = _env_float("TRADING_BOT_PNL_RECONCILE_LOOKBACK_HOURS", 48.0)
+
     # Meta de PERDA diária em USD - Para de abrir novas posições quando atingir
     # ~2% do saldo testnet (~$4.8k)
     DAILY_LOSS_LIMIT: float = 100.0

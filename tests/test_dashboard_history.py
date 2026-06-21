@@ -107,6 +107,29 @@ def test_daily_history_groups_by_local_tz(tmp_path):
     assert [d["cumulative"] for d in brt] == [pytest.approx(1.0), pytest.approx(3.0)]
 
 
+def test_update_trade_pnl_corrects_row(tmp_path):
+    store = _store(tmp_path)
+    _close(store, entry=1700, pnl_net=1.28, fees=0.02, exit_at="2026-06-21T17:00:00",
+           symbol="ETHUSDT", side="LONG")
+    tid = store.closed_trades_since(lookback_hours=24 * 3650)[0]["id"]
+    assert store.update_trade_pnl(tid, pnl_gross=-0.64, fees=0.03, pnl_net=-0.67) is True
+    row = store.closed_trades_since(lookback_hours=24 * 3650)[0]
+    assert row["pnl_net"] == pytest.approx(-0.67)
+    assert row["pnl_gross"] == pytest.approx(-0.64)
+    assert row["fees"] == pytest.approx(0.03)
+
+
+def test_closed_trades_since_filters_by_lookback(tmp_path):
+    store = _store(tmp_path)
+    # um trade antigo (fora da janela) e um recente — só o recente volta
+    from datetime import datetime, timezone, timedelta
+    recent = (datetime.now(timezone.utc) - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%S")
+    _close(store, entry=2500, pnl_net=1.0, fees=0.0, exit_at="2020-01-01T00:00:00")
+    _close(store, entry=2510, pnl_net=2.0, fees=0.0, exit_at=recent)
+    out = store.closed_trades_since(lookback_hours=48)
+    assert len(out) == 1 and out[0]["pnl_net"] == pytest.approx(2.0)
+
+
 def test_realized_pnl_today_respects_tz(tmp_path):
     store = _store(tmp_path)
     _close(store, entry=2500, pnl_net=1.0, fees=0.0, exit_at="2026-06-21T01:00:00")
