@@ -28,6 +28,7 @@ def _make_bot():
     bot.risk_manager = MagicMock()
     bot.ledger = MagicMock()
     bot.telegram = MagicMock()
+    bot.peak_prices = {}
     # posição com metadata (evita _resolve_strategy_context)
     bot._get_known_position = lambda key: {
         "strategy_name": "trend_strong",
@@ -89,3 +90,34 @@ def test_tier3_preco_atual_e_ultimo_recurso(monkeypatch):
     # gross estimado = (1690 - 1700) * 0.05 = -0.50
     assert _recorded_gross(bot) == -0.50
     bot.exchange.get_current_price.assert_called_once()   # confirmou: caiu no fallback
+
+
+def test_fallback_clampa_preco_lixo_no_pico(monkeypatch):
+    """#196: get_current_price devolve preço-lixo (1842) acima do pico real.
+
+    O guardrail de MFE clampa no pico (1701) → não fabrica o lucro absurdo que a
+    posição nunca teve. (reconciliação depois traz o valor exato.)
+    """
+    import trading_bot.core.bot as bot_mod
+    monkeypatch.setattr(bot_mod.time, "sleep", lambda *_a, **_k: None)
+    bot = _make_bot()
+    bot.exchange.pop_realized_close.return_value = None
+    bot.exchange.get_income_history.return_value = []
+    bot.peak_prices = {"ETHUSDT_LONG": 1701.0}            # pico real ~breakeven (MFE minúsculo)
+    bot.exchange.get_current_price.return_value = 1842.0  # LIXO (par estava ~1700)
+    bot._process_binance_closed_position(_pos_info())
+    # clampado no pico: (1701 - 1700) * 0.05 = +0.05  (NÃO (1842-1700)*0.05 = +7.10)
+    assert _recorded_gross(bot) == 0.05
+
+
+def test_fallback_perda_real_passa_intacta(monkeypatch):
+    """Lado de PERDA não é clampado: preço caiu de verdade → registra o prejuízo."""
+    import trading_bot.core.bot as bot_mod
+    monkeypatch.setattr(bot_mod.time, "sleep", lambda *_a, **_k: None)
+    bot = _make_bot()
+    bot.exchange.pop_realized_close.return_value = None
+    bot.exchange.get_income_history.return_value = []
+    bot.peak_prices = {"ETHUSDT_LONG": 1700.0}            # nunca subiu
+    bot.exchange.get_current_price.return_value = 1685.0  # caiu → perda real
+    bot._process_binance_closed_position(_pos_info())
+    assert _recorded_gross(bot) == (1685.0 - 1700.0) * 0.05  # -0.75, intacto
