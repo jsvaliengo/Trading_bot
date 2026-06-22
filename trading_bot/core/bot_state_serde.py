@@ -39,9 +39,13 @@ class BotStatePersistence:
             if not isinstance(payload, dict):
                 continue
             entry = dict(payload)
-            last_seen = entry.get('last_seen')
-            if isinstance(last_seen, datetime):
-                entry['last_seen'] = last_seen.isoformat()
+            # datetimes → ISO. entry_time DEVE persistir: sem ele, o fechamento
+            # server-side não tem janela p/ o income e somava o histórico do par
+            # (#196). last_seen é volátil mas também serializado.
+            for field in ('last_seen', 'entry_time'):
+                value = entry.get(field)
+                if isinstance(value, datetime):
+                    entry[field] = value.isoformat()
             out[key] = entry
         return out
 
@@ -55,12 +59,13 @@ class BotStatePersistence:
             if not isinstance(payload, dict):
                 continue
             entry = dict(payload)
-            last_seen = entry.get('last_seen')
-            if isinstance(last_seen, str):
-                try:
-                    entry['last_seen'] = datetime.fromisoformat(last_seen)
-                except ValueError:
-                    entry['last_seen'] = datetime.now()
+            for field in ('last_seen', 'entry_time'):
+                value = entry.get(field)
+                if isinstance(value, str):
+                    try:
+                        entry[field] = datetime.fromisoformat(value)
+                    except ValueError:
+                        entry[field] = datetime.now() if field == 'last_seen' else None
             out[key] = entry
         return out
 
