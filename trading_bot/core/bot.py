@@ -2259,6 +2259,10 @@ class TradingBot:
                 'entry_price': pos['entry_price'],
                 'quantity': pos['quantity'],
                 'last_seen': datetime.now(),
+                # Preserva entry_time (janela do income no fechamento, #196). Sem
+                # registro anterior (posição só descoberta na exchange), ancora em
+                # now — o close ainda vem depois, então a janela cobre o trade.
+                'entry_time': state_entry.get('entry_time') or datetime.now(),
                 'strategy_name': state_entry.get('strategy_name', 'primary'),
                 'strategy_type': state_entry.get('strategy_type', 'trend_signal'),
                 'custom_stop_loss': state_entry.get('custom_stop_loss'),
@@ -3965,6 +3969,10 @@ class TradingBot:
                     'entry_price': pos['entry_price'],
                     'quantity': pos['quantity'],
                     'last_seen': datetime.now(),
+                    # Preserva entry_time (#196): o monitor reconstrói o payload a
+                    # cada tick; sem isto o entry_time some logo após a abertura e
+                    # o income do fechamento somava o histórico do par.
+                    'entry_time': previous.get('entry_time') or datetime.now(),
                     'strategy_name': previous.get('strategy_name', 'primary'),
                     'strategy_type': previous.get('strategy_type', 'trend_signal'),
                     'custom_stop_loss': previous.get('custom_stop_loss'),

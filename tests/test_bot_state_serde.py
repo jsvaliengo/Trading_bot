@@ -32,6 +32,27 @@ def test_serialize_deserialize_roundtrip():
     assert deser["ETHUSDT_LONG"]["custom_stop_loss"] == 2400.0
 
 
+def test_entry_time_sobrevive_ao_roundtrip():
+    """entry_time DEVE persistir como datetime (#196): sem ele, o fechamento
+    server-side soma o histórico do par no income em vez do trade."""
+    et = datetime(2026, 6, 22, 14, 1, 16)
+    original = {"ETHUSDT_LONG": {"symbol": "ETHUSDT", "side": "LONG",
+                                 "entry_time": et, "last_seen": et}}
+    ser = BotStatePersistence.serialize_known_positions(original)
+    assert ser["ETHUSDT_LONG"]["entry_time"] == "2026-06-22T14:01:16"   # ISO no JSON
+    deser = BotStatePersistence.deserialize_known_positions(ser)
+    assert deser["ETHUSDT_LONG"]["entry_time"] == et                    # datetime de volta
+    assert isinstance(deser["ETHUSDT_LONG"]["entry_time"], datetime)
+
+
+def test_entry_time_corrompido_vira_none_nao_string():
+    """ISO inválido em entry_time → None (não string), pra o guard do income
+    barrar (None) em vez de quebrar no .timestamp()."""
+    raw = {"ETHUSDT_LONG": {"symbol": "ETHUSDT", "side": "LONG", "entry_time": "lixo"}}
+    deser = BotStatePersistence.deserialize_known_positions(raw)
+    assert deser["ETHUSDT_LONG"]["entry_time"] is None
+
+
 def test_deserialize_handles_non_dict_input():
     assert BotStatePersistence.deserialize_known_positions("oops") == {}
     assert BotStatePersistence.deserialize_known_positions(None) == {}
