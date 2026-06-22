@@ -4205,6 +4205,17 @@ class TradingBot:
 
         attempts/delay None → usa o config (REALIZED_PNL_RETRY_ATTEMPTS/_DELAY).
         """
+        # GUARD CRÍTICO (#196): sem janela (start_time_ms None) a query de income
+        # não tem limite inferior e SOMA TODO o histórico de REALIZED_PNL do par —
+        # fabricando o P&L (#88 ETH: somou +$2,30 da história em vez de −$0,60 do
+        # trade). Acontece quando entry_time se perde (posição reconciliada/restart).
+        # Melhor retornar None e cair no fallback com clamp de MFE + reconciliação.
+        if not start_time_ms:
+            logger.warning(
+                f"⚠️ {symbol}: sem entry_time — pulando income (evita somar histórico "
+                f"do par); cai no fallback provisório + reconciliação."
+            )
+            return None
         if attempts is None:
             attempts = int(getattr(config, "REALIZED_PNL_RETRY_ATTEMPTS", 6))
         if delay is None:
