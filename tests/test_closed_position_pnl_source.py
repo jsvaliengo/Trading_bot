@@ -121,3 +121,21 @@ def test_fallback_perda_real_passa_intacta(monkeypatch):
     bot.exchange.get_current_price.return_value = 1685.0  # caiu → perda real
     bot._process_binance_closed_position(_pos_info())
     assert _recorded_gross(bot) == (1685.0 - 1700.0) * 0.05  # -0.75, intacto
+
+
+def test_sem_entry_time_nao_soma_historico_do_par(monkeypatch):
+    """#196 (causa raiz): sem entry_time, NÃO consulta income (somaria a história
+    do par e fabricaria, como o #88 ETH +2,30). Cai no fallback clampado."""
+    import trading_bot.core.bot as bot_mod
+    monkeypatch.setattr(bot_mod.time, "sleep", lambda *_a, **_k: None)
+    bot = _make_bot()
+    bot.exchange.pop_realized_close.return_value = None
+    # se consultasse, somaria isto (+2.30 da história) — mas NEM deve consultar
+    bot.exchange.get_income_history.return_value = [{"income": "2.30", "incomeType": "REALIZED_PNL"}]
+    bot.peak_prices = {"ETHUSDT_LONG": 1700.5}
+    bot.exchange.get_current_price.return_value = 1699.0  # perda real
+    pos = _pos_info()
+    pos["entry_time"] = None                              # <-- janela perdida
+    bot._process_binance_closed_position(pos)
+    bot.exchange.get_income_history.assert_not_called()   # guard barrou a soma de histórico
+    assert _recorded_gross(bot) <= 0                      # perda real, não +2.30 fabricado
