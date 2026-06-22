@@ -4182,7 +4182,18 @@ class TradingBot:
         
         logger.info(f"💵 P&L Total não realizado: ${total_pnl:.2f}")
     
-    def _fetch_realized_pnl_with_retry(self, symbol, start_time_ms, attempts=3, delay=2.0):
+    def _sanity_clamp_close_price(self, side, entry_price, close_price, peak_price):
+        """Rejeita preço-lixo no fallback: a saída não pode ser MAIS favorável que
+        o pico real visto (MFE). get_current_price às vezes devolve valor
+        inconsistente (#196: ETH 1842 num par a ~1757 → lucro fabricado). Clampa
+        no pico; o lado de PERDA passa intacto (close < pico p/ LONG)."""
+        if not peak_price or peak_price <= 0 or not close_price or close_price <= 0:
+            return close_price
+        if side == "LONG":
+            return min(close_price, peak_price)   # não exita acima do maior preço visto
+        return max(close_price, peak_price)        # SHORT: não exita abaixo do menor visto
+
+    def _fetch_realized_pnl_with_retry(self, symbol, start_time_ms, attempts=None, delay=None):
         """Busca o REALIZED_PNL agregado da Binance, com retry.
 
         O income REALIZED_PNL aparece com latência de alguns segundos após o
@@ -4191,7 +4202,13 @@ class TradingBot:
         se moveu após o fechamento (XRP #37, 20/06: fechou ~zero/loss, preço
         quicou pra +0.84%, fallback registrou +$0.44 "Take Profit"). Tenta algumas
         vezes antes de desistir. Retorna o gross (float) ou None se não apareceu.
+
+        attempts/delay None → usa o config (REALIZED_PNL_RETRY_ATTEMPTS/_DELAY).
         """
+        if attempts is None:
+            attempts = int(getattr(config, "REALIZED_PNL_RETRY_ATTEMPTS", 6))
+        if delay is None:
+            delay = float(getattr(config, "REALIZED_PNL_RETRY_DELAY", 2.5))
         for i in range(1, int(attempts) + 1):
             try:
                 income_list = self.exchange.get_income_history(
@@ -4256,18 +4273,28 @@ class TradingBot:
         notional = entry_price * quantity
         total_fees = notional * taker_fee_rate * 2
 
+        provisional = False
         if pnl_gross is None:
-            # Fallback: estima P&L com base no preço atual (igual ao _close_position_with_notification)
+            # Fallback NÃO-CONFIÁVEL: estima pelo preço atual. Marcado como
+            # PROVISÓRIO — a auto-reconciliação corrige com o income real depois.
+            # Guardrail de MFE: o preço é clampado no pico real visto pra não
+            # fabricar lucro que a posição nunca teve (#196).
+            provisional = True
             try:
                 close_price = self.exchange.get_current_price(symbol)
+                peak_price = self.peak_prices.get(f"{symbol}_{side}")
+                close_price = self._sanity_clamp_close_price(side, entry_price, close_price, peak_price)
                 if side == 'LONG':
                     pnl_gross = (close_price - entry_price) * quantity
                 else:
                     pnl_gross = (entry_price - close_price) * quantity
-                logger.info(f"   📐 P&L estimado via preço atual ${close_price:.4f}: ${pnl_gross:.4f}")
+                logger.warning(
+                    f"   📐 P&L PROVISÓRIO via preço atual ${close_price:.4f}: "
+                    f"${pnl_gross:.4f} (será reconciliado com a Binance)"
+                )
             except Exception:
                 pnl_gross = 0.0
-                logger.warning(f"   ⚠️ Não foi possível estimar P&L para {symbol} — registrando como $0")
+                logger.warning(f"   ⚠️ Não foi possível estimar P&L para {symbol} — registrando $0 (provisório)")
 
         pnl_net = pnl_gross - total_fees
 
@@ -4324,13 +4351,18 @@ class TradingBot:
         # Log
         logger.info(f"💰 {result}: ${pnl_net:.4f} | Motivo: {reason}")
         
+        prov_tag = (
+            "⏳ <i>P&L provisório — Binance ainda não confirmou; "
+            "será reconciliado em instantes.</i>\n\n" if provisional else ""
+        )
         self.telegram.send_message(
             f"⚠️ <b>POSIÇÃO FECHADA PELA BINANCE</b>\n\n"
+            f"{prov_tag}"
             f"📍 <b>Par:</b> {symbol.replace('USDT', '')}/USDT\n"
             f"📊 <b>Lado:</b> {side}\n"
             f"🤖 <b>Estratégia:</b> {strat_key}\n"
             f"📝 <b>Motivo:</b> {reason}\n\n"
-            f"<b>💵 RESULTADO:</b>\n"
+            f"<b>💵 RESULTADO{' (provisório)' if provisional else ''}:</b>\n"
             f"   • P&L Bruto: <code>${pnl_gross:+.4f}</code>\n"
             f"   • Taxas: <code>-${total_fees:.4f}</code>\n"
             f"   • <b>P&L Líquido: <code>${pnl_net:+.4f}</code></b>"

@@ -565,8 +565,15 @@ class TradingConfig:
     # fechamento (cai no fallback por preço atual, bug #181/#67). DB vira
     # self-healing — dashboard/win-rate/P&L-por-moeda param de divergir do extrato.
     PNL_RECONCILE_ENABLED: bool = _env_bool("TRADING_BOT_PNL_RECONCILE_ENABLED", True)
-    PNL_RECONCILE_INTERVAL_MINUTES: float = _env_float("TRADING_BOT_PNL_RECONCILE_INTERVAL_MINUTES", 15.0)
+    PNL_RECONCILE_INTERVAL_MINUTES: float = _env_float("TRADING_BOT_PNL_RECONCILE_INTERVAL_MINUTES", 3.0)
     PNL_RECONCILE_LOOKBACK_HOURS: float = _env_float("TRADING_BOT_PNL_RECONCILE_LOOKBACK_HOURS", 48.0)
+
+    # Retry pra capturar o REALIZED_PNL real no FECHAMENTO (antes de fabricar pelo
+    # preço atual). O income REST tem latência de alguns segundos; ~4s (3x2s) não
+    # bastava e o trade saía com P&L estimado/lixo (#196: ETH 1842 vs real 1757).
+    # 6x2.5s ≈ 15s captura o income real na hora na maioria dos casos.
+    REALIZED_PNL_RETRY_ATTEMPTS: int = _env_int("TRADING_BOT_REALIZED_PNL_RETRY_ATTEMPTS", 6)
+    REALIZED_PNL_RETRY_DELAY: float = _env_float("TRADING_BOT_REALIZED_PNL_RETRY_DELAY", 2.5)
 
     # Meta de PERDA diária em USD - Para de abrir novas posições quando atingir
     # ~2% do saldo testnet (~$4.8k)
