@@ -1038,7 +1038,11 @@ class TradingConfig:
         # STOP_MARKET. Ver bot.py: disabled_pairs é UNIÃO config ∪ state, então
         # este default não é desfeito por state antigo.
         if self.DISABLED_PAIRS is None:
-            self.DISABLED_PAIRS = ["BTCUSDT", "RIVERUSDT", "SIGNUSDT", "BNBUSDT"]
+            # BTCUSDT religado em 23/06 (user): par mais líquido, bom p/ trend-pullback.
+            # O erro -4164 (min-notional, conta pequena) é tratado pelo
+            # _round_qty_for_min_notional (#133) — BTC sai no mínimo (~$100). BNB
+            # segue off (sangrou); RIVER/SIGN delistados.
+            self.DISABLED_PAIRS = ["RIVERUSDT", "SIGNUSDT", "BNBUSDT"]
         self.DISABLED_PAIRS = self.normalize_pair_list(self.DISABLED_PAIRS)
 
         # Buckets do alerta de drawdown intraday — % do capital, ordem crescente.
