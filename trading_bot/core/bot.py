@@ -281,7 +281,11 @@ class TradingBot:
         Qualquer novo atributo de estado deve ser adicionado aqui.
         """
         self.running = False
-        self.paused = False
+        # START_PAUSED: inicia pausado (monitora posições abertas, NÃO abre novas).
+        # Durável via env — sobrevive a restart, ao contrário do /pause em memória.
+        # Usado p/ congelar o trading enquanto a estratégia é repensada (expectativa
+        # negativa confirmada em 97 trades, 24/06).
+        self.paused = bool(getattr(config, "START_PAUSED", False))
         self.invert_signals = False
         self.positions = {}
         self.trade_history = []
