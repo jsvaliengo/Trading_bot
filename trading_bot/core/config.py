@@ -366,7 +366,12 @@ class TradingConfig:
     
     # Usar estratégia direcional (True) ou hedge (False)
     USE_SIGNAL_STRATEGY: bool = True
-    
+
+    # Inicia o bot PAUSADO (monitora posições abertas, não abre novas). Durável
+    # via env (sobrevive a restart). Usado p/ congelar o trading sem parar o
+    # processo — ex.: enquanto a estratégia é repensada.
+    START_PAUSED: bool = _env_bool("TRADING_BOT_START_PAUSED", False)
+
     # Percentual da posição para hedge (usado apenas se USE_SIGNAL_STRATEGY = False)
     HEDGE_RATIO: float = 0.5
 
