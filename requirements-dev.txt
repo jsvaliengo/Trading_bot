@@ -1,4 +1,8 @@
 # Ferramentas de qualidade (desenvolvimento/CI)
-ruff>=0.9.0
+# ruff fixado: sem config própria, o repo usa os defaults do ruff, e a 0.16.0+
+# mudou os defaults (centenas de erros novos em código existente). 0.15.19 foi
+# a versão do último CI verde (24/06/2026). Atualizar de propósito, com a base
+# de código ajustada no mesmo PR.
+ruff==0.15.19
 mypy>=1.11.0
 types-requests>=2.32.0
