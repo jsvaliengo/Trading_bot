@@ -3,8 +3,20 @@ import numpy as np
 import pytest
 
 from scripts.backtest_v2.data import Bars, tf_ms
-from scripts.backtest_v2.engine import Costs, PortfolioConfig, SymbolData, run_portfolio, simulate_trade
-from scripts.backtest_v2.strategies import LONG, SHORT, LivePullback, SignalSet, aligned_index
+from scripts.backtest_v2.engine import (
+    Costs,
+    PortfolioConfig,
+    SymbolData,
+    run_portfolio,
+    simulate_trade,
+)
+from scripts.backtest_v2.strategies import (
+    LONG,
+    SHORT,
+    LivePullback,
+    SignalSet,
+    aligned_index,
+)
 
 T0 = 1_700_000_000_000 - (1_700_000_000_000 % 3_600_000)
 H = tf_ms("1h")
