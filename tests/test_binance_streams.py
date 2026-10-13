@@ -60,7 +60,7 @@ def _kline_msg(ts, open_p, high, low, close, volume, is_closed=True):
 
 def test_start_is_idempotent_and_stops_cleanly():
     store = _make_store()
-    with patch("trading_bot.infra.binance_streams.ThreadedWebsocketManager") as twm_cls:
+    with patch("trading_bot.infra.binance_streams.ResilientThreadedWebsocketManager") as twm_cls:
         twm = MagicMock()
         twm_cls.return_value = twm
 
@@ -84,7 +84,7 @@ def test_stop_before_start_is_safe():
 
 def test_subscribe_seeds_buffer_and_starts_socket():
     store = _make_store(seed_limit=50)
-    with patch("trading_bot.infra.binance_streams.ThreadedWebsocketManager") as twm_cls:
+    with patch("trading_bot.infra.binance_streams.ResilientThreadedWebsocketManager") as twm_cls:
         twm = MagicMock()
         twm.start_kline_futures_socket = MagicMock(return_value="sock-1")
         twm_cls.return_value = twm
@@ -104,7 +104,7 @@ def test_subscribe_seeds_buffer_and_starts_socket():
 
 def test_subscribe_is_idempotent_per_symbol_interval():
     store = _make_store()
-    with patch("trading_bot.infra.binance_streams.ThreadedWebsocketManager") as twm_cls:
+    with patch("trading_bot.infra.binance_streams.ResilientThreadedWebsocketManager") as twm_cls:
         twm = MagicMock()
         twm.start_kline_futures_socket = MagicMock(return_value="sock-1")
         twm_cls.return_value = twm
@@ -126,7 +126,7 @@ def test_subscribe_fails_when_seed_returns_empty():
         return []
 
     store = _make_store(seed_fetcher=empty_seed)
-    with patch("trading_bot.infra.binance_streams.ThreadedWebsocketManager") as twm_cls:
+    with patch("trading_bot.infra.binance_streams.ResilientThreadedWebsocketManager") as twm_cls:
         twm = MagicMock()
         twm_cls.return_value = twm
         store.start()
@@ -139,7 +139,7 @@ def test_subscribe_recovers_when_seed_fetch_raises():
         raise RuntimeError("API down")
 
     store = _make_store(seed_fetcher=raising_seed)
-    with patch("trading_bot.infra.binance_streams.ThreadedWebsocketManager") as twm_cls:
+    with patch("trading_bot.infra.binance_streams.ResilientThreadedWebsocketManager") as twm_cls:
         twm = MagicMock()
         twm_cls.return_value = twm
         store.start()
@@ -152,7 +152,7 @@ def test_subscribe_recovers_when_seed_fetch_raises():
 
 def test_unsubscribe_drops_buffer_and_stops_socket():
     store = _make_store()
-    with patch("trading_bot.infra.binance_streams.ThreadedWebsocketManager") as twm_cls:
+    with patch("trading_bot.infra.binance_streams.ResilientThreadedWebsocketManager") as twm_cls:
         twm = MagicMock()
         twm.start_kline_futures_socket = MagicMock(return_value="sock-42")
         twm_cls.return_value = twm
@@ -179,7 +179,7 @@ def test_unsubscribe_silent_when_not_subscribed():
 
 def test_closed_kline_message_appends_to_buffer():
     store = _make_store(seed_limit=10)
-    with patch("trading_bot.infra.binance_streams.ThreadedWebsocketManager") as twm_cls:
+    with patch("trading_bot.infra.binance_streams.ResilientThreadedWebsocketManager") as twm_cls:
         twm = MagicMock()
         twm.start_kline_futures_socket = MagicMock(return_value="sid")
         twm_cls.return_value = twm
@@ -202,7 +202,7 @@ def test_closed_kline_message_appends_to_buffer():
 
 def test_unclosed_kline_keeps_buffer_but_refreshes_age():
     store = _make_store(seed_limit=10)
-    with patch("trading_bot.infra.binance_streams.ThreadedWebsocketManager") as twm_cls:
+    with patch("trading_bot.infra.binance_streams.ResilientThreadedWebsocketManager") as twm_cls:
         twm = MagicMock()
         twm.start_kline_futures_socket = MagicMock(return_value="sid")
         twm_cls.return_value = twm
@@ -226,7 +226,7 @@ def test_unclosed_kline_keeps_buffer_but_refreshes_age():
 
 def test_duplicate_timestamp_replaces_last_candle():
     store = _make_store(seed_limit=10)
-    with patch("trading_bot.infra.binance_streams.ThreadedWebsocketManager") as twm_cls:
+    with patch("trading_bot.infra.binance_streams.ResilientThreadedWebsocketManager") as twm_cls:
         twm = MagicMock()
         twm.start_kline_futures_socket = MagicMock(return_value="sid")
         twm_cls.return_value = twm
@@ -249,7 +249,7 @@ def test_duplicate_timestamp_replaces_last_candle():
 
 def test_out_of_order_message_is_rejected():
     store = _make_store(seed_limit=10)
-    with patch("trading_bot.infra.binance_streams.ThreadedWebsocketManager") as twm_cls:
+    with patch("trading_bot.infra.binance_streams.ResilientThreadedWebsocketManager") as twm_cls:
         twm = MagicMock()
         twm.start_kline_futures_socket = MagicMock(return_value="sid")
         twm_cls.return_value = twm
@@ -271,7 +271,7 @@ def test_out_of_order_message_is_rejected():
 
 def test_error_message_is_logged_not_raised():
     store = _make_store(seed_limit=10)
-    with patch("trading_bot.infra.binance_streams.ThreadedWebsocketManager") as twm_cls:
+    with patch("trading_bot.infra.binance_streams.ResilientThreadedWebsocketManager") as twm_cls:
         twm = MagicMock()
         twm.start_kline_futures_socket = MagicMock(return_value="sid")
         twm_cls.return_value = twm
@@ -297,7 +297,7 @@ def test_is_fresh_false_for_unknown_subscription():
 
 def test_is_fresh_false_when_staleness_exceeded():
     store = _make_store(seed_limit=10, staleness=0.05)  # 50ms
-    with patch("trading_bot.infra.binance_streams.ThreadedWebsocketManager") as twm_cls:
+    with patch("trading_bot.infra.binance_streams.ResilientThreadedWebsocketManager") as twm_cls:
         twm = MagicMock()
         twm.start_kline_futures_socket = MagicMock(return_value="sid")
         twm_cls.return_value = twm
@@ -324,7 +324,7 @@ def test_get_klines_returns_none_for_unknown_subscription():
 
 def test_get_klines_returns_copy_not_reference():
     store = _make_store(seed_limit=30)
-    with patch("trading_bot.infra.binance_streams.ThreadedWebsocketManager") as twm_cls:
+    with patch("trading_bot.infra.binance_streams.ResilientThreadedWebsocketManager") as twm_cls:
         twm = MagicMock()
         twm.start_kline_futures_socket = MagicMock(return_value="sid")
         twm_cls.return_value = twm
@@ -343,7 +343,7 @@ def test_get_klines_returns_none_when_buffer_smaller_than_requested():
         return _seed_fetcher(sym, interval, 5)  # só 5 velas
 
     store = _make_store(seed_fetcher=tiny_seed, seed_limit=5)
-    with patch("trading_bot.infra.binance_streams.ThreadedWebsocketManager") as twm_cls:
+    with patch("trading_bot.infra.binance_streams.ResilientThreadedWebsocketManager") as twm_cls:
         twm = MagicMock()
         twm.start_kline_futures_socket = MagicMock(return_value="sid")
         twm_cls.return_value = twm
@@ -363,7 +363,7 @@ def test_get_klines_returns_none_when_buffer_smaller_than_requested():
 
 def test_get_stats_exposes_stream_metadata():
     store = _make_store(seed_limit=10)
-    with patch("trading_bot.infra.binance_streams.ThreadedWebsocketManager") as twm_cls:
+    with patch("trading_bot.infra.binance_streams.ResilientThreadedWebsocketManager") as twm_cls:
         twm = MagicMock()
         twm.start_kline_futures_socket = MagicMock(return_value="sid-x")
         twm_cls.return_value = twm
