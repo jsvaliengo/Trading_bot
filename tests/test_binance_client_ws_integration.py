@@ -228,3 +228,47 @@ def test_sync_ws_subscriptions_noop_when_disabled(monkeypatch):
 
     exchange.subscribe_klines_stream.assert_not_called()
     exchange.unsubscribe_klines_stream.assert_not_called()
+
+
+def _raw_kline(open_ms, step_ms):
+    return [open_ms, "1", "2", "0.5", "1.5", "10", open_ms + step_ms - 1, "0", 1, "0", "0", "0"]
+
+
+def test_rest_get_klines_drops_forming_candle(monkeypatch):
+    """REST da Binance devolve a vela em formação por último — o fallback deve
+    devolver só velas fechadas (igual ao buffer WS) e manter `limit` velas."""
+    import trading_bot.infra.binance_client as bc
+
+    step = 60_000
+    now_ms = 1_700_000_000_000 + 10 * step + 30_000  # meio da 11ª vela
+    monkeypatch.setattr(bc.time, "time", lambda: now_ms / 1000)
+    conn = _make_client()
+    conn._api_call = lambda _name, fn, **kw: fn(**kw)
+    conn.client.futures_klines = MagicMock(
+        return_value=[_raw_kline(1_700_000_000_000 + i * step, step) for i in range(11)]
+    )
+
+    data = conn._rest_get_klines("ETHUSDT", "1m", 5)
+
+    conn.client.futures_klines.assert_called_once_with(symbol="ETHUSDT", interval="1m", limit=6)
+    assert len(data) == 5
+    assert data[-1]["timestamp"] == 1_700_000_000_000 + 9 * step  # última FECHADA
+    assert all(k["timestamp"] + step <= now_ms for k in data)
+
+
+def test_rest_get_klines_keeps_all_when_last_candle_already_closed(monkeypatch):
+    import trading_bot.infra.binance_client as bc
+
+    step = 60_000
+    now_ms = 1_700_000_000_000 + 11 * step + 1  # vela 10 acabou de fechar
+    monkeypatch.setattr(bc.time, "time", lambda: now_ms / 1000)
+    conn = _make_client()
+    conn._api_call = lambda _name, fn, **kw: fn(**kw)
+    conn.client.futures_klines = MagicMock(
+        return_value=[_raw_kline(1_700_000_000_000 + i * step, step) for i in range(11)]
+    )
+
+    data = conn._rest_get_klines("ETHUSDT", "1m", 5)
+    assert [k["timestamp"] for k in data] == [
+        1_700_000_000_000 + i * step for i in range(6, 11)
+    ]

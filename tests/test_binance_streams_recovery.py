@@ -8,6 +8,7 @@ congelado pra todos os outros sockets, até o regime-swap desinscrever o par.
 """
 
 import asyncio
+import sys
 import threading
 import time
 from unittest.mock import MagicMock, patch
@@ -103,7 +104,11 @@ def test_original_listener_busy_loops_and_starves_event_loop():
 
     assert len(calls) == 2000  # 2000 erros idênticos repassados ao callback
     assert all(m.get("e") == "error" for m in calls)
-    assert ticks == 0  # nenhuma outra task rodou: event loop monopolizado
+    if sys.version_info >= (3, 12):
+        # 3.12+ (VM de produção): wait_for não cria task → recv() que levanta
+        # na hora nunca cede o loop. Nenhuma outra task roda: event loop
+        # monopolizado. (No 3.11 do CI o wait_for cede, mas o spam é o mesmo.)
+        assert ticks == 0
 
 
 # ---------------------------------------------------------------------------
