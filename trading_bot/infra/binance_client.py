@@ -1589,6 +1589,13 @@ class BinanceConnection:
 
         Usado como fallback quando WS está indisponível/stale, e como
         seed inicial no WebSocketKlineStore.
+
+        Devolve SÓ velas fechadas (closeTime no passado), igual ao buffer WS.
+        A REST da Binance inclui a vela em formação como última; sem descartar,
+        todo fallback REST (stream caído/stale) avaliava volume/padrão de uma
+        vela parcial — comportamento diferente do path WS e do backtest — e o
+        seed congelava essa vela parcial no buffer até ela fechar. Pede 1 a
+        mais pra manter `limit` velas fechadas.
         """
         try:
             klines = self._api_call(
@@ -1596,8 +1603,13 @@ class BinanceConnection:
                 self.client.futures_klines,
                 symbol=symbol,
                 interval=interval,
-                limit=limit,
+                limit=min(int(limit) + 1, 1500),
             )
+            now_ms = int(time.time() * 1000)
+            closed = [
+                k for k in klines
+                if len(k) <= 6 or int(k[6]) < now_ms  # k[6] = closeTime
+            ]
             return [
                 {
                     'timestamp': k[0],
@@ -1607,7 +1619,7 @@ class BinanceConnection:
                     'close': float(k[4]),
                     'volume': float(k[5]),
                 }
-                for k in klines
+                for k in closed[-int(limit):]
             ]
         except Exception as e:
             logger.error(f"Erro ao obter klines de {symbol}: {e}")
