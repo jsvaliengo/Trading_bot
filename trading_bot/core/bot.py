@@ -35,6 +35,7 @@ from .position_tracker import PositionTracker
 from .state_manager import StateManager
 from .trade_block_reporter import TradeBlockReporter
 from .trade_ledger import TradeLedger
+from .trade_store import trading_day, trading_day_start
 from .trade_store import TradeStore
 from ..ai.consultive_engine import ConsultiveEngine
 from ..execution import ExecutionEngine
@@ -308,7 +309,7 @@ class TradingBot:
         self.trades_by_symbol = {}
         self.trades_by_strategy = {}
         self.daily_target_reached = False
-        self.last_daily_reset = datetime.now(timezone.utc).date()
+        self.last_daily_reset = trading_day_start().date()
         self.last_daily_performance_report_date = ""
         self.portfolio_history = []
         self.last_snapshot_time = None
@@ -738,10 +739,9 @@ class TradingBot:
             config.TRADING_PAIRS = config.filter_disabled_pairs(config.TRADING_PAIRS)
             self._sync_strategy_profiles_with_trading_pairs(reason="state-load")
             
-            # Verifica se é do mesmo dia (usando UTC como a Binance)
-            # A Binance reseta o P&L diário às 00:00 UTC
+            # Mesmo dia de trading (DAILY_PNL_TZ_OFFSET_HOURS; 0 = UTC como a Binance)
             saved_date = state.get('daily_date', '')
-            today_utc = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+            today = trading_day()
             
             # Carrega os valores
             self.closed_trades_count = state.get('closed_trades_count', 0)
@@ -792,8 +792,8 @@ class TradingBot:
             self.trades_loss_total = state.get('trades_loss_total', 0.0)
             self.total_fees_paid = state.get('total_fees_paid', 0.0)
             
-            # P&L diário só carrega se for do mesmo dia (UTC)
-            if saved_date == today_utc:
+            # P&L diário só carrega se for do mesmo dia de trading
+            if saved_date == today:
                 self.daily_realized_pnl = state.get('daily_realized_pnl', 0.0)
                 logger.info(f"📅 P&L diário carregado: ${self.daily_realized_pnl:.2f}")
                 logger.info(f"💸 Taxas pagas (sessão): ${self.total_fees_paid:.4f}")
@@ -805,7 +805,7 @@ class TradingBot:
                 self.trades_win_total = 0.0
                 self.trades_loss_total = 0.0
                 self.total_fees_paid = 0.0  # Reseta taxas também
-                logger.info("📅 Novo dia UTC! P&L diário e estatísticas resetados.")
+                logger.info("📅 Novo dia de trading! P&L diário e estatísticas resetados.")
 
             # Baseline do PnL diário da Binance:
             # - Se o state foi resetado manualmente ({}), 'closed_trades_count' chega 0 aqui;
@@ -815,7 +815,7 @@ class TradingBot:
             saved_baseline_date = state.get('daily_baseline_date')
             saved_baseline_value = state.get('daily_pnl_binance_baseline')
             fresh_state = (
-                saved_baseline_date != today_utc
+                saved_baseline_date != today
                 or saved_baseline_value is None
                 or self.closed_trades_count == 0
             )
@@ -831,7 +831,7 @@ class TradingBot:
                 except Exception as exc:
                     logger.warning(f"⚠️ Falha ao ancorar baseline diário: {exc}")
                     self.daily_pnl_binance_baseline = 0.0
-                self._daily_baseline_date = today_utc
+                self._daily_baseline_date = today
                 logger.info(
                     f"📐 Baseline diário ancorado: ${self.daily_pnl_binance_baseline:.4f} "
                     f"(/portfolio agora começa em $0)"
@@ -890,7 +890,7 @@ class TradingBot:
                     self.daily_realized_pnl = store.realized_pnl_today()
                     if getattr(self, 'kill_switch', None) is not None:
                         self.kill_switch.rebuild_history_from_store(
-                            store.daily_pnl_history(limit=0), today=today_utc
+                            store.daily_pnl_history(limit=0), today=today
                         )
                 except Exception:
                     logger.exception("⚠️ Falha ao ancorar contadores no SQLite — usando state")
@@ -2370,8 +2370,8 @@ class TradingBot:
         if not config.USE_DAILY_TARGETS:
             return False  # Metas diárias desativadas
         
-        # Verifica se precisa resetar (novo dia) — usa UTC como a Binance
-        today = datetime.now(timezone.utc).date()
+        # Novo dia de trading (DAILY_PNL_TZ_OFFSET_HOURS)?
+        today = trading_day_start().date()
         if today > self.last_daily_reset:
             logger.info("🌅 Novo dia detectado! Resetando metas diárias...")
             # Registra o P&L do dia que acabou no histórico para kill switches
@@ -5070,7 +5070,7 @@ class TradingBot:
         drawdown_pct = abs(total_pnl) / initial_capital * 100.0
 
         # Reset diário automático.
-        today_key = now.strftime("%Y-%m-%d")
+        today_key = trading_day(now)
         if self._drawdown_alert_day != today_key:
             self._drawdown_alert_day = today_key
             self._drawdown_alert_bucket_pct = 0.0

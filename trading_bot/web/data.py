@@ -10,10 +10,11 @@ retornamos campos vazios em vez de bloquear.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from ..core.config import config
+from ..core.trade_store import trading_day_start
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -81,14 +82,13 @@ def collect_pnl_analysis(bot) -> Dict[str, Any]:
     if store is None:
         return {}
     try:
-        tz = _safe_float(getattr(config, "DAILY_PNL_TZ_OFFSET_HOURS", 0.0))
-        return store.pnl_analysis(tz_offset_hours=tz)
+        return store.pnl_analysis()
     except Exception:
         return {}
 
 
 def collect_daily_history(bot, limit: int = 90) -> List[Dict[str, Any]]:
-    """Histórico de P&L por dia (UTC) — fonte durável do TradeStore.
+    """Histórico de P&L por dia de trading — fonte durável do TradeStore.
 
     Cada item: day, trades, wins, losses, win_rate, net (P&L do dia), fees e
     cumulative (acumulado corrido). Base da tabela "Histórico por dia" do
@@ -98,21 +98,9 @@ def collect_daily_history(bot, limit: int = 90) -> List[Dict[str, Any]]:
     if store is None:
         return []
     try:
-        tz = _safe_float(getattr(config, "DAILY_PNL_TZ_OFFSET_HOURS", 0.0))
-        return store.daily_pnl_history(limit=limit, tz_offset_hours=tz)
+        return store.daily_pnl_history(limit=limit)
     except Exception:
         return []
-
-
-def _today_start_local_iso(now: Optional[datetime] = None) -> str:
-    """Início do "hoje" do card P&L Hoje (00:00 no DAILY_PNL_TZ_OFFSET_HOURS, a
-    mesma janela do get_daily_pnl_from_binance) no fuso LOCAL ingênuo em que o
-    TradeStore grava exit_at (datetime.now()). Ex.: offset 0 + VM em BRT →
-    'D-1T21:00:00'."""
-    tz = timezone(timedelta(hours=_safe_float(getattr(config, "DAILY_PNL_TZ_OFFSET_HOURS", 0.0))))
-    now = (now or datetime.now(timezone.utc)).astimezone(tz)
-    start = datetime(now.year, now.month, now.day, tzinfo=tz)
-    return start.astimezone().replace(tzinfo=None).isoformat()
 
 
 def collect_summary(bot) -> Dict[str, Any]:
@@ -138,7 +126,7 @@ def collect_summary(bot) -> Dict[str, Any]:
     if _store is not None:
         try:
             closed_trades = int(_store.count_closed_trades())
-            closed_trades_today = int(_store.count_closed_since(_today_start_local_iso()))
+            closed_trades_today = int(_store.count_closed_since(trading_day_start()))
         except Exception:
             pass
     paused = bool(getattr(bot, "paused", False))
@@ -160,12 +148,12 @@ def collect_summary(bot) -> Dict[str, Any]:
     if exchange is not None:
         try:
             daily = exchange.get_daily_pnl_from_binance()
-            # `total` já é o income de HOJE desde 00:00 UTC (realized+funding+
+            # `total` já é o income de HOJE desde 00:00 do dia de trading (realized+funding+
             # commission) = exatamente o P&L do dia da Binance. NÃO subtrair o
             # daily_pnl_binance_baseline: ele re-ancora a cada restart e zerava o
             # card no meio do dia (#136). Como reiniciamos o bot a cada deploy, o
             # baseline ficava ≈ o total do dia e o card mostrava ~$0 numa perda
-            # real. O dia já reseta naturalmente à meia-noite UTC.
+            # real. O dia já reseta naturalmente à meia-noite do dia de trading.
             binance_daily_realized = _safe_float(daily.get("total"))
             # funding_fee é negativo quando paga, positivo quando recebe.
             # commission é sempre negativo (custo).
