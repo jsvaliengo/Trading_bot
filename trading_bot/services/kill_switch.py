@@ -96,7 +96,7 @@ class KillSwitchMonitor:
 
     def rebuild_history_from_store(self, daily_rows: List[Dict[str, Any]], *, today: str) -> None:
         """Reescreve o net de cada dia fechado com o SQLite (TradeStore.daily_pnl_history,
-        dia UTC). O JSON só guarda o contador em memória da virada, que drifta
+        dia de trading). O JSON só guarda o contador em memória da virada, que drifta
         (reconciler/backfill corrigem o SQLite, não a memória).
 
         Mantém do JSON o que o SQLite não sabe: dias anteriores ao 1º trade do DB.

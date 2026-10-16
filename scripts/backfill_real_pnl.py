@@ -25,10 +25,8 @@ WINDOW_AFTER_S = 5 * 60     # ou um pouco depois
 
 
 def _to_ms(iso):
-    d = dt.datetime.fromisoformat(iso)
-    if d.tzinfo is None:
-        d = d.replace(tzinfo=dt.timezone.utc)
-    return int(d.timestamp() * 1000)
+    # Ingênuo = horário local do processo (legado do datetime.now() na VM).
+    return int(dt.datetime.fromisoformat(iso).timestamp() * 1000)
 
 
 def main():

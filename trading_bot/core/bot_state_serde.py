@@ -14,10 +14,11 @@ payload; dado o dict bruto do state, normaliza known_positions.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Dict
 
 from .config import config
+from .trade_store import trading_day
 
 
 class BotStatePersistence:
@@ -87,7 +88,7 @@ class BotStatePersistence:
             'closed_trades_count': bot.closed_trades_count,
             'total_pnl': bot.total_pnl,
             'daily_realized_pnl': bot.daily_realized_pnl,
-            'daily_date': datetime.now(timezone.utc).strftime('%Y-%m-%d'),
+            'daily_date': trading_day(),
             'pnl_by_symbol': bot.pnl_by_symbol,
             'trades_win_count': bot.trades_win_count,
             'trades_loss_count': bot.trades_loss_count,
