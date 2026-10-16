@@ -882,6 +882,16 @@ class TradingBot:
                     self.trades_win_count = _counters["wins"]
                     self.trades_loss_count = _counters["losses"]
                     self.total_pnl = float(store.cumulative_realized_pnl())
+                    _totals = store.closed_trade_totals()
+                    self.trades_win_total = _totals["win_total"]
+                    self.trades_loss_total = _totals["loss_total"]
+                    self.total_fees_paid = _totals["fees"]
+                    self.pnl_by_symbol = {r["symbol"]: r["net"] for r in store.pnl_by_symbol()}
+                    self.daily_realized_pnl = store.realized_pnl_today()
+                    if getattr(self, 'kill_switch', None) is not None:
+                        self.kill_switch.rebuild_history_from_store(
+                            store.daily_pnl_history(limit=0), today=today_utc
+                        )
                 except Exception:
                     logger.exception("⚠️ Falha ao ancorar contadores no SQLite — usando state")
 
@@ -2367,9 +2377,17 @@ class TradingBot:
             # Registra o P&L do dia que acabou no histórico para kill switches
             # ANTES de zerar o contador.
             if getattr(self, 'kill_switch', None) is not None:
+                closed_day = self.last_daily_reset.strftime('%Y-%m-%d')
+                store = getattr(self, 'trade_store', None)
+                # SQLite é a verdade: o reconciler corrige pnl_net lá, não na memória.
+                day_net = (
+                    store.realized_pnl_today(day=closed_day)
+                    if store is not None
+                    else float(self.daily_realized_pnl or 0.0)
+                )
                 self.kill_switch.record_daily_rollover(
-                    date=self.last_daily_reset.strftime('%Y-%m-%d'),
-                    net_pnl=float(self.daily_realized_pnl or 0.0),
+                    date=closed_day,
+                    net_pnl=day_net,
                     trades_win=0,
                     trades_loss=0,
                 )
