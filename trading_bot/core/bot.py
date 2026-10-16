@@ -4272,7 +4272,7 @@ class TradingBot:
         # fechamento via user-stream (ORDER_TRADE_UPDATE). Exato e instantâneo.
         if hasattr(self.exchange, "pop_realized_close"):
             try:
-                realized = self.exchange.pop_realized_close(symbol, side)
+                realized = self.exchange.pop_realized_close(symbol, side, since_ms=start_time_ms)
             except Exception:
                 realized = None
             if realized is not None:
