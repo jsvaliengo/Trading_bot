@@ -307,6 +307,12 @@ class TradingConfig:
     REFERENCE_LIQUIDITY_TTL_S: float = _env_float(
         "TRADING_BOT_REFERENCE_LIQUIDITY_TTL_S", 300.0
     )
+    # Fonte dos dados de SINAL (klines WS/REST, ticker 24h, book, funding) em
+    # testnet: "exchange" = a própria testnet; "mainnet" = mainnet pública (sem
+    # chaves). Ordens, conta, posições e preço de execução seguem na testnet.
+    # Klines de testnet divergem da mainnet (replay 37/40 vs 9/40, 16/10/26).
+    # No-op em mainnet. Ver SIGNALS_FROM_MAINNET.
+    SIGNAL_DATA_SOURCE: str = _env_str("TRADING_BOT_SIGNAL_DATA_SOURCE", "exchange").lower()
     MIN_VOLATILITY_PERCENT: float = 1.5       # Volatilidade mínima 1.5%
     MAX_MIN_NOTIONAL: float = 10.0            # Mínimo notional máximo $10 (exclui BTC $100, ETH $20)
     # RVOL = volume da última hora fechada ÷ média horária recente. Piso baixo
@@ -1194,6 +1200,11 @@ class TradingConfig:
         """True se a rede ativa for testnet (derivado de ENVIRONMENT)."""
         return self.ENVIRONMENT != "mainnet"
 
+    @property
+    def SIGNALS_FROM_MAINNET(self) -> bool:
+        """True quando o bot roda em testnet e os sinais usam dados da mainnet."""
+        return self.USE_TESTNET and self.SIGNAL_DATA_SOURCE == "mainnet"
+
     def has_credentials_for(self, environment: str) -> bool:
         """Verifica se há credenciais configuradas para a rede dada."""
         env = str(environment or "").strip().lower()
@@ -1504,6 +1515,12 @@ class TradingConfig:
         if self.ENVIRONMENT not in {"mainnet", "testnet"}:
             errors.append(
                 f"⚠️  ALERTA: ENVIRONMENT inválido ({self.ENVIRONMENT!r}). Use 'mainnet' ou 'testnet'."
+            )
+
+        if self.SIGNAL_DATA_SOURCE not in {"exchange", "mainnet"}:
+            errors.append(
+                f"⚠️  ALERTA: SIGNAL_DATA_SOURCE inválido ({self.SIGNAL_DATA_SOURCE!r}). "
+                "Use 'exchange' ou 'mainnet'."
             )
 
         if not self.API_KEY or not self.API_SECRET:

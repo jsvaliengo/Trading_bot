@@ -107,6 +107,13 @@ def _fill_price(order, fallback: float) -> float:
     return fill if fill > 0 else fallback
 
 
+def _reanchor(level, from_price, to_price):
+    """Leva um preço de SL/TP de um referencial a outro mantendo a distância %."""
+    if not level or level <= 0 or not from_price or from_price <= 0:
+        return level
+    return level * to_price / from_price
+
+
 def _below_min_trade_volume(raw_quote_volume, min_volume) -> bool:
     """True só quando o volume 24h é CONHECIDO e abaixo do piso.
 
@@ -317,6 +324,18 @@ class ExecutionEngine:
                     )
                     return False
 
+            # Sinais da mainnet (SIGNALS_FROM_MAINNET): SL/TP saem em preço da
+            # mainnet e o testnet pode estar ~2,5% longe (ETH 15/10: 2,46%). Cru,
+            # o SL cairia do lado errado e dispararia na hora. Mantém a distância %
+            # do sinal e ancora no preço do testnet aqui e no fill logo após a ordem.
+            reanchor = config.SIGNALS_FROM_MAINNET
+            if reanchor:
+                signal_price = float(setup.entry_price)
+                custom_stop_loss = _reanchor(custom_stop_loss, signal_price, price)
+                custom_take_profit = _reanchor(
+                    custom_take_profit or setup.take_profit, signal_price, price
+                )
+
             # Trava de segurança: um SL no lado errado da entrada dispara na
             # hora. O custom_stop_loss vem do setup (preço mais antigo) e o
             # slippage até o fill pode invertê-lo. Corrige aqui, uma vez, para
@@ -500,6 +519,9 @@ class ExecutionEngine:
                     return False
 
                 entry_fill = _fill_price(long_order, price)
+                if reanchor:
+                    custom_stop_loss = _reanchor(custom_stop_loss, price, entry_fill)
+                    custom_take_profit = _reanchor(custom_take_profit, price, entry_fill)
 
                 if double_first_applied:
                     bot.double_first_policy.mark_used(
@@ -647,6 +669,9 @@ class ExecutionEngine:
                     return False
 
                 entry_fill = _fill_price(short_order, price)
+                if reanchor:
+                    custom_stop_loss = _reanchor(custom_stop_loss, price, entry_fill)
+                    custom_take_profit = _reanchor(custom_take_profit, price, entry_fill)
 
                 if double_first_applied:
                     bot.double_first_policy.mark_used(

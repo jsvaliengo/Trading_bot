@@ -20,6 +20,7 @@ def _make_client(ws_store=None):
     conn.config.USE_TESTNET = True
     conn.config.WEBSOCKET_ENABLED = False  # Desligado pra não abrir WS real
     conn.client = MagicMock()
+    conn.market_client = conn.client  # flag off: dados de sinal = cliente da exchange
     conn._cache_lock = threading.Lock()
     conn._balance_cache = None
     conn._balance_cache_ttl = 2.0

@@ -35,6 +35,11 @@ STRUCTURAL_REJECTION_CODES: frozenset = frozenset({-2027})
 #          → ordem PODE ter executado. Tentar de novo arrisca duplicar.
 TRANSIENT_FAILURE_CODES: frozenset = frozenset({-1007})
 
+# Stream público de futuros USD-M da mainnet (klines de sinal com SIGNALS_FROM_MAINNET).
+# Rota /market/: em 16/10/26 a rota legada wss://fstream.binance.com/ws/ abria mas
+# não entregava continuousKline (0 msgs em 3 de 4 testes); /market/ entregou em todos.
+MAINNET_FSTREAM_URL = "wss://fstream.binance.com/market/"
+
 
 class BinanceConnection:
     """
@@ -121,6 +126,9 @@ class BinanceConnection:
                     api_secret=self.config.API_SECRET,
                     testnet=bool(self.config.USE_TESTNET),
                     rest_seed_fetcher=self._rest_get_klines,
+                    kline_stream_url=(
+                        MAINNET_FSTREAM_URL if self.config.SIGNALS_FROM_MAINNET else None
+                    ),
                     staleness_seconds=float(
                         getattr(self.config, "WEBSOCKET_STALENESS_SECONDS", 30.0)
                     ),
@@ -173,7 +181,17 @@ class BinanceConnection:
                 api_key=self.config.API_KEY,
                 api_secret=self.config.API_SECRET
             )
-        
+
+        # Cliente dos dados de SINAL (klines, ticker, book, funding). Em testnet
+        # com SIGNAL_DATA_SOURCE=mainnet é a mainnet pública sem chaves (ping=False:
+        # construir não toca a rede); senão é o próprio cliente da exchange.
+        if self.config.SIGNALS_FROM_MAINNET:
+            self.market_client = Client(ping=False)
+            logger.info("📡 Sinais com dados da MAINNET pública; execução na TESTNET")
+        else:
+            self.market_client = self.client
+            logger.info(f"📡 Sinais com dados da própria exchange ({self.config.ENVIRONMENT})")
+
         # Testa a conexão
         self._test_connection()
 
@@ -1192,7 +1210,7 @@ class BinanceConnection:
             # Busca informações do funding rate
             funding_info = self._api_call(
                 "futures_funding_rate",
-                self.client.futures_funding_rate,
+                self.market_client.futures_funding_rate,
                 symbol=symbol,
                 limit=1
             )
@@ -1205,7 +1223,7 @@ class BinanceConnection:
             # Busca próximo horário de funding
             premium_info = self._api_call(
                 "futures_mark_price",
-                self.client.futures_mark_price,
+                self.market_client.futures_mark_price,
                 symbol=symbol
             )
             next_funding_time = premium_info.get('nextFundingTime', 0)
@@ -1433,7 +1451,7 @@ class BinanceConnection:
         try:
             return self._api_call(
                 "futures_ticker",
-                self.client.futures_ticker,
+                self.market_client.futures_ticker,
                 symbol=symbol
             )
         except Exception as e:
@@ -1451,7 +1469,7 @@ class BinanceConnection:
         try:
             tickers = self._api_call(
                 "futures_ticker_all",
-                self.client.futures_ticker
+                self.market_client.futures_ticker
             )
             if isinstance(tickers, list):
                 return {t['symbol']: t for t in tickers if 'symbol' in t}
@@ -1544,7 +1562,7 @@ class BinanceConnection:
         try:
             marks = self._api_call(
                 "futures_mark_price_all",
-                self.client.futures_mark_price
+                self.market_client.futures_mark_price
             )
             result = {}
             if isinstance(marks, list):
@@ -1565,7 +1583,7 @@ class BinanceConnection:
         try:
             return self._api_call(
                 "futures_order_book",
-                self.client.futures_order_book,
+                self.market_client.futures_order_book,
                 symbol=symbol,
                 limit=limit
             )
@@ -1581,7 +1599,7 @@ class BinanceConnection:
         try:
             return self._api_call(
                 "futures_klines_raw",
-                self.client.futures_klines,
+                self.market_client.futures_klines,
                 symbol=symbol,
                 interval=interval,
                 limit=limit
@@ -1607,7 +1625,7 @@ class BinanceConnection:
         try:
             klines = self._api_call(
                 "futures_klines",
-                self.client.futures_klines,
+                self.market_client.futures_klines,
                 symbol=symbol,
                 interval=interval,
                 limit=min(int(limit) + 1, 1500),
