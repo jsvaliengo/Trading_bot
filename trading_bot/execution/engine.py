@@ -97,6 +97,16 @@ def _validate_stop_loss_side(side, entry_price, stop_loss, fallback_pct, price_p
     return corrected, True
 
 
+def _fill_price(order, fallback: float) -> float:
+    """avgPrice do fill da ordem a mercado (resposta RESULT); cai no ticker pré-ordem
+    quando ausente/0 — o DB gravava o ticker (NEAR 16/10: 4.9960 vs fill 4.9945)."""
+    try:
+        fill = float((order if isinstance(order, dict) else {}).get("avgPrice") or 0)
+    except (TypeError, ValueError):
+        fill = 0.0
+    return fill if fill > 0 else fallback
+
+
 def _below_min_trade_volume(raw_quote_volume, min_volume) -> bool:
     """True só quando o volume 24h é CONHECIDO e abaixo do piso.
 
@@ -489,6 +499,8 @@ class ExecutionEngine:
                     )
                     return False
 
+                entry_fill = _fill_price(long_order, price)
+
                 if double_first_applied:
                     bot.double_first_policy.mark_used(
                         state_key=double_first_state_key,
@@ -517,7 +529,7 @@ class ExecutionEngine:
                 bot.telegram.send_trade_alert(
                     symbol=symbol,
                     action="OPEN_LONG",
-                    price=price,
+                    price=entry_fill,
                     quantity=long_qty,
                     strategy_name=strategy_name
                 )
@@ -528,7 +540,7 @@ class ExecutionEngine:
                     side="LONG",
                     quantity=long_qty,
                     order_size=order_size,
-                    entry_price=price,
+                    entry_price=entry_fill,
                     stop_loss=custom_stop_loss,
                     take_profit=custom_take_profit if custom_take_profit else setup.take_profit,
                     strategy_name=strategy_name,
@@ -540,7 +552,7 @@ class ExecutionEngine:
                 bot.positions.open(
                     symbol=symbol,
                     side="LONG",
-                    entry_price=price,
+                    entry_price=entry_fill,
                     quantity=long_qty,
                     strategy_name=strategy_name,
                     strategy_type=strategy_type,
@@ -553,7 +565,7 @@ class ExecutionEngine:
                 )
 
                 logger.info("✅ LONG aberto com sucesso!")
-                logger.info(f"   {long_qty:.4f} {symbol} @ ${price:.4f}")
+                logger.info(f"   {long_qty:.4f} {symbol} @ ${entry_fill:.4f}")
                 if double_first_applied:
                     logger.info(
                         f"   Order Size: ${order_size} (double first aplicado sobre ${base_order_size:.2f}) | "
@@ -569,7 +581,7 @@ class ExecutionEngine:
                     bot.dashboard_server.emit_position_opened({
                         "symbol": symbol,
                         "side": "LONG",
-                        "entry_price": price,
+                        "entry_price": entry_fill,
                         "quantity": long_qty,
                         "strategy_name": str(strategy_name or "primary"),
                         "strategy_type": strategy_type,
@@ -634,6 +646,8 @@ class ExecutionEngine:
                     )
                     return False
 
+                entry_fill = _fill_price(short_order, price)
+
                 if double_first_applied:
                     bot.double_first_policy.mark_used(
                         state_key=double_first_state_key,
@@ -665,7 +679,7 @@ class ExecutionEngine:
                 bot.telegram.send_trade_alert(
                     symbol=symbol,
                     action="OPEN_SHORT",
-                    price=price,
+                    price=entry_fill,
                     quantity=short_qty,
                     strategy_name=strategy_name
                 )
@@ -676,7 +690,7 @@ class ExecutionEngine:
                     side="SHORT",
                     quantity=short_qty,
                     order_size=order_size,
-                    entry_price=price,
+                    entry_price=entry_fill,
                     stop_loss=custom_stop_loss,
                     take_profit=short_tp,
                     strategy_name=strategy_name,
@@ -688,7 +702,7 @@ class ExecutionEngine:
                 bot.positions.open(
                     symbol=symbol,
                     side="SHORT",
-                    entry_price=price,
+                    entry_price=entry_fill,
                     quantity=short_qty,
                     strategy_name=strategy_name,
                     strategy_type=strategy_type,
@@ -701,7 +715,7 @@ class ExecutionEngine:
                 )
 
                 logger.info("✅ SHORT aberto com sucesso!")
-                logger.info(f"   {short_qty:.4f} {symbol} @ ${price:.4f}")
+                logger.info(f"   {short_qty:.4f} {symbol} @ ${entry_fill:.4f}")
                 if double_first_applied:
                     logger.info(
                         f"   Order Size: ${order_size} (double first aplicado sobre ${base_order_size:.2f}) | "
@@ -714,7 +728,7 @@ class ExecutionEngine:
                     bot.dashboard_server.emit_position_opened({
                         "symbol": symbol,
                         "side": "SHORT",
-                        "entry_price": price,
+                        "entry_price": entry_fill,
                         "quantity": short_qty,
                         "strategy_name": str(strategy_name or "primary"),
                         "strategy_type": strategy_type,

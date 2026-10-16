@@ -79,3 +79,51 @@ def test_closed_trade_counters_wins_losses(tmp_path):
 
     counters = store.closed_trade_counters()
     assert counters == {"closed": 3, "wins": 2, "losses": 1}
+
+
+def test_today_start_uses_card_window_in_local_exit_at_format(monkeypatch):
+    """16/10: card 'P&L Hoje' (Binance desde 00:00 UTC) mostrava '40 trades
+    fechados' (o total). A janela do 'hoje' é a do card, expressa no fuso LOCAL
+    ingênuo em que exit_at é gravado (VM em BRT → 21:00 do dia anterior)."""
+    import time
+    from datetime import datetime, timezone
+
+    from trading_bot.core.config import config
+    from trading_bot.web.data import _today_start_local_iso
+
+    monkeypatch.setenv("TZ", "America/Sao_Paulo")
+    time.tzset()
+    try:
+        now = datetime(2026, 10, 16, 19, 52, tzinfo=timezone.utc)
+        monkeypatch.setattr(config, "DAILY_PNL_TZ_OFFSET_HOURS", 0.0, raising=False)
+        assert _today_start_local_iso(now) == "2026-10-15T21:00:00"
+        monkeypatch.setattr(config, "DAILY_PNL_TZ_OFFSET_HOURS", -3.0, raising=False)
+        assert _today_start_local_iso(now) == "2026-10-16T00:00:00"
+    finally:
+        monkeypatch.undo()
+        time.tzset()
+
+
+def test_collect_summary_counts_closed_today(tmp_path):
+    from datetime import datetime, timedelta
+
+    store = _store(tmp_path)
+    for sym, exit_at in (
+        ("ETHUSDT", (datetime.now() - timedelta(days=2)).isoformat()),  # outro dia
+        ("SOLUSDT", datetime.now().isoformat()),                          # hoje
+    ):
+        store.record_open(_open(sym))
+        store.record_close(
+            symbol=sym, side="LONG", entry_price=100.0, exit_price=101.0,
+            exit_at=exit_at, pnl_gross=1.0, pnl_net=0.9, fees=0.1,
+            close_reason="x", strategy_name="primary",
+        )
+    store.record_open(_open("XRPUSDT", side="SHORT"))  # aberto não conta
+
+    bot = SimpleNamespace(
+        initial_capital=300.0, closed_trades_count=0, paused=False, running=True,
+        trade_store=store, portfolio_history=[], total_pnl=0.0,
+    )
+    summary = collect_summary(bot)
+    assert summary["closed_trades"] == 2
+    assert summary["closed_trades_today"] == 1

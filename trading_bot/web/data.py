@@ -10,7 +10,7 @@ retornamos campos vazios em vez de bloquear.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from ..core.config import config
@@ -104,6 +104,17 @@ def collect_daily_history(bot, limit: int = 90) -> List[Dict[str, Any]]:
         return []
 
 
+def _today_start_local_iso(now: Optional[datetime] = None) -> str:
+    """Início do "hoje" do card P&L Hoje (00:00 no DAILY_PNL_TZ_OFFSET_HOURS, a
+    mesma janela do get_daily_pnl_from_binance) no fuso LOCAL ingênuo em que o
+    TradeStore grava exit_at (datetime.now()). Ex.: offset 0 + VM em BRT →
+    'D-1T21:00:00'."""
+    tz = timezone(timedelta(hours=_safe_float(getattr(config, "DAILY_PNL_TZ_OFFSET_HOURS", 0.0))))
+    now = (now or datetime.now(timezone.utc)).astimezone(tz)
+    start = datetime(now.year, now.month, now.day, tzinfo=tz)
+    return start.astimezone().replace(tzinfo=None).isoformat()
+
+
 def collect_summary(bot) -> Dict[str, Any]:
     """KPIs do topo da página.
 
@@ -122,10 +133,12 @@ def collect_summary(bot) -> Dict[str, Any]:
     # memória pode dessincronizar dos fechamentos server-side (caso 14/06:
     # SQLite=7, contador=6). Fallback no contador em memória se não houver store.
     closed_trades = int(getattr(bot, "closed_trades_count", 0) or 0)
+    closed_trades_today: Optional[int] = None
     _store = getattr(bot, "trade_store", None)
     if _store is not None:
         try:
             closed_trades = int(_store.count_closed_trades())
+            closed_trades_today = int(_store.count_closed_since(_today_start_local_iso()))
         except Exception:
             pass
     paused = bool(getattr(bot, "paused", False))
@@ -228,6 +241,7 @@ def collect_summary(bot) -> Dict[str, Any]:
         "bot_daily_pnl": bot_daily_pnl,
         "roi_percent": round(roi_percent, 4),
         "closed_trades": closed_trades,
+        "closed_trades_today": closed_trades_today,
         "paused": paused,
         "running": running,
         "environment": "testnet" if getattr(config, "USE_TESTNET", False) else "mainnet",
@@ -250,8 +264,15 @@ def _trailing_live_state(
         "trailing_stop_price": None,
         "trailing_activation_price": None,
     }
-    act_pct = _safe_float(payload.get("trailing_activation_pct"))
-    dist_pct = _safe_float(payload.get("trailing_distance_pct"))
+    act, dist = payload.get("trailing_activation_pct"), payload.get("trailing_distance_pct")
+    try:
+        # Os MESMOS valores do _check_trailing_stop: ATR gravado na posição, ou o
+        # fallback do .env quando ela não tem (reconciliada/pré-feature).
+        act, dist = bot._get_position_trailing_params(position_key)
+    except Exception:
+        pass
+    out["trailing_activation_pct"], out["trailing_distance_pct"] = act, dist
+    act_pct, dist_pct = _safe_float(act), _safe_float(dist)
 
     # Onde o trailing arma: activation_pct de lucro a partir da entrada.
     if entry_price > 0 and act_pct > 0:
@@ -341,8 +362,6 @@ def collect_positions(bot) -> List[Dict[str, Any]]:
                 "strategy_type": payload.get("strategy_type", "trend_signal"),
                 "custom_stop_loss": payload.get("custom_stop_loss"),
                 "custom_take_profit": payload.get("custom_take_profit"),
-                "trailing_activation_pct": payload.get("trailing_activation_pct"),
-                "trailing_distance_pct": payload.get("trailing_distance_pct"),
                 "last_seen": _iso(payload.get("last_seen")),
                 "entry_time": _iso(payload.get("entry_time")),
                 **_trailing_live_state(bot, position_key, side, entry_price, payload),

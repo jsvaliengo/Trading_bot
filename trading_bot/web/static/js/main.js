@@ -92,7 +92,7 @@
 
         const pd = $('kpi-pnl-daily');
         pd.textContent = fmt.usd(s.daily_pnl, { signed: true }); setPnl(pd, s.daily_pnl);
-        $('kpi-closed-trades').textContent = (s.closed_trades ?? '—') + ' trades fechados';
+        $('kpi-closed-trades').textContent = (s.closed_trades_today ?? s.closed_trades ?? '—') + ' trades fechados' + (s.closed_trades_today != null ? ' hoje' : '');
 
         const fv = s.funding_fee_total, fEl = $('kpi-funding'), fSub = $('kpi-funding-sub');
         if (fv === undefined || fv === null || isNaN(fv)) { fEl.textContent = '—'; fSub.textContent = '—'; }
@@ -195,7 +195,7 @@
             const lock = lp >= 0 ? `trava +${lp.toFixed(2)}%` : `ainda −${Math.abs(lp).toFixed(2)}%`;
             trailNote = `<div class="trailnote on">🔒 trailing armado · stop <b>${fmt.num(ts, 4)}</b> (${lock}) · sobe com o preço</div>`;
         } else if (tsa && tsa > 0 && p.trailing_activation_pct != null) {
-            trailNote = `<div class="trailnote">trailing arma em <b>${fmt.num(tsa, 4)}</b> (+${Number(p.trailing_activation_pct).toFixed(1)}% de lucro)</div>`;
+            trailNote = `<div class="trailnote">trailing arma em <b>${fmt.num(tsa, 4)}</b> (+${Number(p.trailing_activation_pct).toFixed(2)}% de lucro)</div>`;
         }
         return `<div class="bar">
             <span class="mk sl" style="left:${at(sl)}%"></span>
@@ -224,7 +224,7 @@
                 : `<span class="${classify(p.unrealized_pnl_usd)} n">${fmt.usd(p.unrealized_pnl_usd, { signed: true })}` +
                   (p.unrealized_pnl_percent != null ? ` <small>(${fmt.pct(p.unrealized_pnl_percent)})</small>` : '') + '</span>';
             const trl = (p.trailing_activation_pct != null)
-                ? `<span class="trl">trail ${Number(p.trailing_activation_pct).toFixed(1)}/${Number(p.trailing_distance_pct).toFixed(1)}%</span>` : '';
+                ? `<span class="trl">trail ${Number(p.trailing_activation_pct).toFixed(2)}/${Number(p.trailing_distance_pct).toFixed(2)}%</span>` : '';
             return `<div class="prow">
                 <div class="prow-top">
                     <span class="psym">${p.symbol} <span class="side ${sc}">${p.side}</span> ${trl}</span>

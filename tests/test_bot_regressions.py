@@ -3145,3 +3145,35 @@ def test_market_close_sem_avgprice_cai_no_ticker_com_aviso(caplog):
 
     assert bot.ledger.record_trade_closed.call_args.kwargs["exit_price"] == pytest.approx(2373.90)
     assert "avgPrice" in caplog.text
+
+
+@pytest.mark.parametrize("open_kwargs,side,setup_kw", [
+    ({"open_long": True}, "LONG", dict(signal=Signal.STRONG_BUY, stop_loss=4.94, take_profit=5.15)),
+    ({"open_short": True}, "SHORT", dict(signal=Signal.STRONG_SELL, stop_loss=5.05, take_profit=4.85)),
+])
+def test_open_records_fill_avg_price_as_entry(monkeypatch, open_kwargs, side, setup_kw):
+    """NEAR 16/10: DB gravava o ticker pré-ordem (4.9960) e o painel a entrada da
+    Binance (4.9945). A entrada registrada tem que ser o avgPrice do fill."""
+    bot = _make_light_bot()
+    bot.exchange = SimpleNamespace(
+        get_symbol_price=lambda _s: 4.996,
+        get_symbol_info=lambda _s: {"minNotional": 5.0, "pricePrecision": 4},
+        place_market_order=lambda **k: {"orderId": 1, "status": "FILLED", "avgPrice": "4.9945"},
+        set_stop_loss_take_profit=lambda **_k: True,
+        get_account_balance=lambda: 1000.0,
+        get_symbol_cooldown_info=lambda _s: None,
+    )
+    bot.telegram = SimpleNamespace(send_trade_alert=lambda **_k: True, send_message=MagicMock(return_value=True))
+    bot._get_total_open_notional_percent = lambda: 0.0
+    monkeypatch.setattr(config, "CHECK_FUNDING_RATE", False)
+    monkeypatch.setattr(config, "USE_BINANCE_STRATEGY", False)
+    monkeypatch.setattr(config, "MAX_TOTAL_NOTIONAL_PERCENT", 999.0)
+    monkeypatch.setattr(config, "MAX_POSITION_CONCENTRATION_PERCENT", 100.0)
+
+    setup = TradeSetup(
+        symbol="NEARUSDT", long_size=3.0, short_size=3.0, entry_price=4.996,
+        dca_levels=[], **setup_kw,
+    )
+    assert bot.execute_signal_trade(setup, strategy_name="trend_strong", **open_kwargs) is True
+    assert bot.known_positions[f"NEARUSDT_{side}"]["entry_price"] == pytest.approx(4.9945)
+    assert bot.trade_history[-1]["entry_price"] == pytest.approx(4.9945)
