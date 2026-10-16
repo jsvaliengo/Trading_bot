@@ -770,6 +770,22 @@ class TradeStore:
             logger.exception("🗃️ Falha ao derivar contadores de fechados")
             return {"closed": 0, "wins": 0, "losses": 0}
 
+    def closed_trade_totals(self) -> Dict[str, float]:
+        """Somas dos fechados {win_total, loss_total, fees}, mesma regra do ledger
+        (win = pnl_net > 0; o resto soma em loss_total). Ancora os contadores no startup."""
+        try:
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT COALESCE(SUM(CASE WHEN pnl_net > 0 THEN pnl_net END), 0), "
+                    "       COALESCE(SUM(CASE WHEN pnl_net <= 0 THEN pnl_net END), 0), "
+                    "       COALESCE(SUM(fees), 0) "
+                    "  FROM trades WHERE status = 'closed'"
+                ).fetchone()
+            return {"win_total": float(row[0]), "loss_total": float(row[1]), "fees": float(row[2])}
+        except Exception:
+            logger.exception("🗃️ Falha ao derivar totais de fechados")
+            return {"win_total": 0.0, "loss_total": 0.0, "fees": 0.0}
+
     def count_equity(self) -> int:
         try:
             with self._lock:

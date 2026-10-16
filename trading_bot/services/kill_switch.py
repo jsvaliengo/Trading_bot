@@ -94,6 +94,28 @@ class KillSwitchMonitor:
                 str(k): str(v) for k, v in alerted.items() if k and v
             }
 
+    def rebuild_history_from_store(self, daily_rows: List[Dict[str, Any]], *, today: str) -> None:
+        """Reescreve o net de cada dia fechado com o SQLite (TradeStore.daily_pnl_history,
+        dia UTC). O JSON só guarda o contador em memória da virada, que drifta
+        (reconciler/backfill corrigem o SQLite, não a memória).
+
+        Mantém do JSON o que o SQLite não sabe: dias anteriores ao 1º trade do DB.
+        Dia do JSON sem trade no SQLite vira net 0 (continua quebrando a sequência)."""
+        real = {str(r["day"]): r for r in daily_rows if r.get("day") and str(r["day"]) < today}
+        if not real:
+            return
+        first_day = min(real)
+        merged = {
+            e.date: e if e.date < first_day else DailyPnlEntry(e.date, 0.0, 0, 0)
+            for e in self.daily_pnl_history
+            if e.date < today
+        }
+        for day, r in real.items():
+            merged[day] = DailyPnlEntry(day, float(r["net"]), int(r["wins"]), int(r["losses"]))
+        self.daily_pnl_history = sorted(merged.values(), key=lambda e: e.date)[
+            -DAILY_HISTORY_MAX_ENTRIES:
+        ]
+
     # ------------------------------------------------------------------
     # Hook chamado no rollover diário
     # ------------------------------------------------------------------
