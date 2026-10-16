@@ -24,7 +24,7 @@ A ledger NÃO toca:
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from ..observability import metrics
@@ -92,7 +92,7 @@ class TradeLedger:
         """
         bot = self._bot
         record = {
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "symbol": symbol,
             "signal": signal,
             "side": side,
@@ -277,7 +277,7 @@ class TradeLedger:
 
         close_fields = {
             "exit_price": exit_price,
-            "exit_time": datetime.now().isoformat(),
+            "exit_time": datetime.now(timezone.utc).isoformat(),
             "pnl_gross": pnl_gross,
             "pnl_net": pnl_net,
             "fees": total_fees,
@@ -300,7 +300,7 @@ class TradeLedger:
 
         # Não achou — appenda close-only.
         history.append({
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "symbol": symbol,
             "side": side or "",
             "entry_price": entry_price,

@@ -81,27 +81,20 @@ def test_closed_trade_counters_wins_losses(tmp_path):
     assert counters == {"closed": 3, "wins": 2, "losses": 1}
 
 
-def test_today_start_uses_card_window_in_local_exit_at_format(monkeypatch):
-    """16/10: card 'P&L Hoje' (Binance desde 00:00 UTC) mostrava '40 trades
-    fechados' (o total). A janela do 'hoje' é a do card, expressa no fuso LOCAL
-    ingênuo em que exit_at é gravado (VM em BRT → 21:00 do dia anterior)."""
-    import time
+def test_today_start_is_card_window_in_utc(monkeypatch):
+    """16/10: card 'P&L Hoje' mostrava '40 trades fechados' (o total). O 'hoje'
+    é o dia de trading do card (DAILY_PNL_TZ_OFFSET_HOURS), comparado em UTC
+    com o exit_at normalizado."""
     from datetime import datetime, timezone
 
     from trading_bot.core.config import config
-    from trading_bot.web.data import _today_start_local_iso
+    from trading_bot.core.trade_store import _to_iso, trading_day_start
 
-    monkeypatch.setenv("TZ", "America/Sao_Paulo")
-    time.tzset()
-    try:
-        now = datetime(2026, 10, 16, 19, 52, tzinfo=timezone.utc)
-        monkeypatch.setattr(config, "DAILY_PNL_TZ_OFFSET_HOURS", 0.0, raising=False)
-        assert _today_start_local_iso(now) == "2026-10-15T21:00:00"
-        monkeypatch.setattr(config, "DAILY_PNL_TZ_OFFSET_HOURS", -3.0, raising=False)
-        assert _today_start_local_iso(now) == "2026-10-16T00:00:00"
-    finally:
-        monkeypatch.undo()
-        time.tzset()
+    now = datetime(2026, 10, 16, 19, 52, tzinfo=timezone.utc)
+    monkeypatch.setattr(config, "DAILY_PNL_TZ_OFFSET_HOURS", 0.0, raising=False)
+    assert _to_iso(trading_day_start(now)) == "2026-10-16T00:00:00+00:00"
+    monkeypatch.setattr(config, "DAILY_PNL_TZ_OFFSET_HOURS", -3.0, raising=False)
+    assert _to_iso(trading_day_start(now)) == "2026-10-16T03:00:00+00:00"
 
 
 def test_collect_summary_counts_closed_today(tmp_path):

@@ -564,10 +564,10 @@ class TradingConfig:
     # ~3% do saldo testnet (~$4.8k)
     DAILY_PROFIT_TARGET: float = 150.0
 
-    # Fuso do "dia" para o P&L Realizado de Hoje. O app da Binance mostra o
-    # realizado do dia no fuso LOCAL da conta (ex: Brasília UTC-3), então a
-    # janela 00:00 UTC do dashboard/Telegram divergia (~trades entre 00-03 UTC
-    # caíam no dia errado). Offset em horas (-3 = Brasília). 0 = UTC.
+    # Fuso do "dia de trading": ÚNICO limite de dia do bot (P&L de hoje, card,
+    # histórico diário, kill switch, metas diárias; ver trade_store.trading_day).
+    # O app da Binance mostra o realizado do dia no fuso da conta (ex: Brasília
+    # UTC-3). Offset em horas (-3 = Brasília). 0 = UTC.
     DAILY_PNL_TZ_OFFSET_HOURS: float = _env_float("TRADING_BOT_DAILY_PNL_TZ_OFFSET_HOURS", 0.0)
 
     # Auto-reconciliação do P&L: periodicamente compara cada trade fechado recente

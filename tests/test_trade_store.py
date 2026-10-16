@@ -66,7 +66,7 @@ def test_close_updates_matching_open(tmp_path):
     assert t["pnl_net"] == 8.5
     assert t["fees"] == 1.5
     assert t["close_reason"] == "take_profit"
-    assert t["exit_time"] == "2026-05-31T11:00:00"
+    assert t["exit_time"] == "2026-05-31T11:00:00+00:00"
 
 
 def test_close_persists_mfe_pct(tmp_path):
@@ -314,7 +314,7 @@ def test_realized_curve_orders_by_exit_and_limits(tmp_path):
     assert len(curve) == 2
     # ordenado por exit_at: ...10:20 (cum 3.0), 10:30 (cum 7.0)
     assert [round(p["cum_pnl"], 4) for p in curve] == [3.0, 7.0]
-    assert curve[-1]["exit_at"] == "2026-06-01T10:30:00"
+    assert curve[-1]["exit_at"] == "2026-06-01T10:30:00+00:00"
 
 
 def test_realized_curve_empty_when_no_closed_trades(tmp_path):

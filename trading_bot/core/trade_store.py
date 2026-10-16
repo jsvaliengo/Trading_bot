@@ -34,6 +34,8 @@ import threading
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
 
+from .config import config
+
 logger = logging.getLogger(__name__)
 
 _SCHEMA = """
@@ -79,12 +81,37 @@ CREATE INDEX IF NOT EXISTS idx_portfolio_ts ON portfolio_history (ts_iso);
 
 
 def _to_iso(value: Any) -> Optional[str]:
-    """Normaliza timestamp (datetime|str|None) para ISO string."""
+    """Normaliza timestamp (datetime|str|None) p/ ISO em UTC com offset
+    ('…+00:00'). Ingênuo = horário LOCAL do processo (é o que datetime.now()
+    gravava na VM). Uniforme em UTC, comparar/ordenar como string é correto."""
     if value is None:
         return None
-    if isinstance(value, datetime):
-        return value.isoformat()
-    return str(value)
+    dt = value
+    if not isinstance(dt, datetime):
+        try:
+            dt = datetime.fromisoformat(str(value))
+        except ValueError:
+            return str(value)
+    return dt.astimezone(timezone.utc).isoformat()
+
+
+def _tz_offset(tz_offset_hours: Optional[float] = None) -> float:
+    if tz_offset_hours is not None:
+        return tz_offset_hours
+    return float(config.DAILY_PNL_TZ_OFFSET_HOURS or 0.0)
+
+
+def trading_day_start(now: Optional[datetime] = None) -> datetime:
+    """00:00 do dia de trading que contém `now`. ÚNICO limite de "dia" do bot
+    (histórico, kill switch, P&L de hoje, metas, card): o fuso de
+    DAILY_PNL_TZ_OFFSET_HOURS (0 = UTC, como o income diário da Binance)."""
+    tz = timezone(timedelta(hours=_tz_offset()))
+    local = (now or datetime.now(timezone.utc)).astimezone(tz)
+    return local.replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def trading_day(now: Optional[datetime] = None) -> str:
+    return trading_day_start(now).strftime("%Y-%m-%d")
 
 
 def _parse_dt(value: Any) -> Any:
@@ -113,6 +140,7 @@ class TradeStore:
             self._conn.executescript(_SCHEMA)
             self._ensure_column("trades", "mfe_pct", "REAL")
             self._conn.commit()
+            self._normalize_legacy_timestamps()
         logger.info("🗃️ TradeStore inicializado em %s", db_path)
 
     def _ensure_column(self, table: str, column: str, decl: str) -> None:
@@ -124,6 +152,28 @@ class TradeStore:
         cols = {r[1] for r in self._conn.execute(f"PRAGMA table_info({table})")}
         if column not in cols:
             self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+
+    def _normalize_legacy_timestamps(self) -> None:
+        """Migração idempotente: opened_at/exit_at ingênuos (datetime.now() no
+        fuso da VM) -> UTC com offset. Uma transação; em falha, rollback e o DB
+        fica como estava. Chamado sob self._lock."""
+        try:
+            rows = self._conn.execute(
+                "SELECT id, opened_at, exit_at FROM trades "
+                "WHERE opened_at NOT LIKE '%+00:00' "
+                "OR (exit_at IS NOT NULL AND exit_at NOT LIKE '%+00:00')"
+            ).fetchall()
+            for r in rows:
+                self._conn.execute(
+                    "UPDATE trades SET opened_at=?, exit_at=? WHERE id=?",
+                    (_to_iso(r["opened_at"]), _to_iso(r["exit_at"]), r["id"]),
+                )
+            self._conn.commit()
+            if rows:
+                logger.info("🗃️ %d trades com timestamp ingênuo migrados p/ UTC", len(rows))
+        except Exception:
+            self._conn.rollback()
+            logger.exception("🗃️ Falha ao migrar timestamps ingênuos p/ UTC")
 
     # ------------------------------------------------------------------ write
 
@@ -185,7 +235,7 @@ class TradeStore:
         com mesmo symbol (e side, quando informado). Se não achar, insere um
         registro close-only (caso: posição vinda de reconciliação sem open).
         """
-        exit_at = exit_at or _to_iso(datetime.now())
+        exit_at = _to_iso(exit_at or datetime.now(timezone.utc))
         try:
             with self._lock:
                 if side is not None:
@@ -375,12 +425,14 @@ class TradeStore:
             return 0.0
 
     @staticmethod
-    def _local_day_sql(tz_offset_hours: float) -> tuple[str, list]:
-        """(expr_sql, params) p/ o DIA LOCAL a partir de exit_at (gravado em UTC).
+    def _local_day_sql(tz_offset_hours: Optional[float]) -> tuple[str, list]:
+        """(expr_sql, params) p/ o dia de trading a partir de exit_at (UTC).
 
         Com offset, desloca via SQLite `datetime(exit_at, '±N hours')` e cai pra
         substr cru se o parse falhar. Sem offset, usa substr direto (UTC).
+        None = DAILY_PNL_TZ_OFFSET_HOURS.
         """
+        tz_offset_hours = _tz_offset(tz_offset_hours)
         if not tz_offset_hours:
             return "substr(exit_at, 1, 10)", []
         mod = f"{tz_offset_hours:+g} hours"
@@ -390,7 +442,7 @@ class TradeStore:
         )
 
     def realized_pnl_today(
-        self, day: Optional[str] = None, tz_offset_hours: float = 0.0
+        self, day: Optional[str] = None, tz_offset_hours: Optional[float] = None
     ) -> float:
         """Soma de pnl_net dos trades fechados HOJE (no fuso local), do TradeStore.
 
@@ -401,7 +453,7 @@ class TradeStore:
         day: data 'YYYY-MM-DD' a consultar; default = hoje no fuso local.
         """
         if day is None:
-            tz = timezone(timedelta(hours=tz_offset_hours))
+            tz = timezone(timedelta(hours=_tz_offset(tz_offset_hours)))
             day = datetime.now(tz).strftime("%Y-%m-%d")
         day_expr, params = self._local_day_sql(tz_offset_hours)
         try:
@@ -427,7 +479,7 @@ class TradeStore:
 
         Substitui a antiga série baseada no income DIÁRIO da Binance (que incluía
         taxas/funding com baseline e divergia do topo). Ordena por exit_at — todos
-        gravados pelo mesmo datetime.now().isoformat(), então a ordem é coerente.
+        normalizados p/ UTC com offset (_to_iso), então a ordem é coerente.
 
         Retorna os últimos `limit` pontos (a soma acumulada ainda reflete TODOS os
         trades anteriores, não só os exibidos).
@@ -467,17 +519,13 @@ class TradeStore:
                 ).fetchone()
             if not row or not row[0]:
                 return None
-            from datetime import datetime, timezone
-            dt = datetime.fromisoformat(str(row[0]))
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            return int(dt.timestamp() * 1000)
+            return int(datetime.fromisoformat(str(row[0])).timestamp() * 1000)
         except Exception:
             logger.exception("🗃️ Falha ao obter timestamp do primeiro trade")
             return None
 
     def daily_pnl_history(
-        self, limit: int = 90, tz_offset_hours: float = 0.0
+        self, limit: int = 90, tz_offset_hours: Optional[float] = None
     ) -> List[Dict[str, Any]]:
         """P&L agregado por dia (no fuso local) dos trades fechados, cronológico.
 
@@ -534,9 +582,7 @@ class TradeStore:
         Retorna os campos necessários p/ casar com o income da Binance e corrigir
         o P&L (id, symbol, side, opened_at, exit_at, qty, entry_price, pnl_*).
         """
-        cutoff = (
-            datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
-        ).strftime("%Y-%m-%dT%H:%M:%S")
+        cutoff = _to_iso(datetime.now(timezone.utc) - timedelta(hours=lookback_hours))
         try:
             with self._lock:
                 rows = self._conn.execute(
@@ -580,7 +626,7 @@ class TradeStore:
             return False
 
     def pnl_analysis(
-        self, since_utc: Optional[str] = None, tz_offset_hours: float = 0.0
+        self, since_utc: Optional[str] = None, tz_offset_hours: Optional[float] = None
     ) -> Dict[str, Any]:
         """Agregados de P&L dos trades FECHADOS — base do painel "Análise P&L".
 
@@ -751,18 +797,18 @@ class TradeStore:
             logger.exception("🗃️ Falha ao contar trades fechados no TradeStore")
             return 0
 
-    def count_closed_since(self, start_iso: str) -> int:
-        """Fechados com exit_at >= start_iso (mesmo formato/fuso de exit_at)."""
+    def count_closed_since(self, start: Any) -> int:
+        """Fechados com exit_at >= start (datetime ou ISO; normalizado p/ UTC)."""
         try:
             with self._lock:
                 return int(
                     self._conn.execute(
                         "SELECT COUNT(*) FROM trades WHERE status = 'closed' AND exit_at >= ?",
-                        (start_iso,),
+                        (_to_iso(start),),
                     ).fetchone()[0]
                 )
         except Exception:
-            logger.exception("🗃️ Falha ao contar trades fechados desde %s", start_iso)
+            logger.exception("🗃️ Falha ao contar trades fechados desde %s", start)
             return 0
 
     def closed_trade_counters(self) -> Dict[str, int]:
