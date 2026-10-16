@@ -764,22 +764,35 @@ class ExecutionEngine:
             strategy_name = profile.get('name', 'primary')
         logger.info(f"🚨 Fechando posição: {reason}")
 
-        # Pega o preço atual ANTES de fechar (será o preço de saída aproximado)
+        # Ticker ANTES de fechar: só fallback se a resposta da ordem não trouxer o fill
         current_price = bot.exchange.get_current_price(symbol)
 
         # Fecha a posição e só contabiliza se o fechamento for confirmado
         try:
-            close_success = bot.exchange.close_position(symbol, side)
+            close_order = bot.exchange.close_position(symbol, side)
         except Exception as e:
             logger.error(f"❌ Exceção ao fechar posição {side} {symbol}: {e}")
             return False
 
-        if not close_success:
+        if not close_order:
             logger.error(
                 f"❌ Falha ao fechar posição {side} {symbol}. "
                 "Nenhuma estatística/P&L será contabilizada."
             )
             return False
+
+        # Saída = preço médio REAL do fill, não o ticker pré-ordem (ETH #17: 2373.90 vs 2407.64)
+        try:
+            fill_price = float((close_order if isinstance(close_order, dict) else {}).get("avgPrice") or 0)
+        except (TypeError, ValueError):
+            fill_price = 0.0
+        if fill_price > 0:
+            current_price = fill_price
+        else:
+            logger.warning(
+                f"⚠️ Fechamento {side} {symbol} sem avgPrice do fill — usando ticker "
+                f"pré-ordem ${current_price:.4f} como saída (P&L aproximado)"
+            )
 
         # ============================================
         # CALCULA P&L REAL BASEADO NOS PREÇOS

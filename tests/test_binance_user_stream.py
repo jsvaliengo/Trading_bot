@@ -310,3 +310,37 @@ def test_on_user_order_update_ignores_non_realizing_fill():
     }})
     assert conn.pop_realized_close("XRPUSDT", "SHORT") is None
     assert conn.pop_realized_close("XRPUSDT", "LONG") is None
+
+
+def test_pop_realized_close_ignora_fills_anteriores_a_abertura():
+    """Fills de um fechamento feito PELO BOT (trailing/manual) ficavam no buffer e
+    o próximo SL/TP no mesmo par+lado os herdava como saída/P&L (DOGE #10 herdou
+    +$1,08 dos trailings #6/#7). Só fills a partir da abertura contam."""
+    conn = _conn_with_realized()
+    # trailing do bot fechou a posição anterior (T=1000/1001): nunca consumido
+    conn._on_user_order_update({"o": {
+        "s": "DOGEUSDT", "S": "BUY", "x": "TRADE", "X": "PARTIALLY_FILLED",
+        "rp": "0.1296", "L": "0.083016", "l": "100", "T": 1000,
+    }})
+    conn._on_user_order_update({"o": {
+        "s": "DOGEUSDT", "S": "BUY", "x": "TRADE", "X": "FILLED",
+        "rp": "0.9491", "L": "0.083016", "l": "700", "T": 1001,
+    }})
+    # nova posição aberta em T=5000; SL da exchange preenche em T=9000
+    conn._on_user_order_update({"o": {
+        "s": "DOGEUSDT", "S": "BUY", "x": "TRADE", "X": "FILLED",
+        "rp": "-0.42", "L": "0.0850", "l": "800", "T": 9000,
+    }})
+    out = conn.pop_realized_close("DOGEUSDT", "SHORT", since_ms=5000)
+    assert out["gross"] == pytest.approx(-0.42)
+    assert out["exit_price"] == pytest.approx(0.0850)
+    assert out["qty"] == pytest.approx(800)
+    # e o buffer da chave foi esvaziado (os stale não voltam no próximo close)
+    assert conn.pop_realized_close("DOGEUSDT", "SHORT") is None
+
+
+def test_pop_realized_close_so_stale_retorna_none():
+    """Se só há fills de antes da abertura, cai pro income REST (None)."""
+    conn = _conn_with_realized()
+    conn._record_realized_fill("ETHUSDT", "LONG", rp=0.5, price=2400.0, qty=0.1, ts_ms=1000)
+    assert conn.pop_realized_close("ETHUSDT", "LONG", since_ms=2000) is None

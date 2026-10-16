@@ -3102,3 +3102,46 @@ def test_fetch_realized_pnl_returns_none_after_attempts(monkeypatch):
 
     assert bot._fetch_realized_pnl_with_retry("XRPUSDT", 123, attempts=3, delay=0) is None
     assert calls["n"] == 3
+
+
+def _bot_for_market_close(close_result):
+    bot = _make_light_bot()
+    bot.exchange = SimpleNamespace(
+        get_current_price=lambda _symbol: 2373.90,  # ticker lido ANTES da ordem
+        close_position=lambda _symbol, _side: close_result,
+    )
+    bot.get_taker_fee_rate = lambda: 0.0005
+    bot.risk_manager = SimpleNamespace(update_pnl=MagicMock())
+    bot.telegram = SimpleNamespace(send_position_closed=MagicMock(return_value=True))
+    bot.ledger = SimpleNamespace(record_trade_closed=MagicMock(return_value={
+        "closed_trades_count": 1, "win_rate": 100.0, "daily_pnl": 0.0,
+    }))
+    bot.positions.get = lambda _key: {"strategy_name": "primary"}
+    return bot
+
+
+def test_market_close_registra_avgprice_do_fill_e_nao_o_ticker():
+    """ETH #17 (15/10): saída gravada 2373.90 (ticker pré-ordem) vs fill real
+    2407.64 num SHORT → +$1,03 no DB vs +$0,19 real. Exit/P&L vêm do fill."""
+    bot = _bot_for_market_close({"orderId": 7, "status": "FILLED", "avgPrice": "2407.64", "executedQty": "0.05"})
+    pos = {"symbol": "ETHUSDT", "side": "SHORT", "entry_price": 2411.20, "quantity": 0.05, "leverage": 20}
+
+    assert bot._close_position_with_notification(pos, "Trailing Stop") is True
+
+    kw = bot.ledger.record_trade_closed.call_args.kwargs
+    assert kw["exit_price"] == pytest.approx(2407.64)
+    assert kw["pnl_gross"] == pytest.approx((2411.20 - 2407.64) * 0.05)
+    assert kw["total_fees"] == pytest.approx((2411.20 + 2407.64) * 0.05 * 0.0005)
+    assert bot.telegram.send_position_closed.call_args.kwargs["exit_price"] == pytest.approx(2407.64)
+
+
+def test_market_close_sem_avgprice_cai_no_ticker_com_aviso(caplog):
+    """Sem preço do fill na resposta, mantém o ticker pré-ordem (comportamento antigo) e avisa."""
+    bot = _bot_for_market_close({"orderId": 7, "status": "NEW", "avgPrice": "0.00"})
+    pos = {"symbol": "ETHUSDT", "side": "SHORT", "entry_price": 2411.20, "quantity": 0.05, "leverage": 20}
+
+    with caplog.at_level("WARNING"):
+        assert bot._close_position_with_notification(pos, "Trailing Stop") is True
+
+    assert bot.ledger.record_trade_closed.call_args.kwargs["exit_price"] == pytest.approx(2373.90)
+    assert "avgPrice" in caplog.text

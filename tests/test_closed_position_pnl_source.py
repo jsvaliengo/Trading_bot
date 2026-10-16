@@ -139,3 +139,15 @@ def test_sem_entry_time_nao_soma_historico_do_par(monkeypatch):
     bot._process_binance_closed_position(pos)
     bot.exchange.get_income_history.assert_not_called()   # guard barrou a soma de histórico
     assert _recorded_gross(bot) <= 0                      # perda real, não +2.30 fabricado
+
+
+def test_user_stream_filtra_fills_pela_abertura_da_posicao():
+    """O pop do user-stream recebe o entry_time em ms: fills de fechamentos
+    anteriores do bot (trailing/manual) no mesmo par+lado não entram."""
+    bot = _make_bot()
+    bot.exchange.pop_realized_close.return_value = {"gross": -0.4, "exit_price": 1692.0, "qty": 0.05}
+    pos = _pos_info()
+    bot._process_binance_closed_position(pos)
+    bot.exchange.pop_realized_close.assert_called_once_with(
+        "ETHUSDT", "LONG", since_ms=int(pos["entry_time"].timestamp() * 1000)
+    )

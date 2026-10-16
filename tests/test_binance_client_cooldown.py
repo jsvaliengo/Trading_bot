@@ -168,10 +168,10 @@ def test_clear_symbol_cooldown_removes_active_cooldown():
     assert client.clear_symbol_cooldown("ESPUSDT") is False
 
 
-def test_close_position_returns_false_when_order_fails():
+def test_close_position_returns_none_when_order_fails():
     """
     Regressão: -1007 (Timeout/Unknown) na ordem de fechamento fazia
-    close_position retornar True mesmo com place_market_order retornando
+    close_position retornar sucesso mesmo com place_market_order retornando
     None. Isso causava bookkeeping fantasma e loop de close (TEST/PROD
     em 2026-05-25, +200 closes fake da mesma posição DOGE em 1 min).
     """
@@ -187,10 +187,10 @@ def test_close_position_returns_false_when_order_fails():
     from trading_bot.infra.binance_client import BinanceConnection
 
     result = BinanceConnection.close_position(client, "DOGEUSDT", "LONG")
-    assert result is False
+    assert result is None
 
 
-def test_close_position_returns_true_when_order_succeeds():
+def test_close_position_returns_order_when_order_succeeds():
     client = _make_client()
     client.get_open_positions = MagicMock(return_value=[
         {"symbol": "DOGEUSDT", "side": "LONG", "quantity": 291.0}
@@ -201,7 +201,7 @@ def test_close_position_returns_true_when_order_succeeds():
     from trading_bot.infra.binance_client import BinanceConnection
 
     result = BinanceConnection.close_position(client, "DOGEUSDT", "LONG")
-    assert result is True
+    assert result == {"orderId": 1, "status": "FILLED"}  # resposta da ordem (avgPrice do fill)
 
 
 def test_transient_error_minus_1007_triggers_short_cooldown():
