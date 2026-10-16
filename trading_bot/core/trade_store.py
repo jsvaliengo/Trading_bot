@@ -751,6 +751,20 @@ class TradeStore:
             logger.exception("🗃️ Falha ao contar trades fechados no TradeStore")
             return 0
 
+    def count_closed_since(self, start_iso: str) -> int:
+        """Fechados com exit_at >= start_iso (mesmo formato/fuso de exit_at)."""
+        try:
+            with self._lock:
+                return int(
+                    self._conn.execute(
+                        "SELECT COUNT(*) FROM trades WHERE status = 'closed' AND exit_at >= ?",
+                        (start_iso,),
+                    ).fetchone()[0]
+                )
+        except Exception:
+            logger.exception("🗃️ Falha ao contar trades fechados desde %s", start_iso)
+            return 0
+
     def closed_trade_counters(self) -> Dict[str, int]:
         """Contadores de fechados derivados do SQLite (fonte de verdade):
         {closed, wins, losses}. win = pnl_net > 0 (mesma definição do ledger).

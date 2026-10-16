@@ -291,6 +291,39 @@ def test_collect_positions_serializes_known_positions():
     assert p["trailing_activation_pct"] == 0.7
 
 
+def test_collect_positions_exposes_effective_trailing_from_bot(monkeypatch):
+    """NEAR 16/10: o painel mostrava 'trail 0.7/0.4%' (toFixed(1) de 0.7311/0.40,
+    os valores ATR) e parecia o fallback do .env. O snapshot traz os MESMOS
+    valores que o bot usa (_get_position_trailing_params), e o .env só quando a
+    posição não tem ATR."""
+    from trading_bot.core.bot import TradingBot
+
+    monkeypatch.setattr(global_config, "TRAILING_ACTIVATION_PERCENT", 0.70, raising=False)
+    monkeypatch.setattr(global_config, "TRAILING_DISTANCE_PERCENT", 0.40, raising=False)
+    positions = {
+        "NEARUSDT_SHORT": {
+            "symbol": "NEARUSDT", "side": "SHORT", "entry_price": 4.9945, "quantity": 12.0,
+            "trailing_activation_pct": 0.7311, "trailing_distance_pct": 0.40,
+        },
+        "ETHUSDT_LONG": {  # reconciliada, sem ATR → fallback do .env
+            "symbol": "ETHUSDT", "side": "LONG", "entry_price": 2000.0, "quantity": 0.1,
+            "trailing_activation_pct": None, "trailing_distance_pct": None,
+        },
+    }
+    bot = _make_bot(known_positions=positions)
+    bot.positions = SimpleNamespace(get=lambda k: positions.get(k, {}))
+    bot._get_known_position = lambda k: TradingBot._get_known_position(bot, k)
+    bot._get_position_trailing_params = lambda k: TradingBot._get_position_trailing_params(bot, k)
+
+    out = {p["key"]: p for p in dashboard_data.collect_positions(bot)}
+    near = out["NEARUSDT_SHORT"]
+    assert (near["trailing_activation_pct"], near["trailing_distance_pct"]) == (0.7311, 0.40)
+    assert near["trailing_activation_price"] == pytest.approx(4.9945 * (1 - 0.007311))
+    eth = out["ETHUSDT_LONG"]
+    assert (eth["trailing_activation_pct"], eth["trailing_distance_pct"]) == (0.70, 0.40)
+    assert eth["trailing_activation_price"] == pytest.approx(2000.0 * 1.007)
+
+
 def test_collect_regime_filters_to_active_trading_pairs(monkeypatch):
     """Regime classifier acumula obs de TODOS os pares analisados; o painel
     só deve mostrar os pares ATIVOS (em TRADING_PAIRS ou com posição aberta)."""
