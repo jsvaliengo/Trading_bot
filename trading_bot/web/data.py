@@ -233,6 +233,7 @@ def collect_summary(bot) -> Dict[str, Any]:
         "paused": paused,
         "running": running,
         "environment": "testnet" if getattr(config, "USE_TESTNET", False) else "mainnet",
+        "signal_data_source": "mainnet" if config.SIGNALS_FROM_MAINNET else config.ENVIRONMENT,
         "ai_mode": str(getattr(config, "AI_CONSULTIVE_MODE", "off") or "off"),
     }
 

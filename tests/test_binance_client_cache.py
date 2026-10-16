@@ -19,6 +19,7 @@ def _make_client():
     conn.config.SIMULATED_BALANCE_USD = 0.0
     conn.config.USE_TESTNET = False
     conn.client = MagicMock()
+    conn.market_client = conn.client  # flag off: dados de sinal = cliente da exchange
     conn._cache_lock = threading.Lock()
     conn._balance_cache = None
     conn._balance_cache_ttl = 2.0

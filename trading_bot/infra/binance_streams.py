@@ -31,6 +31,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from binance import ThreadedWebsocketManager
 from binance.exceptions import ReadLoopClosed
+from binance.ws.streams import BinanceSocketType
 
 logger = logging.getLogger(__name__)
 
@@ -213,6 +214,7 @@ class WebSocketKlineStore:
         rest_seed_fetcher: Callable[[str, str, int], List[Dict[str, Any]]],
         staleness_seconds: float = 30.0,
         seed_limit: int = 260,
+        kline_stream_url: Optional[str] = None,
     ):
         """
         Args:
@@ -223,6 +225,9 @@ class WebSocketKlineStore:
                                `BinanceConnection._rest_get_klines`.
             staleness_seconds: acima disso, is_fresh() retorna False → fallback REST
             seed_limit: quantas velas buscar no seed inicial
+            kline_stream_url: abre os sockets de kline nesta URL em vez da rede
+                              do TWM (sinais da mainnet com execução/user
+                              stream no testnet, no mesmo TWM). None = rede do TWM.
         """
         self._api_key = api_key
         self._api_secret = api_secret
@@ -233,6 +238,7 @@ class WebSocketKlineStore:
         self._staleness_seconds = max(0.01, float(staleness_seconds))
         # Seed limit idem: callers em produção pedem 260; testes podem querer menos.
         self._seed_limit = max(1, int(seed_limit))
+        self._kline_stream_url = kline_stream_url
 
         self._twm: Optional[ResilientThreadedWebsocketManager] = None
         self._lock = threading.Lock()
@@ -367,11 +373,7 @@ class WebSocketKlineStore:
             if twm is None:
                 return False
             try:
-                sock_id = twm.start_kline_futures_socket(
-                    callback=self._make_callback(key),
-                    symbol=symbol.upper(),
-                    interval=interval,
-                )
+                sock_id = self._open_kline_socket(twm, key)
             except Exception as exc:
                 logger.error(f"❌ Falha ao abrir socket WS {symbol}/{interval}: {exc}")
                 self._buffers.pop(key, None)
@@ -384,6 +386,25 @@ class WebSocketKlineStore:
                 f"📡 WS inscrito: {symbol.upper()}@kline_{interval} (seed {len(seed)} velas)"
             )
             return True
+
+    def _open_kline_socket(self, twm: ResilientThreadedWebsocketManager, key: Tuple[str, str]) -> str:
+        symbol, interval = key
+        if self._kline_stream_url is None:
+            return twm.start_kline_futures_socket(
+                callback=self._make_callback(key), symbol=symbol, interval=interval,
+            )
+        # Mesmo path do kline_futures_socket, mas na URL dada: o _get_futures_socket
+        # do python-binance só escolhe a URL pela rede do TWM (testnet aqui).
+        return twm._start_async_socket(
+            callback=self._make_callback(key),
+            socket_name="_get_socket",
+            params={
+                "path": f"{symbol.lower()}_perpetual@continuousKline_{interval}",
+                "stream_url": self._kline_stream_url,
+                "prefix": "ws/",
+                "socket_type": BinanceSocketType.USD_M_FUTURES,
+            },
+        )
 
     def unsubscribe(self, symbol: str, interval: str) -> None:
         """Remove subscrição + buffer. Silencioso se não existir."""
@@ -579,11 +600,7 @@ class WebSocketKlineStore:
                     except Exception as exc:
                         logger.debug(f"stop_socket falhou (ignorado): {exc}")
                 try:
-                    new_sock = twm.start_kline_futures_socket(
-                        callback=self._make_callback(key),
-                        symbol=symbol,
-                        interval=interval,
-                    )
+                    new_sock = self._open_kline_socket(twm, key)
                 except Exception as exc:
                     logger.error(f"❌ Falha ao recriar socket WS {symbol}/{interval}: {exc}")
                     return False
