@@ -354,7 +354,7 @@
         const f = filterRange(hist || [], state.chartRange);
         const data = f.map(s => ({ x: new Date(s.timestamp).getTime(), y: s.equity ?? s.balance })).filter(d => !isNaN(d.x) && d.y != null);
         $('chart-range').textContent = data.length ? `${fmt.dateTime(f[0].timestamp)} → ${fmt.dateTime(f[f.length - 1].timestamp)}` : 'sem dados nesta janela';
-        const ds = { data, borderColor: p.ac, backgroundColor: areaGradient(el, p.ac, 210), fill: true, tension: 0.35, borderWidth: 2, pointRadius: 0 };
+        const ds = { data, borderColor: p.ac, backgroundColor: areaGradient(el, p.ac, 210), fill: true, cubicInterpolationMode: 'monotone', borderWidth: 2, pointRadius: 0 };
         if (charts['equity-chart']) { charts['equity-chart'].data.datasets[0] = ds; charts['equity-chart'].update('none'); return; }
         charts['equity-chart'] = new Chart(el, {
             type: 'line', data: { datasets: [ds] },
@@ -371,12 +371,12 @@
             peak = Math.max(peak, eq);
             return { x: new Date(s.timestamp).getTime(), y: peak > 0 ? ((eq - peak) / peak) * 100 : 0 };
         }).filter(d => d && !isNaN(d.x));
-        const ds = { data, borderColor: p.neg, backgroundColor: areaGradient(el, p.neg, 150), fill: true, tension: 0.3, borderWidth: 1.6, pointRadius: 0 };
+        const ds = { data, borderColor: p.neg, backgroundColor: areaGradient(el, p.neg, 150), fill: true, cubicInterpolationMode: 'monotone', borderWidth: 1.6, pointRadius: 0 };
         if (charts['drawdown-chart']) { charts['drawdown-chart'].data.datasets[0] = ds; charts['drawdown-chart'].update('none'); return; }
         charts['drawdown-chart'] = new Chart(el, {
             type: 'line', data: { datasets: [ds] },
             options: { responsive: true, maintainAspectRatio: false, parsing: false, plugins: { legend: { display: false } },
-                scales: { x: { type: 'linear', display: false }, y: { ticks: { color: p.mut, font: tickFont, callback: v => v + '%' }, grid: { color: p.grid } } } },
+                scales: { x: { type: 'linear', display: false }, y: { ticks: { color: p.mut, font: tickFont, callback: v => Number(v.toFixed(2)) + '%' }, grid: { color: p.grid } } } },
         });
     }
 
