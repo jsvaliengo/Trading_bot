@@ -485,10 +485,10 @@ def collect_portfolio_history(bot, limit: int = 200) -> List[Dict[str, Any]]:
     if store is not None:
         try:
             for t in store.recent_trades(1000):
-                if str(t.get("status")) == "closed":
-                    ts = _parse_ts(t.get("exit_at"))
-                    if ts is not None:
-                        closed.append((ts, _safe_float(t.get("pnl_net"))))
+                # _row_to_trade só expõe `exit_time` em trade fechado (não há `status`/`exit_at`).
+                ts = _parse_ts(t.get("exit_time"))
+                if ts is not None:
+                    closed.append((ts, _safe_float(t.get("pnl_net"))))
             closed.sort(key=lambda x: x[0])
         except Exception:
             closed = []
