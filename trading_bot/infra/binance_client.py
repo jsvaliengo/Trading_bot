@@ -41,6 +41,13 @@ TRANSIENT_FAILURE_CODES: frozenset = frozenset({-1007})
 MAINNET_FSTREAM_URL = "wss://fstream.binance.com/market/"
 
 
+def _positive_float(value) -> float:
+    try:
+        return max(0.0, float(value or 0))
+    except (TypeError, ValueError):
+        return 0.0
+
+
 class BinanceConnection:
     """
     Classe que encapsula toda a comunicação com a Binance.
@@ -1359,20 +1366,25 @@ class BinanceConnection:
             logger.error(f"Erro ao ativar Hedge Mode: {e}")
             return False
     
+    def get_symbol_ticker(self, symbol: str) -> Dict:
+        """Ticker da exchange de execução: {'price', 'time'} (time = ms do último trade)."""
+        try:
+            return self._api_call(
+                "futures_symbol_ticker",
+                self.client.futures_symbol_ticker,
+                symbol=symbol
+            ) or {}
+        except Exception as e:
+            logger.error(f"Erro ao obter preço de {symbol}: {e}")
+            return {}
+
     def get_symbol_price(self, symbol: str) -> float:
         """
         Retorna o preço atual de um par.
         """
         try:
-            ticker = self._api_call(
-                "futures_symbol_ticker",
-                self.client.futures_symbol_ticker,
-                symbol=symbol
-            )
-            return float(ticker['price'])
-            
-        except Exception as e:
-            logger.error(f"Erro ao obter preço de {symbol}: {e}")
+            return float(self.get_symbol_ticker(symbol).get('price') or 0.0)
+        except (TypeError, ValueError):
             return 0.0
     
     def get_symbol_info(self, symbol: str) -> Dict:
@@ -1789,6 +1801,7 @@ class BinanceConnection:
                 allow_timeout_retry=False
             )
             
+            order = self._with_real_fill(symbol, order)
             logger.info(f"📈 Ordem executada: {side} {position_side} {formatted_qty} {symbol}")
             self._record_order_stat(symbol, successes=1)
             # Saldo mudou: invalida cache pra próxima leitura buscar valor fresco
@@ -1812,6 +1825,47 @@ class BinanceConnection:
             )
             return None
     
+    def _with_real_fill(self, symbol: str, order: Optional[Dict]) -> Optional[Dict]:
+        """Garante avgPrice do fill real na resposta da ordem a mercado.
+
+        O testnet às vezes responde ao RESULT com avgPrice 0 (fill ainda não
+        refletido); o caller caía no ticker pré-ordem e ancorava SL/TP num preço
+        velho (NEAR 20/10: ticker 4.772, fill 4.710). Consulta a ordem (avgPrice)
+        com retry curto e, sem fill ali, faz o VWAP dos userTrades da ordem.
+        Nunca levanta: a ordem JÁ foi executada e o caller precisa recebê-la.
+        """
+        if not isinstance(order, dict) or order.get("orderId") is None:
+            return order
+        if _positive_float(order.get("avgPrice")) > 0:
+            return order
+        order_id = order["orderId"]
+        for attempt in range(3):
+            if attempt:
+                time.sleep(0.3)
+            try:
+                fetched = self._api_call(
+                    "futures_get_order", self.client.futures_get_order,
+                    symbol=symbol, orderId=order_id,
+                )
+                if isinstance(fetched, dict) and _positive_float(fetched.get("avgPrice")) > 0:
+                    return {**order, **fetched}
+            except Exception as e:
+                logger.warning(f"⚠️ Falha ao consultar fill da ordem {order_id} {symbol}: {e}")
+        try:
+            trades = self._api_call(
+                "futures_account_trades", self.client.futures_account_trades,
+                symbol=symbol, orderId=order_id,
+            )
+            fills = [(_positive_float(t.get("price")), _positive_float(t.get("qty"))) for t in trades or []]
+            qty = sum(q for _p, q in fills)
+            if qty > 0:
+                vwap = sum(p * q for p, q in fills) / qty
+                return {**order, "avgPrice": str(vwap), "executedQty": str(qty)}
+        except Exception as e:
+            logger.warning(f"⚠️ Falha ao buscar trades da ordem {order_id} {symbol}: {e}")
+        logger.warning(f"⚠️ Ordem {order_id} {symbol} sem fill confirmado (avgPrice ausente na ordem e nos trades)")
+        return order
+
     def set_stop_loss_take_profit(
         self,
         symbol: str,

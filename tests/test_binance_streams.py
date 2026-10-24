@@ -1,12 +1,13 @@
 """Testes do WebSocketKlineStore — mocka o ThreadedWebsocketManager."""
 
+import time
 from unittest.mock import MagicMock, patch
 
 
 def _seed_fetcher(symbol, interval, limit):
     """REST seed fake: retorna `limit` velas com timestamps crescentes."""
-    base_ts = 1_700_000_000_000
     step_ms = {"1m": 60_000, "3m": 180_000, "5m": 300_000}.get(interval, 60_000)
+    base_ts = (int(time.time() * 1000) // step_ms - limit) * step_ms  # última vela recém-fechada
     return [
         {
             "timestamp": base_ts + i * step_ms,

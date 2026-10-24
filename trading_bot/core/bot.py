@@ -41,7 +41,8 @@ from .trade_store import TradeStore
 from ..ai.consultive_engine import ConsultiveEngine
 from ..observability.log_redaction import install_on_root_handlers
 from ..execution import ExecutionEngine
-from ..execution.engine import _below_min_trade_volume
+from ..execution.engine import _below_min_trade_volume, _throttled_warning
+from ..infra.binance_streams import stale_kline_age_seconds
 from ..infra.binance_client import BinanceConnection
 from ..observability import metrics
 from .strategy import HedgeStrategy, RangeScalpingStrategy, RiskManager, TechnicalAnalysis
@@ -291,6 +292,7 @@ class TradingBot:
         # negativa confirmada em 97 trades, 24/06).
         self.paused = bool(getattr(config, "START_PAUSED", False))
         self.invert_signals = False
+        self._stale_klines_logged: Dict[str, float] = {}
         self.positions = {}
         self.trade_history = []
         self.closed_trades_count = 0
@@ -2944,7 +2946,9 @@ class TradingBot:
         # Se não conseguiu scores suficientes, completa com a ordem padrão
         if len(best_coins) < num_coins:
             logger.warning(f"⚠️ Só conseguiu {len(best_coins)} scores, completando com ordem padrão")
-            for coin in candidate_coins:
+            # Só pares que passaram o piso de volume: o filler usava o universo
+            # cru e BCH ($74,6M < $150M) entrava e era barrado na abertura a cada ciclo.
+            for coin in pre_filtered:
                 if coin not in best_coins:
                     best_coins.append(coin)
                     if len(best_coins) >= num_coins:
@@ -3636,6 +3640,15 @@ class TradingBot:
 
         if not klines:
             logger.warning(f"⚠️  Sem dados para {symbol}")
+            return False
+
+        stale_age = stale_kline_age_seconds(klines[-1].get("timestamp"), execution_timeframe)
+        if stale_age is not None:
+            _throttled_warning(
+                self._stale_klines_logged, symbol,
+                f"⚠️ {symbol}: velas paradas — última vela {execution_timeframe} fechou há "
+                f"{stale_age / 60:.0f}min (> 2 intervalos); sem análise/entrada",
+            )
             return False
 
         if is_trend_strong and confirmation_timeframe and not confirmation_klines:

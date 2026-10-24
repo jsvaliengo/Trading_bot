@@ -66,6 +66,20 @@ def _interval_to_ms(interval: str) -> Optional[int]:
         return None
 
 
+def stale_kline_age_seconds(last_open_ms: Any, interval: str) -> Optional[float]:
+    """Segundos desde o fechamento da última vela FECHADA, se passou de 2 intervalos
+    (feed parado); None quando fresca ou sem dado para julgar (fail-open)."""
+    step_ms = _interval_to_ms(interval)
+    try:
+        last_open_ms = int(last_open_ms)
+    except (TypeError, ValueError):
+        return None
+    if not step_ms or last_open_ms <= 0:
+        return None
+    age_ms = time.time() * 1000 - (last_open_ms + step_ms)
+    return age_ms / 1000.0 if age_ms > 2 * step_ms else None
+
+
 class ResilientThreadedWebsocketManager(ThreadedWebsocketManager):
     """
     ThreadedWebsocketManager com `start_listener` que não entra em busy-loop.
@@ -463,7 +477,16 @@ class WebSocketKlineStore:
             ts = self._last_message_ts.get(key)
             if ts is None:
                 return False
-            return (time.monotonic() - ts) <= max_age
+            if (time.monotonic() - ts) > max_age:
+                return False
+            buf = self._buffers.get(key)
+            last_open = buf[-1].get("timestamp") if buf else None
+        # Mensagens chegando (velas em formação) não bastam: sem vela FECHADA nova
+        # o buffer congela e seguia "fresh". REST até o reseed + socket novo.
+        if stale_kline_age_seconds(last_open, interval) is not None:
+            self._schedule_recovery(key, reopen_socket=True, reason="velas fechadas paradas")
+            return False
+        return True
 
     # ------------------------------------------------------------------
     # Observabilidade

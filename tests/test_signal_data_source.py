@@ -181,7 +181,7 @@ def _open_with_divergence(monkeypatch, *, side, testnet_price, fill, sl, tp):
     bot._init_runtime_state()
     placed = {}
     bot.exchange = SimpleNamespace(
-        get_symbol_price=lambda _s: testnet_price,
+        get_symbol_ticker=lambda _s: {"price": testnet_price},
         get_symbol_info=lambda _s: {"minNotional": 5.0, "pricePrecision": 4},
         place_market_order=lambda **k: {"orderId": 1, "status": "FILLED", "avgPrice": str(fill)},
         set_stop_loss_take_profit=lambda **k: placed.update(k) or True,
@@ -232,14 +232,15 @@ def test_sl_tp_reancorados_no_fill_do_testnet(
     assert pos["custom_take_profit"] == pytest.approx(want_tp, abs=1e-4)
 
 
-def test_flag_off_sl_tp_inalterados(monkeypatch):
-    """Comportamento atual: TP cru; SL no lado errado vira o fallback de 3%."""
+def test_flag_off_sem_reancorar_sinal_so_no_fill(monkeypatch):
+    """Sem sinais da mainnet: nada de sinal→ticker (SL no lado errado vira o
+    fallback de 3% do ticker), mas SL/TP seguem o fill real (ticker→fill)."""
     _set_source(monkeypatch, "testnet", "exchange")
     _bot, placed = _open_with_divergence(
         monkeypatch, side="LONG", testnet_price=97.5, fill=97.6, sl=98.8, tp=102.0,
     )
-    assert placed["take_profit_price"] == pytest.approx(102.0)
-    assert placed["stop_loss_price"] == pytest.approx(round(97.5 * 0.97, 4))
+    assert placed["take_profit_price"] == pytest.approx(102.0 * 97.6 / 97.5)
+    assert placed["stop_loss_price"] == pytest.approx(round(97.5 * 0.97, 4) * 97.6 / 97.5)
 
 
 # ─────────────────────────── Universo: par ausente no testnet ───────────────────────────

@@ -808,6 +808,10 @@ class TradingConfig:
     # Idade máxima de um sinal antes de ser descartado (Improvement 7)
     # Se o sinal foi gerado há mais de X segundos, pula a entrada
     MAX_SIGNAL_AGE_SECONDS: float = float(os.getenv("TRADING_BOT_MAX_SIGNAL_AGE_SECONDS", "120.0"))
+
+    # Ticker de execução cujo último trade é mais velho que isto não abre trade
+    # (NEAR 20/10: ticker parado em 4.772 por ~2h, fill real 4.71). 0 desativa.
+    MAX_TICKER_AGE_SECONDS: float = _env_float("TRADING_BOT_MAX_TICKER_AGE_SECONDS", 60.0)
     
     # Timeframe para análise (1m, 5m, 15m, 1h, 4h)
     TIMEFRAME: str = "5m"

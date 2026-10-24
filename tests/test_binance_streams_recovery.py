@@ -199,8 +199,8 @@ def test_stop_socket_ends_listener_and_cleans_path():
 # ---------------------------------------------------------------------------
 
 def _seed_fetcher(symbol, interval, limit):
-    base_ts = 1_700_000_000_000
     step = _interval_to_ms(interval)
+    base_ts = (int(time.time() * 1000) // step - limit) * step  # última vela recém-fechada
     return [
         {"timestamp": base_ts + i * step, "open": 1.0, "high": 1.0,
          "low": 1.0, "close": 1.0, "volume": 1.0}
