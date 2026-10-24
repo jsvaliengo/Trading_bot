@@ -3100,17 +3100,20 @@ class TradingBot:
         except Exception as exc:
             logger.warning(f"🔁 Reconciliação P&L falhou: {exc}")
             return
-        if result.get("corrected"):
+        # Só fabricação (gross divergente) avisa; ajuste de taxa/funding é rotina.
+        fabricated = [d for d in result.get("details", []) if d.get("gross_fixed")]
+        if fabricated:
             # O dashboard faz polling do snapshot (lê o DB ao vivo) — sem emit.
             try:
                 lines = "\n".join(
                     f"• {d['symbol']} {d['side']}: ${d['old']:+.2f} → ${d['new']:+.2f}"
-                    for d in result.get("details", [])[:8]
+                    for d in fabricated[:8]
                 )
+                delta = sum(d["new"] - d["old"] for d in fabricated)
                 self.telegram.send_message(
                     f"🔁 <b>P&L reconciliado</b>\n"
-                    f"{result['corrected']} trade(s) corrigido(s) "
-                    f"(Δ ${result['total_delta']:+.2f}) — o bot havia gravado P&L "
+                    f"{len(fabricated)} trade(s) corrigido(s) "
+                    f"(Δ ${delta:+.2f}) — o bot havia gravado P&L "
                     f"que divergia da Binance e ajustou sozinho.\n{lines}"
                 )
             except Exception:
