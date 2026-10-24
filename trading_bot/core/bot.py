@@ -777,6 +777,9 @@ class TradingBot:
             )
             if getattr(self, 'kill_switch', None) is not None:
                 self.kill_switch.load_from_state(state.get('kill_switch', {}))
+            # Só o pico salvo SOB Donchian (o do pullback não entra no forward test).
+            if getattr(self, 'donchian', None) is not None and state.get('donchian_peak_equity'):
+                self.peak_equity = float(state['donchian_peak_equity'])
             saved_max_drawdown = state.get('max_drawdown_from_peak_percent')
             if saved_max_drawdown is not None:
                 try:

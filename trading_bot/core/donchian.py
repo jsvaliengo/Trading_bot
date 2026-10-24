@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import re
 import time
+from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set
@@ -236,11 +237,14 @@ class DonchianRunner:
                 lambda sym: ex.get_klines_raw(sym, "1d", limit=config.DONCHIAN_UNIVERSE_MIN_DAYS + 8), mainnet,
             )))
         failed = [sym for sym, rows in daily.items() if not rows]
-        if self.universe and len(failed) > 0.1 * len(mainnet):
+        partial = len(failed) > 0.1 * len(mainnet)
+        if partial:
             self._retry_universe_at = now_ms + 15 * 60_000
             logger.warning(f"⚠️ Donchian: {len(failed)}/{len(mainnet)} klines diárias falharam — "
-                           "universo anterior mantido, nova tentativa em 15min")
-            return self.universe
+                           f"{'universo anterior mantido' if self.universe else 'universo parcial'}, "
+                           "nova tentativa em 15min")
+            if self.universe:
+                return self.universe
         scores: Dict[str, float] = {}
         for sym, rows in daily.items():
             score = universe_score(rows, t, min_days=config.DONCHIAN_UNIVERSE_MIN_DAYS,
@@ -256,7 +260,7 @@ class DonchianRunner:
         missing = [s for s in top if s not in tradable]
         off = [s for s in top if s in tradable and s in disabled]
         self.universe = [s for s in top if s in tradable and s not in disabled]
-        self.universe_week = t
+        self.universe_week = None if partial else t
         logger.info(
             f"🌐 Donchian: universo da semana {time.strftime('%Y-%m-%d', time.gmtime(t / 1000))} "
             f"= {len(self.universe)} pares (top {len(top)} da mainnet; fora do testnet: "
@@ -274,7 +278,8 @@ class DonchianRunner:
             self._pending = set(self.universe) | set(self._donchian_positions())
         if self._pending:
             self._process(boundary, now_ms)
-        if not self._pending and rebalance_start(now_ms) != self.universe_week and now_ms >= self._retry_universe_at:
+        bar_done = not self._pending or now_ms - boundary > ENTRY_MAX_DELAY_MS   # 1 par travado não segura o rebalance
+        if bar_done and rebalance_start(now_ms) != self.universe_week and now_ms >= self._retry_universe_at:
             self.refresh_universe(now_ms)
 
     def _donchian_positions(self) -> Dict[str, Dict[str, Any]]:
@@ -312,24 +317,30 @@ class DonchianRunner:
             status, kl = self._fetch(sym, boundary)
             if status == "wait":
                 continue
-            self._pending.discard(sym)
-            pos = open_by_sym.get(sym)
+            pos = open_by_sym.get(sym) if sym in tagged else None
             if status == "stale":
-                if pos and sym in tagged:
+                if pos:
                     logger.warning(f"⚠️ Donchian: {sym} sem barra 4h nova (dados parados) — saindo a mercado")
-                    if self._close(pos, "Donchian: dados parados"):
-                        open_by_sym.pop(sym, None)
+                    if not self._close(pos, "Donchian: dados parados"):
+                        continue          # fica pendente: tenta de novo no próximo tick
+                    open_by_sym.pop(sym, None)
+                self._pending.discard(sym)
                 continue
             sig = last_bar_signal(kl, n=c.DONCHIAN_ENTRY_BARS, m=c.DONCHIAN_EXIT_BARS,
                                   atr_n=c.DONCHIAN_ATR_BARS, k=c.DONCHIAN_STOP_ATR_MULT)
-            if pos and sym in tagged:
-                hit = sig.exit_long if pos["side"] == "LONG" else sig.exit_short
-                if hit and self._close(pos, f"Donchian: saída no canal de {c.DONCHIAN_EXIT_BARS}"):
-                    open_by_sym.pop(sym, None)
+            if pos and (sig.exit_long if pos["side"] == "LONG" else sig.exit_short):
+                if not self._close(pos, f"Donchian: saída no canal de {c.DONCHIAN_EXIT_BARS}"):
+                    continue              # fica pendente: tenta de novo no próximo tick
+                open_by_sym.pop(sym, None)
+            self._pending.discard(sym)
             ready[sym] = sig
 
+        store = getattr(self.bot, "trade_store", None)
+        bar_close = datetime.fromtimestamp(boundary / 1000, tz=timezone.utc).isoformat()
         entries = [(s, sig) for s, sig in sorted(ready.items())
-                   if sig.entry and s in self.universe and s not in open_by_sym]
+                   if sig.entry and s in self.universe and s not in open_by_sym
+                   # restart dentro da janela: a barra já gerou entrada (talvez já stopada)
+                   and not (store is not None and (store.last_opened_at(s, STRATEGY_TYPE) or "") >= bar_close)]
         if not entries:
             return
         late = now_ms - boundary > ENTRY_MAX_DELAY_MS
@@ -374,6 +385,7 @@ class DonchianRunner:
         return True
 
     def _open(self, symbol: str, side: str, stop_pct: float, sizing: Sizing, info: Dict[str, Any]) -> float:
+        stop: Optional[float]
         bot, ex = self.bot, self.bot.exchange
         try:
             price = float(ex.get_symbol_ticker(symbol).get("price") or 0)
@@ -389,17 +401,32 @@ class DonchianRunner:
                     f"risco ~${sizing.risk_usd:.2f}, stop {stop_pct * 100:.2f}%)")
         order = ex.place_market_order(symbol=symbol, side="BUY" if side == "LONG" else "SELL",
                                       position_side=side, quantity=qty)
-        if not order:
-            logger.error(f"❌ Donchian: ordem de abertura {side} {symbol} falhou")
-            return 0.0
-        fill = _fill_price(order, price, f"Abertura Donchian {side} {symbol}")
+        if order:
+            fill = _fill_price(order, price, f"Abertura Donchian {side} {symbol}")
+        else:
+            # -1007 (timeout) devolve None mesmo com a ordem executada: confere na exchange.
+            live = [p for p in ex.get_open_positions(force_refresh=True)
+                    if p["symbol"] == symbol and p["side"] == side]
+            if not live:
+                logger.error(f"❌ Donchian: ordem de abertura {side} {symbol} falhou")
+                return 0.0
+            fill, qty = float(live[0]["entry_price"]), float(live[0]["quantity"])
+            logger.warning(f"⚠️ Donchian: abertura {side} {symbol} sem resposta, mas a posição existe — seguindo")
         stop = round(fill * (1 - stop_pct) if side == "LONG" else fill * (1 + stop_pct),
                      int(info.get("pricePrecision", 4)))
         if not ex.set_stop_loss_take_profit(symbol=symbol, position_side=side, stop_loss_price=stop,
                                             take_profit_price=None):
-            logger.error(f"❌ Donchian: stop não aceito em {symbol} — fechando a posição sem proteção")
-            ex.close_position(symbol, side)
-            return 0.0
+            if ex.close_position(symbol, side):
+                logger.error(f"❌ Donchian: stop não aceito em {symbol} — posição fechada a mercado")
+                return 0.0
+            # Sem stop e sem fechar: registra como Donchian (o monitor não aplica regras do
+            # pullback) e avisa; a saída pelo canal segue valendo.
+            logger.error(f"🚨 Donchian: {side} {symbol} SEM STOP na exchange e o fechamento falhou")
+            bot.telegram.send_message(
+                f"🚨 <b>DONCHIAN SEM STOP</b>\n{side} {symbol}: stop recusado e fechamento falhou. "
+                "Verifique na exchange."
+            )
+            stop = None
         bot.ledger.record_trade_opened(
             symbol=symbol, signal=f"DONCHIAN_{side}", side=side, quantity=qty,
             order_size=qty * fill / max(float(config.LEVERAGE), 1.0), entry_price=fill,

@@ -518,6 +518,19 @@ class TradeStore:
             logger.exception("🗃️ Falha ao obter 1º trade da estratégia")
             return None
 
+    def last_opened_at(self, symbol: str, strategy_type: str) -> Optional[str]:
+        """opened_at (ISO UTC) do trade mais recente de symbol nessa estratégia, ou None."""
+        try:
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT MAX(opened_at) FROM trades WHERE symbol=? AND strategy_type=?",
+                    (symbol, strategy_type),
+                ).fetchone()
+            return str(row[0]) if row and row[0] else None
+        except Exception:
+            logger.exception("🗃️ Falha ao ler último trade do símbolo")
+            return None
+
     def open_strategy_type(self, symbol: str, side: str) -> Optional[str]:
         """strategy_type do trade aberto mais recente de symbol+side, ou None."""
         try:

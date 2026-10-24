@@ -222,6 +222,7 @@ def _bot(ex, known=None):
     bot.ledger = SimpleNamespace(record_trade_opened=MagicMock())
     bot.telegram = SimpleNamespace(send_trade_alert=MagicMock())
     bot._close_position_with_notification = MagicMock(return_value=True)
+    bot.trade_store = None
     return bot
 
 
@@ -485,3 +486,58 @@ def test_strategy_defaults_to_pullback():
     assert (config.DONCHIAN_ENTRY_BARS, config.DONCHIAN_EXIT_BARS, config.DONCHIAN_STOP_ATR_MULT,
             config.DONCHIAN_RISK_PERCENT, config.DONCHIAN_MAX_POSITIONS, config.DONCHIAN_MAX_GROSS_MULT,
             config.DONCHIAN_MAX_POSITION_MULT, config.DONCHIAN_MAX_DRAWDOWN_PERCENT) == (40, 20, 2.0, 0.25, 10, 3.0, 1.0, 20.0)
+
+
+def test_failed_channel_exit_is_retried_on_next_tick():
+    pos = {"symbol": "XUSDT", "side": "LONG", "entry_price": 100.0, "quantity": 0.1, "mark_price": 99.0}
+    ex = _Ex({"XUSDT": _bars_ending(FLAT + [99.0])}, positions=[pos])
+    bot = _bot(ex, known=_donchian_long())
+    bot._close_position_with_notification = MagicMock(side_effect=[False, True])
+    runner = d.DonchianRunner(bot)
+    runner.universe_week = d.rebalance_start(BOUNDARY)
+    runner.tick(BOUNDARY + 60_000)
+    assert "XUSDT_LONG" in bot.known_positions
+    runner.tick(BOUNDARY + 90_000)
+    assert bot._close_position_with_notification.call_count == 2
+    assert "XUSDT_LONG" not in bot.known_positions
+
+
+def test_restart_does_not_reenter_a_bar_that_already_traded(tmp_path):
+    store = TradeStore(str(tmp_path / "t.db"))
+    store.record_open({"timestamp": "2025-10-27T20:00:15+00:00", "symbol": "XUSDT", "side": "LONG",
+                       "strategy_type": "donchian_4h"})
+    boundary = 1_761_595_200_000            # 2025-10-27T20:00:00Z
+    ex = _Ex({"XUSDT": _klines(FLAT + [101.0], start=boundary - 61 * H4)})
+    bot = _bot(ex)
+    bot.trade_store = store
+    runner = d.DonchianRunner(bot)
+    runner.universe, runner.universe_week = ["XUSDT"], d.rebalance_start(boundary)
+    runner.tick(boundary + 25 * 60_000)
+    assert ex.orders == []
+
+
+def test_open_without_order_response_uses_live_position():
+    ex = _Ex({"XUSDT": _bars_ending(FLAT + [101.0])})
+    ex.place_market_order = lambda **kw: None
+    live = {"symbol": "XUSDT", "side": "LONG", "entry_price": 100.5, "quantity": 0.2}
+    ex.get_open_positions = MagicMock(side_effect=[[], [live]])
+    bot = _bot(ex)
+    runner = d.DonchianRunner(bot)
+    runner.universe, runner.universe_week = ["XUSDT"], d.rebalance_start(BOUNDARY)
+    runner.tick(BOUNDARY + 60_000)
+    meta = bot.known_positions["XUSDT_LONG"]
+    assert (meta["entry_price"], meta["quantity"], meta["strategy_type"]) == (100.5, 0.2, "donchian_4h")
+    assert ex.stops[0]["stop_loss_price"] < 100.5
+
+
+def test_donchian_peak_survives_restart_via_state(monkeypatch):
+    from trading_bot.core.bot_state_serde import BotStatePersistence
+
+    monkeypatch.setattr(config, "STRATEGY", "donchian_4h")
+    bot = _bot(_Ex({}))
+    bot.peak_equity = 215.0
+    bot.kill_switch = None
+    payload = BotStatePersistence(bot).build_payload()
+    assert payload["donchian_peak_equity"] == 215.0
+    monkeypatch.setattr(config, "STRATEGY", "pullback")
+    assert BotStatePersistence(_bot(_Ex({}))).build_payload()["donchian_peak_equity"] is None
