@@ -174,7 +174,9 @@ class KillSwitchMonitor:
         if not all(entry.net_pnl < 0 for entry in recent):
             return
 
-        signature = ",".join(f"{e.date}:{e.net_pnl:.2f}" for e in recent)
+        # Só as datas: o reconciler/rebuild do restart mexe nos centavos do net, e um
+        # net com outra casa decimal re-pausaria logo após um /resume manual.
+        signature = ",".join(e.date for e in recent)
         if self.alerted_events.get(self.EVENT_LOSS_STREAK) == signature:
             return
 
@@ -182,6 +184,10 @@ class KillSwitchMonitor:
         streak_desc = " | ".join(f"{e.date}: ${e.net_pnl:+.2f}" for e in recent)
 
         self._pause_bot(bot)
+        logger.warning(
+            f"🛑 Kill switch: {threshold} dias seguidos negativos ({streak_desc}; "
+            f"total ${total_loss:+.2f}) → bot pausado; retome com /resume"
+        )
         self._send_alert(
             f"🛑 <b>KILL SWITCH — SEQUÊNCIA NEGATIVA</b>\n\n"
             f"{threshold} dias consecutivos no vermelho:\n"
@@ -212,14 +218,19 @@ class KillSwitchMonitor:
             self.alerted_events.pop(self.EVENT_DRAWDOWN, None)
             return
 
-        # Assinatura no formato "peak=X|threshold=Y" — muda se o pico for
-        # atualizado (novo episódio de drawdown merece novo alerta).
-        signature = f"peak={peak:.2f}|thr={threshold:.2f}"
+        # Sem o pico na assinatura: um pico novo zera o drawdown e já libera o
+        # alerta acima; já o pico reconstruído no restart varia nos centavos e
+        # re-pausaria logo após um /resume manual.
+        signature = f"thr={threshold:.2f}"
         if self.alerted_events.get(self.EVENT_DRAWDOWN) == signature:
             return
 
         drawdown_abs = peak - current
         self._pause_bot(bot)
+        logger.warning(
+            f"🛑 Kill switch: drawdown {drawdown_pct:.2f}% do pico (gatilho {threshold:.2f}%; "
+            f"pico ${peak:.2f} → atual ${current:.2f}) → bot pausado; retome com /resume"
+        )
         self._send_alert(
             f"⚠️ <b>KILL SWITCH — DRAWDOWN DO PICO</b>\n\n"
             f"Drawdown atual: <code>{drawdown_pct:.2f}%</code> "
@@ -259,6 +270,10 @@ class KillSwitchMonitor:
         if self.alerted_events.get(self.EVENT_WIN_RATE) == signature:
             return
 
+        logger.warning(
+            f"📉 Kill switch: win rate {wr:.1f}% < {wr_floor:.1f}% em {total} trades "
+            f"({wins}W/{losses}L) → só alerta, bot segue operando"
+        )
         self._send_alert(
             f"📉 <b>KILL SWITCH — WIN RATE BAIXO</b>\n\n"
             f"Win rate: <code>{wr:.1f}%</code> (gatilho: {wr_floor:.1f}%)\n"
@@ -289,7 +304,12 @@ class KillSwitchMonitor:
         """
         Busca o saldo atual. Tenta o cache do bot primeiro; se não tiver, usa a
         API. Se ambos falharem, retorna None e o check é ignorado (sem pânico).
+        O bot real expõe `last_drawdown_equity` (mesma base do peak_equity; no
+        testnet simulado o wallet é constante e não serve).
         """
+        if hasattr(bot, "last_drawdown_equity"):
+            equity = bot.last_drawdown_equity
+            return float(equity) if equity is not None else None
         try:
             cached = getattr(bot, "last_known_balance", None)
             if cached is not None:

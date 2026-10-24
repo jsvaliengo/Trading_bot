@@ -19,6 +19,8 @@ from typing import Any, List, Optional
 import requests
 from requests.exceptions import RequestException
 
+from ..core.equity import effective_equity
+
 logger = logging.getLogger(__name__)
 
 
@@ -458,6 +460,9 @@ class TelegramCommandHandler:
         if exchange is not None and hasattr(exchange, "get_account_balance"):
             try:
                 current_balance = float(exchange.get_account_balance())
+                # Mesma base do peak_equity (no testnet simulado o wallet é constante).
+                if callable(getattr(self.bot, "drawdown_equity", None)):
+                    current_balance = float(self.bot.drawdown_equity(current_balance))
             except Exception as exc:
                 balance_error = str(exc)
 
@@ -600,6 +605,7 @@ class TelegramCommandHandler:
             return
 
         self.bot.paused = False
+        logger.warning("▶️ Bot retomado via Telegram /start")
         self.send_message(
             "▶️ <b>BOT RETOMADO</b>\n\n"
             "• Análise de mercado: <b>ativa</b>\n"
@@ -721,6 +727,7 @@ class TelegramCommandHandler:
             return
         
         self.bot.paused = False
+        logger.warning("▶️ Bot retomado via Telegram /resume")
         self.send_message(
             "▶️ <b>BOT RETOMADO</b>\n\n"
             "• Análise de mercado: <b>ativa</b>\n"
@@ -812,11 +819,9 @@ class TelegramCommandHandler:
             # Equity efetivo: em testnet com SIMULATED_BALANCE_USD ativo, o
             # wallet vem cappado no SIMULATED_BALANCE — soma realizado acumulado +
             # não realizado pra refletir o saldo real (mesma fórmula da EVOLUÇÃO).
-            sim_cap = float(getattr(self.config, "SIMULATED_BALANCE_USD", 0.0) or 0.0)
-            if getattr(self.config, "USE_TESTNET", False) and sim_cap > 0:
-                balance = sim_cap + cumulative_realized + unrealized
-            else:
-                balance = wallet_balance + unrealized
+            balance = effective_equity(
+                self.config, wallet=wallet_balance, cumulative_realized=cumulative_realized, unrealized=unrealized
+            )
 
             if not self.bot.running:
                 status = "🔴 PARADO"
