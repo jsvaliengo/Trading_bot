@@ -506,6 +506,32 @@ class TradeStore:
             return curve[-limit:]
         return curve
 
+    def first_opened_at(self, strategy_type: str) -> Optional[str]:
+        """opened_at (ISO) do 1º trade de uma estratégia, ou None."""
+        try:
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT MIN(opened_at) FROM trades WHERE strategy_type=?", (strategy_type,)
+                ).fetchone()
+            return str(row[0]) if row and row[0] else None
+        except Exception:
+            logger.exception("🗃️ Falha ao obter 1º trade da estratégia")
+            return None
+
+    def open_strategy_type(self, symbol: str, side: str) -> Optional[str]:
+        """strategy_type do trade aberto mais recente de symbol+side, ou None."""
+        try:
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT strategy_type FROM trades WHERE symbol=? AND side=? AND status='open' "
+                    "ORDER BY id DESC LIMIT 1",
+                    (symbol, side),
+                ).fetchone()
+            return str(row[0]) if row and row[0] else None
+        except Exception:
+            logger.exception("🗃️ Falha ao ler strategy_type do trade aberto")
+            return None
+
     def first_trade_time_ms(self) -> Optional[int]:
         """Epoch ms do trade mais antigo (MIN opened_at), ou None se vazio.
 

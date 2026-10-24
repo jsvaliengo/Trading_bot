@@ -313,6 +313,24 @@ class TradingConfig:
     # Klines de testnet divergem da mainnet (replay 37/40 vs 9/40, 16/10/26).
     # No-op em mainnet. Ver SIGNALS_FROM_MAINNET.
     SIGNAL_DATA_SOURCE: str = _env_str("TRADING_BOT_SIGNAL_DATA_SOURCE", "exchange").lower()
+
+    # Estratégia de entrada: "pullback" (padrão, 3m/5m + IA + trailing) ou
+    # "donchian_4h" (forward test pré-registrado em docs/FORWARD_TEST_DONCHIAN_4H.md).
+    STRATEGY: str = _env_str("TRADING_BOT_STRATEGY", "pullback").lower()
+    # Donchian 4h: configuração FIXA do pré-registro. NÃO alterar durante o forward
+    # test (mudar invalida o teste). Só o limite de drawdown lê env.
+    DONCHIAN_ENTRY_BARS: int = 40
+    DONCHIAN_EXIT_BARS: int = 20
+    DONCHIAN_ATR_BARS: int = 20
+    DONCHIAN_STOP_ATR_MULT: float = 2.0
+    DONCHIAN_RISK_PERCENT: float = 0.25
+    DONCHIAN_MAX_POSITIONS: int = 10
+    DONCHIAN_MAX_GROSS_MULT: float = 3.0
+    DONCHIAN_MAX_POSITION_MULT: float = 1.0
+    DONCHIAN_UNIVERSE_TOP_N: int = 30
+    DONCHIAN_UNIVERSE_MIN_DAYS: int = 60
+    DONCHIAN_UNIVERSE_VOLUME_DAYS: int = 30
+    DONCHIAN_MAX_DRAWDOWN_PERCENT: float = _env_float("TRADING_BOT_DONCHIAN_MAX_DRAWDOWN_PERCENT", 20.0)
     MIN_VOLATILITY_PERCENT: float = 1.5       # Volatilidade mínima 1.5%
     MAX_MIN_NOTIONAL: float = 10.0            # Mínimo notional máximo $10 (exclui BTC $100, ETH $20)
     # RVOL = volume da última hora fechada ÷ média horária recente. Piso baixo
@@ -1525,6 +1543,11 @@ class TradingConfig:
             errors.append(
                 f"⚠️  ALERTA: SIGNAL_DATA_SOURCE inválido ({self.SIGNAL_DATA_SOURCE!r}). "
                 "Use 'exchange' ou 'mainnet'."
+            )
+
+        if self.STRATEGY not in {"pullback", "donchian_4h"}:
+            errors.append(
+                f"⚠️  ALERTA: STRATEGY inválida ({self.STRATEGY!r}). Use 'pullback' ou 'donchian_4h'."
             )
 
         if not self.API_KEY or not self.API_SECRET:
