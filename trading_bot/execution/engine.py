@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 import math
+import time
 from datetime import datetime
 from typing import TYPE_CHECKING
 
@@ -97,14 +98,32 @@ def _validate_stop_loss_side(side, entry_price, stop_loss, fallback_pct, price_p
     return corrected, True
 
 
-def _fill_price(order, fallback: float) -> float:
-    """avgPrice do fill da ordem a mercado (resposta RESULT); cai no ticker pré-ordem
-    quando ausente/0 — o DB gravava o ticker (NEAR 16/10: 4.9960 vs fill 4.9945)."""
+def _fill_price(order, fallback: float, what: str) -> float:
+    """avgPrice do fill (place_market_order já consulta a ordem/trades quando a
+    resposta vem sem ele). Ticker pré-ordem só como último recurso."""
     try:
         fill = float((order if isinstance(order, dict) else {}).get("avgPrice") or 0)
     except (TypeError, ValueError):
         fill = 0.0
-    return fill if fill > 0 else fallback
+    if fill > 0:
+        return fill
+    logger.warning(
+        f"⚠️ {what} sem avgPrice do fill — usando ticker pré-ordem ${fallback:.4f} (aproximado)"
+    )
+    return fallback
+
+
+SKIP_LOG_INTERVAL_SECONDS = 600.0
+
+
+def _throttled_warning(seen: dict, key: str, message: str) -> None:
+    """WARNING na 1ª ocorrência por janela; repetições viram DEBUG (sem flood a cada ciclo)."""
+    now = time.monotonic()
+    if now - seen.get(key, float("-inf")) >= SKIP_LOG_INTERVAL_SECONDS:
+        seen[key] = now
+        logger.warning(message)
+    else:
+        logger.debug(message)
 
 
 def _reanchor(level, from_price, to_price):
@@ -138,6 +157,7 @@ class ExecutionEngine:
 
     def __init__(self, bot: "TradingBot"):
         self._bot = bot
+        self._skip_logged: dict = {}
 
     # ------------------------------------------------------------------
     # Abertura de posição direcional
@@ -260,6 +280,66 @@ class ExecutionEngine:
         if not exchange_stop_loss_enabled:
             custom_stop_loss = None
 
+        if not (open_long or open_short):
+            logger.info(f"⏸️  Nada a fazer em {symbol}")
+            return False
+
+        # Pré-checagens ANTES de anunciar a abertura: par barrado aqui repetia
+        # "Abrindo SHORT em BCHUSDT" a cada ciclo (24/10: 129× em 2h).
+        # Gate de liquidez no momento da abertura: um par selecionado quando
+        # líquido pode ter secado (drift de volume). Operar par ilíquido =
+        # slippage brutal no stop (LABUSDT 04/06: -12% real). Só bloqueia com
+        # volume confirmado abaixo do piso; falha de leitura NÃO bloqueia.
+        # Em testnet, volume REAL da mainnet (o quoteVolume da testnet é sintético).
+        min_trade_volume = float(getattr(config, "MIN_TRADE_VOLUME_24H_USD", 0) or 0)
+        if min_trade_volume > 0:
+            raw_vol = bot._reference_quote_volume_24h(symbol)
+            if _below_min_trade_volume(raw_vol, min_trade_volume):
+                vol_24h = float(raw_vol)
+                _throttled_warning(
+                    self._skip_logged, f"{symbol}:volume",
+                    f"⚠️ {symbol} abaixo do volume mínimo de trade "
+                    f"(${vol_24h:,.0f} < ${min_trade_volume:,.0f}) — abertura cancelada",
+                )
+                bot.block_reporter.notify_blocked(
+                    symbol=symbol,
+                    side=requested_side,
+                    strategy_name=strategy_name,
+                    reason="Volume 24h abaixo do piso de liquidez",
+                    detail=f"Volume ${vol_24h:,.0f} < piso ${min_trade_volume:,.0f}.",
+                    setup_metadata=setup_metadata,
+                )
+                return False
+
+        ticker = bot.exchange.get_symbol_ticker(symbol)
+        try:
+            price = float(ticker.get("price") or 0)
+        except (TypeError, ValueError):
+            price = 0.0
+        if price <= 0:
+            logger.error(f"❌ Preço inválido para {symbol}: {price} — abortando abertura")
+            bot.block_reporter.notify_blocked(
+                symbol=symbol,
+                side=requested_side,
+                strategy_name=strategy_name,
+                reason="Preço inválido",
+                detail=f"Preço retornado pela exchange: {price}",
+                setup_metadata=setup_metadata,
+            )
+            return False
+        # Ticker congelado (último trade antigo) não serve de referência de SL/TP/qty.
+        max_ticker_age = float(getattr(config, "MAX_TICKER_AGE_SECONDS", 60.0) or 0)
+        ticker_ms = ticker.get("time")
+        if max_ticker_age > 0 and ticker_ms:
+            ticker_age = time.time() - float(ticker_ms) / 1000.0
+            if ticker_age > max_ticker_age:
+                _throttled_warning(
+                    self._skip_logged, f"{symbol}:ticker",
+                    f"⚠️ {symbol}: ticker de execução parado há {ticker_age:.0f}s "
+                    f"(> {max_ticker_age:.0f}s, preço ${price}) — abertura cancelada",
+                )
+                return False
+
         # Log do funding rate (apenas informativo)
         if config.CHECK_FUNDING_RATE:
             funding_info = bot.exchange.get_funding_rate(symbol)
@@ -272,57 +352,10 @@ class ExecutionEngine:
                 logger.info(f"📊 Funding {symbol}: neutro")
 
         # Log da ação
-        if open_long:
-            logger.info(f"🚀 Sinal {signal_name} → Abrindo LONG em {symbol}")
-        elif open_short:
-            logger.info(f"🚀 Sinal {signal_name} → Abrindo SHORT em {symbol}")
-        else:
-            logger.info(f"⏸️  Nada a fazer em {symbol}")
-            return False
+        logger.info(f"🚀 Sinal {signal_name} → Abrindo {requested_side} em {symbol}")
 
         try:
-            # Calcula quantidades
-            price = bot.exchange.get_symbol_price(symbol)
-            if price <= 0:
-                logger.error(f"❌ Preço inválido para {symbol}: {price} — abortando abertura")
-                bot.block_reporter.notify_blocked(
-                    symbol=symbol,
-                    side=requested_side,
-                    strategy_name=strategy_name,
-                    reason="Preço inválido",
-                    detail=f"Preço retornado pela exchange: {price}",
-                    setup_metadata=setup_metadata,
-                )
-                return False
             info = bot.exchange.get_symbol_info(symbol)
-
-            # Gate de liquidez no momento da abertura: um par selecionado quando
-            # líquido pode ter secado (drift de volume). Operar par ilíquido =
-            # slippage brutal no stop (LABUSDT 04/06: -12% real). Só bloqueia com
-            # volume confirmado abaixo do piso; falha de leitura do ticker NÃO
-            # bloqueia (a seleção já vetou o par, não derruba trade por blip de API).
-            min_trade_volume = float(getattr(config, "MIN_TRADE_VOLUME_24H_USD", 0) or 0)
-            if min_trade_volume > 0:
-                # Fetch isolado: falha de ticker (rede/atributo) é fail-open —
-                # não derruba o trade nem cai no except externo.
-                # Em testnet, prioriza o volume REAL da mainnet (referência) —
-                # o quoteVolume da testnet é sintético e não reflete liquidez.
-                raw_vol = bot._reference_quote_volume_24h(symbol)
-                if _below_min_trade_volume(raw_vol, min_trade_volume):
-                    vol_24h = float(raw_vol)
-                    logger.warning(
-                        f"⚠️ {symbol} abaixo do volume mínimo de trade "
-                        f"(${vol_24h:,.0f} < ${min_trade_volume:,.0f}) — abertura cancelada"
-                    )
-                    bot.block_reporter.notify_blocked(
-                        symbol=symbol,
-                        side=requested_side,
-                        strategy_name=strategy_name,
-                        reason="Volume 24h abaixo do piso de liquidez",
-                        detail=f"Volume ${vol_24h:,.0f} < piso ${min_trade_volume:,.0f}.",
-                        setup_metadata=setup_metadata,
-                    )
-                    return False
 
             # Sinais da mainnet (SIGNALS_FROM_MAINNET): SL/TP saem em preço da
             # mainnet e o testnet pode estar ~2,5% longe (ETH 15/10: 2,46%). Cru,
@@ -518,10 +551,12 @@ class ExecutionEngine:
                     )
                     return False
 
-                entry_fill = _fill_price(long_order, price)
-                if reanchor:
-                    custom_stop_loss = _reanchor(custom_stop_loss, price, entry_fill)
-                    custom_take_profit = _reanchor(custom_take_profit, price, entry_fill)
+                entry_fill = _fill_price(long_order, price, f"Abertura LONG {symbol}")
+                # SL/TP saem só depois do fill: ancora sempre no preço real.
+                custom_stop_loss = _reanchor(custom_stop_loss, price, entry_fill)
+                custom_take_profit = _reanchor(
+                    custom_take_profit or setup.take_profit, price, entry_fill
+                )
 
                 if double_first_applied:
                     bot.double_first_policy.mark_used(
@@ -539,7 +574,7 @@ class ExecutionEngine:
                         sl_price_long = custom_stop_loss
                     else:
                         _sl_pct = float(getattr(config, "STOP_LOSS_PERCENT", 3.0))
-                        sl_price_long = round(price * (1 - _sl_pct / 100), info.get('pricePrecision', 4))
+                        sl_price_long = round(entry_fill * (1 - _sl_pct / 100), info.get('pricePrecision', 4))
                 bot.exchange.set_stop_loss_take_profit(
                     symbol=symbol,
                     position_side='LONG',
@@ -668,10 +703,12 @@ class ExecutionEngine:
                     )
                     return False
 
-                entry_fill = _fill_price(short_order, price)
-                if reanchor:
-                    custom_stop_loss = _reanchor(custom_stop_loss, price, entry_fill)
-                    custom_take_profit = _reanchor(custom_take_profit, price, entry_fill)
+                entry_fill = _fill_price(short_order, price, f"Abertura SHORT {symbol}")
+                # SL/TP saem só depois do fill: ancora sempre no preço real.
+                custom_stop_loss = _reanchor(custom_stop_loss, price, entry_fill)
+                custom_take_profit = _reanchor(
+                    custom_take_profit or setup.take_profit, price, entry_fill
+                )
 
                 if double_first_applied:
                     bot.double_first_policy.mark_used(
@@ -685,14 +722,14 @@ class ExecutionEngine:
                 # Define TP para o SHORT e SL fixo apenas quando habilitado.
                 short_tp = custom_take_profit if custom_take_profit else setup.take_profit
                 if short_tp is None or short_tp <= 0:
-                    short_tp = price * (1 - config.TAKE_PROFIT_PERCENT / 100)
+                    short_tp = entry_fill * (1 - config.TAKE_PROFIT_PERCENT / 100)
                 sl_price_short = None
                 if exchange_stop_loss_enabled:
                     if custom_stop_loss and custom_stop_loss > 0:
                         sl_price_short = custom_stop_loss
                     else:
                         _sl_pct = float(getattr(config, "STOP_LOSS_PERCENT", 3.0))
-                        sl_price_short = round(price * (1 + _sl_pct / 100), info.get('pricePrecision', 4))
+                        sl_price_short = round(entry_fill * (1 + _sl_pct / 100), info.get('pricePrecision', 4))
                 bot.exchange.set_stop_loss_take_profit(
                     symbol=symbol,
                     position_side='SHORT',
@@ -821,17 +858,7 @@ class ExecutionEngine:
             return False
 
         # Saída = preço médio REAL do fill, não o ticker pré-ordem (ETH #17: 2373.90 vs 2407.64)
-        try:
-            fill_price = float((close_order if isinstance(close_order, dict) else {}).get("avgPrice") or 0)
-        except (TypeError, ValueError):
-            fill_price = 0.0
-        if fill_price > 0:
-            current_price = fill_price
-        else:
-            logger.warning(
-                f"⚠️ Fechamento {side} {symbol} sem avgPrice do fill — usando ticker "
-                f"pré-ordem ${current_price:.4f} como saída (P&L aproximado)"
-            )
+        current_price = _fill_price(close_order, current_price, f"Fechamento {side} {symbol}")
 
         # ============================================
         # CALCULA P&L REAL BASEADO NOS PREÇOS

@@ -520,7 +520,7 @@ def test_execute_signal_trade_skips_fixed_sl_on_exchange_when_individual_sl_disa
     sltp_calls = []
 
     bot.exchange = SimpleNamespace(
-        get_symbol_price=lambda _symbol: 100.0,
+        get_symbol_ticker=lambda _symbol: {"price": 100.0},
         get_symbol_info=lambda _symbol: {"minNotional": 5.0, "pricePrecision": 2},
         place_market_order=lambda **_kwargs: {"orderId": 1},
         set_stop_loss_take_profit=lambda **kwargs: sltp_calls.append(kwargs) or True,
@@ -574,7 +574,7 @@ def test_execute_signal_trade_notifies_when_gated_ai_trade_is_blocked_by_exposur
     notify_block = MagicMock(return_value=True)
 
     bot.exchange = SimpleNamespace(
-        get_symbol_price=lambda _symbol: 100.0,
+        get_symbol_ticker=lambda _symbol: {"price": 100.0},
         get_symbol_info=lambda _symbol: {"minNotional": 5.0, "pricePrecision": 2},
         get_account_balance=lambda: 213.49,
         get_symbol_cooldown_info=lambda _symbol: None,
@@ -2971,7 +2971,7 @@ def test_execute_signal_trade_blocks_opposite_side_same_pair(monkeypatch):
     notify_block = MagicMock(return_value=True)
 
     bot.exchange = SimpleNamespace(
-        get_symbol_price=lambda _s: 100.0,
+        get_symbol_ticker=lambda _s: {"price": 100.0},
         get_symbol_info=lambda _s: {"minNotional": 5.0, "pricePrecision": 2},
         place_market_order=lambda **k: placed.append(k) or {"orderId": 1},
         set_stop_loss_take_profit=lambda **_k: True,
@@ -3032,7 +3032,7 @@ def test_execute_signal_trade_blocks_same_side_pyramid(monkeypatch):
     notify_block = MagicMock(return_value=True)
 
     bot.exchange = SimpleNamespace(
-        get_symbol_price=lambda _s: 100.0,
+        get_symbol_ticker=lambda _s: {"price": 100.0},
         get_symbol_info=lambda _s: {"minNotional": 5.0, "pricePrecision": 2},
         place_market_order=lambda **k: placed.append(k) or {"orderId": 1},
         set_stop_loss_take_profit=lambda **_k: True,
@@ -3156,7 +3156,7 @@ def test_open_records_fill_avg_price_as_entry(monkeypatch, open_kwargs, side, se
     Binance (4.9945). A entrada registrada tem que ser o avgPrice do fill."""
     bot = _make_light_bot()
     bot.exchange = SimpleNamespace(
-        get_symbol_price=lambda _s: 4.996,
+        get_symbol_ticker=lambda _s: {"price": 4.996},
         get_symbol_info=lambda _s: {"minNotional": 5.0, "pricePrecision": 4},
         place_market_order=lambda **k: {"orderId": 1, "status": "FILLED", "avgPrice": "4.9945"},
         set_stop_loss_take_profit=lambda **_k: True,

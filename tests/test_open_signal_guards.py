@@ -74,6 +74,8 @@ def test_outro_par_aberto_nao_bloqueia(monkeypatch):
         pass
 
     bot.exchange.get_funding_rate.side_effect = _ReachedFunding
+    bot._reference_quote_volume_24h.return_value = None  # volume ilegível = fail-open
+    bot.exchange.get_symbol_ticker.return_value = {"price": 100.0}
     engine = ExecutionEngine(bot)
     with pytest.raises(_ReachedFunding):
         engine.open_signal_trade(_setup(), open_long=True)
