@@ -139,6 +139,8 @@ class TradeStore:
             self._conn.execute("PRAGMA synchronous=NORMAL")
             self._conn.executescript(_SCHEMA)
             self._ensure_column("trades", "mfe_pct", "REAL")
+            # FUNDING_FEE atribuído pelo reconciliador; já incluso em pnl_net.
+            self._ensure_column("trades", "funding", "REAL")
             self._conn.commit()
             self._normalize_legacy_timestamps()
         logger.info("🗃️ TradeStore inicializado em %s", db_path)
@@ -587,7 +589,7 @@ class TradeStore:
             with self._lock:
                 rows = self._conn.execute(
                     "SELECT id, symbol, side, opened_at, exit_at, qty, entry_price, "
-                    "       pnl_net, pnl_gross, fees "
+                    "       pnl_net, pnl_gross, fees, funding "
                     "  FROM trades "
                     " WHERE status='closed' AND exit_at IS NOT NULL AND exit_at >= ? "
                     " ORDER BY exit_at ASC",
@@ -605,19 +607,21 @@ class TradeStore:
         pnl_gross: float,
         fees: float,
         pnl_net: float,
+        funding: Optional[float] = None,
         exit_price: Optional[float] = None,
     ) -> bool:
         """Corrige o P&L de um trade fechado (reconciliação com a Binance).
 
-        exit_price só é sobrescrito quando fornecido (COALESCE). Idempotente:
-        reaplicar os mesmos valores é no-op efetivo.
+        pnl_net = pnl_gross − fees + funding. funding/exit_price só são
+        sobrescritos quando fornecidos (COALESCE). Idempotente: reaplicar os
+        mesmos valores é no-op efetivo.
         """
         try:
             with self._lock:
                 self._conn.execute(
                     "UPDATE trades SET pnl_gross=?, fees=?, pnl_net=?, "
-                    "exit_price=COALESCE(?, exit_price) WHERE id=?",
-                    (pnl_gross, fees, pnl_net, exit_price, trade_id),
+                    "funding=COALESCE(?, funding), exit_price=COALESCE(?, exit_price) WHERE id=?",
+                    (pnl_gross, fees, pnl_net, funding, exit_price, trade_id),
                 )
                 self._conn.commit()
             return True

@@ -1,130 +1,149 @@
 #!/usr/bin/env python3
-"""Backfill do P&L real da Binance nos trades históricos do DB (#181).
+"""Recalcula gross/fees/funding/net dos trades FECHADOS a partir da Binance.
 
-Os fechamentos server-side anteriores ao fix #181/#183 gravaram P&L fabricado
-(fallback por preço atual). Este script casa cada trade FECHADO do DB com os
-registros REALIZED_PNL + COMMISSION reais da Binance (por símbolo + janela de
-horário em torno do exit_at) e corrige pnl_gross/fees/pnl_net/exit_price.
+Usa a MESMA atribuição do reconciliador ao vivo (trading_bot/services/
+pnl_reconciler.py): fills reais (/fapi/v1/userTrades) cortados em round trips,
+fees = comissão da entrada + da saída, funding = FUNDING_FEE com a posição aberta,
+net = gross − fees + funding. Conserta o histórico gravado pelo reconciliador
+antigo (só a taxa da saída → net inflado ~$0,024/trade).
 
-Uso (na VM, com .env carregado):
-  ./venv/bin/python3 scripts/backfill_real_pnl.py            # DRY-RUN (só relatório)
-  BACKFILL_APPLY=1 ./venv/bin/python3 scripts/backfill_real_pnl.py   # aplica (faz backup antes)
+Ambiente (testnet/mainnet), chaves e DB vêm do config do bot (.env carregado):
+  ./venv/bin/python3 scripts/backfill_real_pnl.py                  # dry-run (padrão)
+  ./venv/bin/python3 scripts/backfill_real_pnl.py --apply          # backup + 1 transação
 
-Seguro: faz backup do .db antes de qualquer escrita; trades sem match são
-deixados intactos e listados.
+Offline (fixtures exportadas da Binance, sem rede):
+  python scripts/backfill_real_pnl.py --db copia.db \
+      --fills-json usertrades.json --income-json income.json
+
+Seguro: backup via API de backup do SQLite antes de escrever; trades sem round
+trip casável ficam intactos e são listados; perna com comissão desconhecida
+mantém o fee do DB.
 """
-import os
-import sqlite3
-import shutil
+import argparse
 import datetime as dt
+import json
+import sqlite3
+import sys
+from pathlib import Path
 
-DB = os.getenv("BACKFILL_DB", "runtime/trades.prod.mainnet.db")
-APPLY = os.getenv("BACKFILL_APPLY", "") in ("1", "true", "yes")
-WINDOW_BEFORE_S = 15 * 60   # income pode ser até 15min antes do exit_at detectado
-WINDOW_AFTER_S = 5 * 60     # ou um pouco depois
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from trading_bot.services.pnl_reconciler import (  # noqa: E402
+    MATCH_SLACK_S, _to_ms, attribute, fetch_fills, fetch_funding, plan_update,
+)
 
 
-def _to_ms(iso):
-    # Ingênuo = horário local do processo (legado do datetime.now() na VM).
-    return int(dt.datetime.fromisoformat(iso).timestamp() * 1000)
+def _load_trades(con):
+    cols = {r[1] for r in con.execute("PRAGMA table_info(trades)")}
+    funding = "funding" if "funding" in cols else "NULL AS funding"
+    return [dict(r) for r in con.execute(
+        "SELECT id, symbol, side, opened_at, exit_at, qty, entry_price, pnl_net, pnl_gross, fees, "
+        f"{funding} FROM trades WHERE status='closed' AND exit_at IS NOT NULL ORDER BY exit_at ASC"
+    )]
 
 
-def main():
-    from binance.client import Client
-    cl = Client(os.getenv("BINANCE_MAINNET_API_KEY"), os.getenv("BINANCE_MAINNET_API_SECRET"))
+def _load_exchange_data(args, trades):
+    start_ms = min(_to_ms(t["opened_at"]) for t in trades) - MATCH_SLACK_S * 1000
+    end_ms = max(_to_ms(t["exit_at"]) for t in trades) + MATCH_SLACK_S * 1000
+    if args.fills_json:
+        raw = json.loads(Path(args.fills_json).read_text())
+        fills = [f for v in raw.values() for f in v] if isinstance(raw, dict) else raw
+        funding = json.loads(Path(args.income_json).read_text()) if args.income_json else None
+        return fills, funding
+    from trading_bot.infra.binance_client import BinanceConnection
+    exchange = BinanceConnection()
+    return (
+        fetch_fills(exchange, (t["symbol"] for t in trades), start_ms, end_ms),
+        fetch_funding(exchange, start_ms),
+    )
 
-    con = sqlite3.connect(DB)
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--db", help="SQLite de trades (padrão: config.TRADE_DB_PATH)")
+    mode = ap.add_mutually_exclusive_group()
+    mode.add_argument("--dry-run", action="store_true", help="só relatório (padrão)")
+    mode.add_argument("--apply", action="store_true", help="backup + grava numa transação")
+    ap.add_argument("--fills-json", help="userTrades offline (lista ou {symbol: [...]})")
+    ap.add_argument("--income-json", help="income offline (usa só FUNDING_FEE)")
+    args = ap.parse_args(argv)
+
+    if args.db:
+        db = args.db
+    else:
+        from trading_bot.core.config import config
+        db = config.TRADE_DB_PATH
+    if not Path(db).exists():
+        sys.exit(f"DB não encontrado: {db}")
+
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True) if not args.apply else sqlite3.connect(db)
     con.row_factory = sqlite3.Row
-    cur = con.cursor()
-
-    trades = cur.execute(
-        "SELECT id, symbol, side, opened_at, exit_at, qty, entry_price, pnl_net, pnl_gross, fees "
-        "FROM trades WHERE status='closed' AND exit_at IS NOT NULL ORDER BY exit_at ASC"
-    ).fetchall()
+    trades = _load_trades(con)
     if not trades:
         print("Nenhum trade fechado.")
-        return
+        return 0
 
-    start = _to_ms(cur.execute("SELECT MIN(opened_at) FROM trades").fetchone()[0])
+    fills, funding = _load_exchange_data(args, trades)
+    if funding is None:
+        print("⚠️ sem income: funding do DB é mantido")
+    real = attribute(trades, fills, funding)
 
-    # Puxa TODO o income (REALIZED_PNL + COMMISSION) do período, paginando.
-    income = []
-    st = start
-    while True:
-        rows = cl.futures_income_history(startTime=st, limit=1000)
-        if not rows:
-            break
-        income.extend(rows)
-        st = int(rows[-1]["time"]) + 1
-        if len(rows) < 1000:
-            break
-    realized = [r for r in income if r["incomeType"] == "REALIZED_PNL"]
-    commission = [r for r in income if r["incomeType"] == "COMMISSION"]
-    used_r, used_c = set(), set()
-
-    def claim(pool, used, symbol, center_ms):
-        """Soma e consome os registros do símbolo na janela em torno de center_ms."""
-        total = 0.0
-        hits = 0
-        for i, r in enumerate(pool):
-            if i in used or r.get("symbol") != symbol:
-                continue
-            t = int(r["time"])
-            if center_ms - WINDOW_BEFORE_S * 1000 <= t <= center_ms + WINDOW_AFTER_S * 1000:
-                total += float(r["income"])
-                used.add(i)
-                hits += 1
-        return total, hits
-
-    updates = []
-    unmatched = []
+    plans, unmatched = [], []
+    tot = {k: [0.0, 0.0] for k in ("gross", "fees", "funding", "net")}
+    print(f"DB: {db} | fechados: {len(trades)} | fills: {len(fills)} | casados: {len(real)}")
+    print(f"\n{'id':>5} {'symbol':10}{'side':6}{'gross':>9}{'fees antes→depois':>22}"
+          f"{'funding':>10}{'net antes→depois':>22}")
     for tr in trades:
-        center = _to_ms(tr["exit_at"])
-        gross, gh = claim(realized, used_r, tr["symbol"], center)
-        comm, ch = claim(commission, used_c, tr["symbol"], center)
-        if gh == 0:
+        r = real.get(tr["id"])
+        if r is None:
             unmatched.append(tr)
-            continue
-        fees = abs(comm)
-        net = gross + comm  # comm é negativo
-        qty = tr["qty"] or 0
-        if qty and tr["side"]:
-            delta = gross / qty
-            exit_price = tr["entry_price"] + (delta if tr["side"] == "LONG" else -delta)
-        else:
-            exit_price = None
-        updates.append((tr, round(gross, 6), round(fees, 6), round(net, 6), exit_price))
+        plan = plan_update(tr, r) if r else None
+        new = plan or {"pnl_gross": tr["pnl_gross"], "fees": tr["fees"],
+                       "funding": tr["funding"], "pnl_net": tr["pnl_net"]}
+        for k, old_v, new_v in (("gross", tr["pnl_gross"], new["pnl_gross"]),
+                                ("fees", tr["fees"], new["fees"]),
+                                ("funding", tr["funding"], new["funding"]),
+                                ("net", tr["pnl_net"], new["pnl_net"])):
+            tot[k][0] += float(old_v or 0)
+            tot[k][1] += float(new_v or 0)
+        if plan:
+            plans.append((tr, plan))
+            flag = "  <<< gross" if plan["gross_fixed"] else ""
+            print(f"#{tr['id']:>4} {tr['symbol']:10}{tr['side']:6}{plan['pnl_gross']:+9.4f}"
+                  f"{float(tr['fees'] or 0):>11.4f}→{plan['fees']:<10.4f}"
+                  f"{float(plan['funding'] or 0):+10.4f}"
+                  f"{float(tr['pnl_net'] or 0):>+11.4f}→{plan['pnl_net']:<+10.4f}{flag}")
 
-    print(f"DB: {DB}  | trades fechados: {len(trades)}")
-    print(f"income real: {len(realized)} REALIZED_PNL, {len(commission)} COMMISSION")
-    print(f"casados: {len(updates)}  | sem match: {len(unmatched)}")
-    old_total = sum(float(t["pnl_net"] or 0) for t in trades)
-    new_total = sum(u[3] for u in updates) + sum(float(t["pnl_net"] or 0) for t in unmatched)
-    print(f"\nP&L net SOMA — antes(DB): {old_total:+.2f}  depois(real): {new_total:+.2f}")
-    print("\n-- mudanças por trade (id symbol side: net DB -> real) --")
-    for tr, gross, fees, net, xp in updates:
-        flag = "  <<< invertido" if (float(tr["pnl_net"] or 0) > 0) != (net > 0) else ""
-        print(f"  #{tr['id']:3} {tr['symbol']:9}{tr['side']:5} {float(tr['pnl_net'] or 0):+7.3f} -> {net:+7.3f}{flag}")
-    if unmatched:
-        print("\n-- SEM match (deixados intactos) --")
-        for tr in unmatched:
-            print(f"  #{tr['id']} {tr['symbol']} {tr['side']} exit_at={tr['exit_at']}")
+    print(f"\nTOTAIS ({len(trades)} trades)   antes      depois")
+    for k, (a, b) in tot.items():
+        print(f"  {k:8} {a:+10.4f} {b:+10.4f}")
+    print(f"\nmudanças: {len(plans)} | gross divergente: {sum(p['gross_fixed'] for _, p in plans)}"
+          f" | sem round trip (intactos): {len(unmatched)}")
+    for tr in unmatched:
+        print(f"  #{tr['id']} {tr['symbol']} {tr['side']} opened_at={tr['opened_at']}")
 
-    if not APPLY:
-        print("\n[DRY-RUN] nada foi escrito. Rode com BACKFILL_APPLY=1 para aplicar.")
-        return
+    if not args.apply:
+        print("\n[DRY-RUN] nada foi escrito. Rode com --apply para gravar.")
+        return 0
 
-    backup = f"{DB}.bak.backfill.{dt.datetime.now(dt.timezone.utc).strftime('%Y%m%d_%H%M%S')}"
-    shutil.copy2(DB, backup)
+    backup = f"{db}.bak.backfill.{dt.datetime.now(dt.timezone.utc).strftime('%Y%m%d_%H%M%S')}"
+    dst = sqlite3.connect(backup)
+    con.backup(dst)
+    dst.close()
     print(f"\nBackup: {backup}")
-    for tr, gross, fees, net, xp in updates:
-        cur.execute(
-            "UPDATE trades SET pnl_gross=?, fees=?, pnl_net=?, exit_price=COALESCE(?, exit_price) WHERE id=?",
-            (gross, fees, net, xp, tr["id"]),
-        )
-    con.commit()
-    print(f"✅ {len(updates)} trades atualizados com o P&L real da Binance.")
+    with con:  # uma transação: tudo ou nada
+        if "funding" not in {r[1] for r in con.execute("PRAGMA table_info(trades)")}:
+            con.execute("ALTER TABLE trades ADD COLUMN funding REAL")
+        for tr, p in plans:
+            con.execute(
+                "UPDATE trades SET pnl_gross=?, fees=?, pnl_net=?, funding=COALESCE(?, funding), "
+                "exit_price=COALESCE(?, exit_price) WHERE id=?",
+                (p["pnl_gross"], p["fees"], p["pnl_net"], p["funding"], p["exit_price"], tr["id"]),
+            )
+    print(f"✅ {len(plans)} trades atualizados.")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

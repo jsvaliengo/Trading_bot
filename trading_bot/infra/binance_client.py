@@ -934,7 +934,8 @@ class BinanceConnection:
         income_type: str = None,
         limit: int = 100,
         symbol: str = None,
-        start_time: int = None
+        start_time: int = None,
+        raise_errors: bool = False,
     ) -> list:
         """
         Busca o histórico de income (receitas/despesas) da conta de Futuros.
@@ -960,8 +961,17 @@ class BinanceConnection:
             return income
             
         except Exception as e:
+            if raise_errors:
+                raise
             logger.error(f"Erro ao obter histórico de income: {e}")
             return []
+
+    def get_account_trades(self, symbol: str, start_time: int, end_time: int, limit: int = 1000) -> list:
+        """Fills da conta (/fapi/v1/userTrades) do símbolo, janela ≤ 7 dias. Propaga erro."""
+        return self._api_call(
+            "futures_account_trades", self.client.futures_account_trades,
+            symbol=symbol, startTime=start_time, endTime=end_time, limit=limit,
+        )
     
     def get_daily_pnl_from_binance(self, force_refresh: bool = False) -> dict:
         """

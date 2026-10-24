@@ -124,19 +124,23 @@ def test_reconciler_matches_income_of_legacy_brt_row(brt, tmp_path):
     path = str(tmp_path / "trades.db")
     _insert_legacy(path, pnl=1.28)
     store = TradeStore(path)
-    fill_ms = int((EXIT_UTC + timedelta(seconds=5)).timestamp() * 1000)
+    opened_ms = int(datetime(2026, 1, 16, 0, 0, tzinfo=UTC).timestamp() * 1000)
+    exit_ms = int((EXIT_UTC - timedelta(seconds=1)).timestamp() * 1000)
     seen = {}
 
-    def income(**kw):
+    def fills(**kw):
         seen.update(kw)
+        base = {"symbol": "BTCUSDT", "positionSide": "LONG", "qty": "1", "commissionAsset": "USDT"}
         return [
-            {"symbol": "BTCUSDT", "incomeType": "REALIZED_PNL", "income": "-0.64", "time": fill_ms},
-            {"symbol": "BTCUSDT", "incomeType": "COMMISSION", "income": "-0.03", "time": fill_ms},
+            {**base, "id": 1, "side": "BUY", "price": "100", "realizedPnl": "0",
+             "commission": "0.015", "time": opened_ms - 2000},
+            {**base, "id": 2, "side": "SELL", "price": "99.36", "realizedPnl": "-0.64",
+             "commission": "0.015", "time": exit_ms},
         ]
 
-    bot = SimpleNamespace(trade_store=store, exchange=SimpleNamespace(get_income_history=income))
+    bot = SimpleNamespace(trade_store=store, exchange=SimpleNamespace(
+        get_account_trades=fills, get_income_history=lambda **kw: []))
     res = reconcile_recent_pnl(bot, lookback_hours=24 * 365 * 5)
     assert res["corrected"] == 1
-    opened_ms = int(datetime(2026, 1, 16, 0, 0, tzinfo=UTC).timestamp() * 1000)
-    assert seen["start_time"] == opened_ms - 15 * 60 * 1000
+    assert seen["start_time"] == opened_ms - 60 * 1000
     assert store.realized_pnl_today(day=trading_day(EXIT_UTC)) == pytest.approx(-0.67)
