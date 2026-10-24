@@ -38,6 +38,7 @@ from .trade_block_reporter import TradeBlockReporter
 from .trade_ledger import TradeLedger
 from .trade_store import trading_day, trading_day_start
 from .trade_store import TradeStore
+from .donchian import STRATEGY_TYPE as DONCHIAN, DonchianRunner
 from ..ai.consultive_engine import ConsultiveEngine
 from ..observability.log_redaction import install_on_root_handlers
 from ..execution import ExecutionEngine
@@ -293,6 +294,10 @@ class TradingBot:
         self.paused = bool(getattr(config, "START_PAUSED", False))
         self.invert_signals = False
         self._stale_klines_logged: Dict[str, float] = {}
+        # TRADING_BOT_STRATEGY=donchian_4h: runner do forward test; None = pullback.
+        self.donchian: Optional[DonchianRunner] = (
+            DonchianRunner(self) if config.STRATEGY == DONCHIAN else None
+        )
         self.positions = {}
         self.trade_history = []
         self.closed_trades_count = 0
@@ -772,6 +777,9 @@ class TradingBot:
             )
             if getattr(self, 'kill_switch', None) is not None:
                 self.kill_switch.load_from_state(state.get('kill_switch', {}))
+            # Só o pico salvo SOB Donchian (o do pullback não entra no forward test).
+            if getattr(self, 'donchian', None) is not None and state.get('donchian_peak_equity'):
+                self.peak_equity = float(state['donchian_peak_equity'])
             saved_max_drawdown = state.get('max_drawdown_from_peak_percent')
             if saved_max_drawdown is not None:
                 try:
@@ -2136,11 +2144,13 @@ class TradingBot:
         logger.info(f"   • Por trade: {config.MAX_POSITION_PERCENT * 100:.0f}% = ${trade_value:.2f} (ou mínimo da moeda)")
         logger.info(f"   • Alavancagem: {config.LEVERAGE}x")
 
-        if config.USE_BINANCE_STRATEGY or config.AUTO_SELECT_PAIRS:
+        # Donchian tem universo próprio (DonchianRunner.refresh_universe): sem scoring.
+        selects_pairs = self.donchian is None
+        if selects_pairs and (config.USE_BINANCE_STRATEGY or config.AUTO_SELECT_PAIRS):
             self._refresh_binance_coin_universe(trigger_reason="setup")
         
         # ESTRATÉGIA BINANCE PADRÃO (por faixa de capital)
-        if config.USE_BINANCE_STRATEGY:
+        if selects_pairs and config.USE_BINANCE_STRATEGY:
             logger.info("📊 Usando ESTRATÉGIA BINANCE PADRÃO...")
             strategy = config.get_binance_strategy_for_capital(current_balance)
 
@@ -2203,7 +2213,7 @@ class TradingBot:
             )
         
         # SELEÇÃO INTELIGENTE DE PARES (só se não usar estratégia Binance)
-        elif config.AUTO_SELECT_PAIRS:
+        elif selects_pairs and config.AUTO_SELECT_PAIRS:
             logger.info("🤖 Iniciando seleção inteligente de pares...")
             self.pair_selector = PairSelector(self.exchange, config)
             
@@ -2413,7 +2423,8 @@ class TradingBot:
         if self.daily_target_reached:
             return True
         
-        if self.daily_realized_pnl >= config.DAILY_PROFIT_TARGET:
+        # Donchian: fechar tudo no lucro cortaria a cauda direita (fora do pré-registro).
+        if getattr(self, "donchian", None) is None and self.daily_realized_pnl >= config.DAILY_PROFIT_TARGET:
             self.daily_target_reached = True
             logger.info(f"🎯 META DE LUCRO ATINGIDA! P&L: ${self.daily_realized_pnl:.2f}")
             
@@ -4099,6 +4110,10 @@ class TradingBot:
             logger.info(f"   {side} {symbol}: P&L ${pnl:.2f} ({profit_pct:+.2f}%) | Preço: ${current_price:.4f}")
 
             known_meta = self._get_known_position(position_key)
+            # Donchian: stop na exchange + saída no canal (DonchianRunner). Sem TP,
+            # trailing nem SL local aqui.
+            if known_meta.get('strategy_type') == DONCHIAN:
+                continue
             custom_take_profit = known_meta.get('custom_take_profit')
             custom_stop_loss = known_meta.get('custom_stop_loss')
             strategy_type = self._normalize_strategy_type(known_meta.get('strategy_type', 'trend_signal'))
@@ -4644,7 +4659,17 @@ class TradingBot:
         sim = simulated_balance(config)
         if not sim:
             return
-        best = max([0.0] + [float(p["cum_pnl"]) for p in store.realized_curve(limit=0)])
+        curve = store.realized_curve(limit=0)
+        if getattr(self, "donchian", None) is not None:
+            # Forward test: o pico conta a partir do 1º trade Donchian (o histórico do
+            # pullback não consome a margem dos 20%); antes dele, a equity atual.
+            start = store.first_opened_at(DONCHIAN)
+            before = [p for p in curve if start is None or str(p["exit_at"]) < start]
+            best = max([float(before[-1]["cum_pnl"]) if before else 0.0] + [
+                float(p["cum_pnl"]) for p in curve[len(before):]
+            ])
+        else:
+            best = max([0.0] + [float(p["cum_pnl"]) for p in curve])
         self.peak_equity = max(float(self.peak_equity or 0.0), sim + best)
 
     def _update_peak_equity(self, current_balance: float) -> None:
@@ -5516,6 +5541,10 @@ class TradingBot:
         
         self.running = True
         analysis_cycle = 0  # contador exibido no log ao iniciar cada ciclo de análise
+        if self.donchian is not None:
+            self.donchian.start()
+        else:
+            logger.info("🧭 Estratégia: pullback (3m/5m + IA + trailing)")
 
         # Sobe o dashboard web (no-op se DASHBOARD_ENABLED=False ou credenciais
         # ausentes). Falha aqui não bloqueia o bot — apenas loga e segue.
@@ -5667,6 +5696,12 @@ class TradingBot:
                         except Exception as _exc:
                             logger.warning(f"⚠️ KillSwitch check falhou: {_exc}")
 
+                    if self.donchian is not None:
+                        try:
+                            self.donchian.tick()
+                        except Exception:
+                            logger.exception("⚠️ Donchian tick falhou")
+
                     # Snapshot de métricas Prometheus (gauges read-only)
                     metrics.update_bot_state(self)
                     try:
@@ -5684,7 +5719,8 @@ class TradingBot:
                     except Exception:
                         pass
 
-                    if self.check_global_stop_loss():
+                    # Donchian: a parada pré-registrada é o drawdown de 20% (kill switch).
+                    if self.donchian is None and self.check_global_stop_loss():
                         self.execute_global_stop_loss()
                         break
 
@@ -5707,7 +5743,7 @@ class TradingBot:
                         self.update_commission_rates()
                         self._loop_scheduler.mark_ran("commission_update", now)
 
-                    if now >= self.next_pair_update_time:
+                    if self.donchian is None and now >= self.next_pair_update_time:
                         if config.USE_BINANCE_STRATEGY:
                             self.update_binance_strategy_coins()
                         else:
@@ -5718,7 +5754,11 @@ class TradingBot:
                         self.check_for_deposit()
                         self._loop_scheduler.mark_ran("deposit_check", now)
 
-                    if config.USE_BINANCE_STRATEGY and self._loop_scheduler.due("strategy_check", now):
+                    if (
+                        self.donchian is None
+                        and config.USE_BINANCE_STRATEGY
+                        and self._loop_scheduler.due("strategy_check", now)
+                    ):
                         self.check_and_update_binance_strategy()
                         self._loop_scheduler.mark_ran("strategy_check", now)
 
@@ -5734,8 +5774,8 @@ class TradingBot:
                         target_interval_seconds=monitor_interval
                     )
 
-                # CICLO LENTO: ANÁLISE DE ENTRADAS
-                if self.paused:
+                # CICLO LENTO: ANÁLISE DE ENTRADAS (pullback; Donchian roda no monitor)
+                if self.paused or self.donchian is not None:
                     # Cancela ciclo em andamento quando pausa
                     if analysis_cycle_active:
                         analysis_cycle_active = False

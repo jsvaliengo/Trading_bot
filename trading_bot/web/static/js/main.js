@@ -106,7 +106,7 @@
         const run = s.running && !s.paused, pr = $('status-running');
         pr.textContent = s.paused ? 'Pausado' : (run ? 'Rodando' : 'Parado');
         pr.className = 'status-pill ' + (s.paused ? 'warn' : (run ? 'ok' : 'error'));
-        $('status-ai').textContent = 'IA: ' + (s.ai_mode || 'off').toUpperCase();
+        $('status-ai').textContent = (s.strategy === 'donchian_4h' ? 'Donchian 4h · ' : '') + 'IA: ' + (s.ai_mode || 'off').toUpperCase();
         $('btn-pause').disabled = s.paused; $('btn-resume').disabled = !s.paused;
     }
 
@@ -173,6 +173,9 @@
     // ───────── Positions (barra SL─preço─TP) ─────────
     function posBar(p) {
         const sl = p.custom_stop_loss, tp = p.custom_take_profit, en = p.entry_price, mk = p.mark_price;
+        if (p.strategy_type === 'donchian_4h') {
+            return `<div class="trailnote">stop <b>${sl ? fmt.num(sl, 4) : '—'}</b> · saída no canal de 20</div>`;
+        }
         if (!sl || !tp || !en) return '';
         // Ancora SL=0% (esquerda) e TP=100% (direita) nos DOIS lados. Para SHORT,
         // SL é o preço MAIOR e TP o MENOR — usar min/max de preço invertia a barra

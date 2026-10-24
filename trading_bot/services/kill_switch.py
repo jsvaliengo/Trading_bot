@@ -158,6 +158,14 @@ class KillSwitchMonitor:
     # ------------------------------------------------------------------
 
     def check_all(self, *, bot: Any) -> None:
+        # Donchian 4h (forward test): só a parada pré-registrada por drawdown, sempre
+        # ligada. Trend following tem muitos dias pequenos negativos: a pausa por
+        # sequência e o piso de win rate invalidariam o teste.
+        if getattr(self.config, "STRATEGY", "pullback") == "donchian_4h":
+            self._check_drawdown_alert(
+                bot=bot, threshold=float(getattr(self.config, "DONCHIAN_MAX_DRAWDOWN_PERCENT", 20.0))
+            )
+            return
         if not bool(getattr(self.config, "KILL_SWITCH_ENABLED", True)):
             return
 
@@ -198,10 +206,11 @@ class KillSwitchMonitor:
         )
         self.alerted_events[self.EVENT_LOSS_STREAK] = signature
 
-    def _check_drawdown_alert(self, *, bot: Any) -> None:
-        threshold = float(
-            getattr(self.config, "KILL_SWITCH_DRAWDOWN_ALERT_PERCENT", 5.0) or 0.0
-        )
+    def _check_drawdown_alert(self, *, bot: Any, threshold: Optional[float] = None) -> None:
+        if threshold is None:
+            threshold = float(
+                getattr(self.config, "KILL_SWITCH_DRAWDOWN_ALERT_PERCENT", 5.0) or 0.0
+            )
         if threshold <= 0:
             return
 

@@ -1191,6 +1191,11 @@ class TelegramCommandHandler:
                 message += f"   Entry: <code>{self._format_usd_brl(entry, 4, False)}</code>\n"
                 message += f"   Atual: <code>{self._format_usd_brl(current, 4, False)}</code>\n"
                 message += f"   P&L: {pnl_emoji} <code>{self._format_usd_brl(pnl, 2, True)}</code>\n"
+                meta = (getattr(self.bot, "known_positions", None) or {}).get(f"{pos['symbol']}_{side}") or {}
+                if meta.get('strategy_type') == 'donchian_4h':
+                    stop = meta.get('custom_stop_loss')
+                    stop_txt = self._format_usd_brl(float(stop), 4, False) if stop else "—"
+                    message += f"   Stop: <code>{stop_txt}</code> · saída no canal de 20\n"
             
             total_emoji = "🟢" if total_unrealized >= 0 else "🔴"
             message += "\n━━━━━━━━━━━━━━━━━━━━━\n"

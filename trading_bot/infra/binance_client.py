@@ -1459,6 +1459,24 @@ class BinanceConnection:
             logger.error(f"Erro ao obter exchange info: {e}")
             return {}
 
+    def get_market_exchange_info(self) -> Dict:
+        """exchangeInfo da fonte de SINAL (mainnet pública com SIGNALS_FROM_MAINNET)."""
+        try:
+            return self._api_call("futures_exchange_info_market", self.market_client.futures_exchange_info)
+        except Exception as e:
+            logger.error(f"Erro ao obter exchange info da fonte de sinal: {e}")
+            return {}
+
+    def cancel_open_orders(self, symbol: str) -> bool:
+        """Cancela as ordens abertas do símbolo (ex.: STOP_MARKET closePosition órfão)."""
+        try:
+            self._api_call("futures_cancel_all_open_orders", self.client.futures_cancel_all_open_orders,
+                           symbol=symbol)
+            return True
+        except Exception as e:
+            logger.warning(f"⚠️ Falha ao cancelar ordens abertas de {symbol}: {e}")
+            return False
+
     def get_ticker_24h(self, symbol: str) -> Dict:
         """
         Retorna ticker de 24h para um símbolo.

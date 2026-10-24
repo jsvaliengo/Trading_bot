@@ -121,4 +121,9 @@ class BotStatePersistence:
             'disabled_pairs': list(getattr(config, 'DISABLED_PAIRS', []) or []),
             'binance_coin_list': list(getattr(config, 'BINANCE_COIN_LIST', []) or []),
             'strategy_profiles': list(getattr(config, 'STRATEGY_PROFILES', []) or []),
+            # Forward test Donchian: o pico inclui não-realizado e o rebuild pelo SQLite
+            # só vê realizado; sem isto um restart zerava um drawdown aberto.
+            'donchian_peak_equity': (
+                float(bot.peak_equity or 0.0) if getattr(bot, 'donchian', None) is not None else None
+            ),
         }

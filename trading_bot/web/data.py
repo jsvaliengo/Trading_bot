@@ -233,6 +233,7 @@ def collect_summary(bot) -> Dict[str, Any]:
         "environment": "testnet" if getattr(config, "USE_TESTNET", False) else "mainnet",
         "signal_data_source": "mainnet" if config.SIGNALS_FROM_MAINNET else config.ENVIRONMENT,
         "ai_mode": str(getattr(config, "AI_CONSULTIVE_MODE", "off") or "off"),
+        "strategy": str(getattr(config, "STRATEGY", "pullback") or "pullback"),
     }
 
 
@@ -351,7 +352,9 @@ def collect_positions(bot) -> List[Dict[str, Any]]:
                 "custom_take_profit": payload.get("custom_take_profit"),
                 "last_seen": _iso(payload.get("last_seen")),
                 "entry_time": _iso(payload.get("entry_time")),
-                **_trailing_live_state(bot, position_key, side, entry_price, payload),
+                # Donchian não tem trailing: stop na exchange + saída no canal de 20.
+                **({} if payload.get("strategy_type") == "donchian_4h"
+                   else _trailing_live_state(bot, position_key, side, entry_price, payload)),
             }
         )
 
