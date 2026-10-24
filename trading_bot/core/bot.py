@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from .config import config
+from .equity import effective_equity, simulated_balance
 from .bot_state_serde import BotStatePersistence
 from .scheduler import LoopScheduler, get_loop_timing_profile, timing_profile_changed
 from .double_first_policy import DoubleFirstPolicy
@@ -38,6 +39,7 @@ from .trade_ledger import TradeLedger
 from .trade_store import trading_day, trading_day_start
 from .trade_store import TradeStore
 from ..ai.consultive_engine import ConsultiveEngine
+from ..observability.log_redaction import install_on_root_handlers
 from ..execution import ExecutionEngine
 from ..execution.engine import _below_min_trade_volume, _throttled_warning
 from ..infra.binance_streams import stale_kline_age_seconds
@@ -98,6 +100,7 @@ def _configure_logging():
         handlers=handlers,
         force=True,
     )
+    install_on_root_handlers()
 
 
 def _aggregate_realized_pnl(income_list):
@@ -333,6 +336,7 @@ class TradingBot:
         self.peak_equity: float = 0.0
         self.peak_equity_ts = None
         self.last_known_balance: float | None = None
+        self.last_drawdown_equity: float | None = None
         self.known_positions = {}
         self.double_first_used = {}
         self.commission_rates = None
@@ -894,6 +898,7 @@ class TradingBot:
                         self.kill_switch.rebuild_history_from_store(
                             store.daily_pnl_history(limit=0), today=today
                         )
+                    self._rebuild_peak_equity_from_store(store)
                 except Exception:
                     logger.exception("⚠️ Falha ao ancorar contadores no SQLite — usando state")
 
@@ -3556,7 +3561,7 @@ class TradingBot:
         # Improvement 1: verifica drawdown desde o pico de equity
         try:
             _bal_for_dd = self.exchange.get_account_balance()
-            if _bal_for_dd > 0 and self._check_drawdown_from_peak(_bal_for_dd):
+            if _bal_for_dd > 0 and self._check_drawdown_from_peak(self.drawdown_equity(_bal_for_dd)):
                 logger.info("⏸️  Drawdown máximo atingido - não abrindo novas posições")
                 return False
         except Exception:
@@ -4619,6 +4624,26 @@ class TradingBot:
     # Improvement 1: Drawdown protection from peak equity
     # ------------------------------------------------------------------
 
+    def drawdown_equity(self, wallet: float) -> float:
+        """Equity das proteções de drawdown. Mainnet: o wallet (como sempre foi).
+        Testnet simulado: o wallet é o cap constante e o pico nunca se afastaria
+        dele, então usa a mesma equity do dashboard (cap + realizado SQLite + não-realizado)."""
+        if not simulated_balance(config):
+            return wallet
+        store = getattr(self, "trade_store", None)
+        cumulative = float(store.cumulative_realized_pnl()) if store is not None else float(self.total_pnl)
+        unrealized = float(self.exchange.get_account_info().get("unrealized_pnl") or 0.0)
+        return effective_equity(config, wallet=wallet, cumulative_realized=cumulative, unrealized=unrealized)
+
+    def _rebuild_peak_equity_from_store(self, store: Any) -> None:
+        """Testnet simulado: o pico da equity realizada é derivável do SQLite, então
+        sobrevive a restart (o deploy reinicia o bot e zerava o pico)."""
+        sim = simulated_balance(config)
+        if not sim:
+            return
+        best = max([0.0] + [float(p["cum_pnl"]) for p in store.realized_curve(limit=0)])
+        self.peak_equity = max(float(self.peak_equity or 0.0), sim + best)
+
     def _update_peak_equity(self, current_balance: float) -> None:
         """Atualiza o pico histórico de equity."""
         if current_balance > self.peak_equity:
@@ -5161,11 +5186,9 @@ class TradingBot:
         # unrealized pra refletir o progresso real do bot. Em mainnet ou testnet
         # sem cap, wallet_balance já reflete o realizado; adicionamos só o
         # unrealized pra ter equity total.
-        sim_cap = float(getattr(config, "SIMULATED_BALANCE_USD", 0.0) or 0.0)
-        if getattr(config, "USE_TESTNET", False) and sim_cap > 0:
-            balance = sim_cap + cumulative_realized + total_unrealized
-        else:
-            balance = wallet_balance + total_unrealized
+        balance = effective_equity(
+            config, wallet=wallet_balance, cumulative_realized=cumulative_realized, unrealized=total_unrealized
+        )
 
         pct_change = (total_pnl / self.initial_capital) * 100 if self.initial_capital > 0 else 0
         
@@ -5619,11 +5642,12 @@ class TradingBot:
                         _current_bal = self.exchange.get_account_balance()
                         if _current_bal > 0:
                             self.last_known_balance = _current_bal
-                            self._update_peak_equity(_current_bal)
+                            self.last_drawdown_equity = self.drawdown_equity(_current_bal)
+                            self._update_peak_equity(self.last_drawdown_equity)
                             metrics.update_account_balance(_current_bal)
                             if self.peak_equity > 0:
                                 metrics.update_drawdown(
-                                    (self.peak_equity - _current_bal) / self.peak_equity * 100
+                                    (self.peak_equity - self.last_drawdown_equity) / self.peak_equity * 100
                                 )
                             if getattr(self, "dashboard_server", None):
                                 self.dashboard_server.emit_balance_update({
