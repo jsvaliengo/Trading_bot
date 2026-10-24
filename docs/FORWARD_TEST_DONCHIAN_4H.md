@@ -1,0 +1,100 @@
+# Pré-registro: forward test Donchian 4h (testnet, sinais da mainnet)
+
+Data do pré-registro: 2026-10-24. Escrito e commitado antes do código da estratégia.
+Pesquisa de origem: `scripts/backtest_v2/TREND4H_PREREG.md` e `TREND4H_RELATORIO.md`
+(branch `research/trend-4h`, PR #215). O backtest não passou no critério
+pré-registrado. O relatório recomendou este forward test como única evidência
+nova e não contaminada.
+
+## Configuração fixa
+
+Uma única configuração. Nenhum parâmetro muda durante o teste.
+
+| item | valor |
+|---|---|
+| estratégia | `TRADING_BOT_STRATEGY=donchian_4h` |
+| timeframe | barras 4h fechadas, dados da mainnet (`TRADING_BOT_SIGNAL_DATA_SOURCE=mainnet`) |
+| entrada | close da barra 4h acima da máxima das 40 barras anteriores (LONG) ou abaixo da mínima das 40 anteriores (SHORT), ordem a mercado logo após o fechamento |
+| stop inicial | 2 × ATR(20, Wilder) / close da barra do sinal, aplicado ao preço do fill. STOP_MARKET na exchange (MARK_PRICE, closePosition). Sem take profit |
+| saída | close da barra 4h abaixo da mínima das 20 anteriores (LONG) ou acima da máxima das 20 anteriores (SHORT), ordem a mercado logo após o fechamento. Também sai com dados parados (deslistagem) |
+| risco por trade | 0,25% da equity até o stop |
+| tetos | 1× equity de notional por posição, 3× equity de notional bruto, no máximo 10 posições |
+| equity | equity simulada do testnet (`trading_bot/core/equity.py`, PR #211) |
+| minNotional | se o mínimo da exchange forçar risco acima de 2× o alvo, o trade é pulado e logado |
+| universo | top 30 perpétuos USDT por quote volume dos últimos 30 dias da mainnet, ≥ 60 dias de histórico, refeito toda segunda 00:00 UTC, ∩ símbolos negociáveis no testnet, menos `DISABLED_PAIRS` |
+| drawdown | parada dura em 20% do pico da equity simulada (pausa o bot) |
+| fora | trailing, regime swap, viés HTF, gate de IA, análise 3m/5m, scoring de pares, pausa por sequência de dias negativos, piso de win rate, meta de lucro diário, stop loss global |
+| mantido | limite de perda diária (sanidade) |
+
+Os valores ficam em `trading_bot/core/config.py` (`DONCHIAN_*`). Só o limite de
+drawdown lê variável de ambiente, e ele não muda durante o teste.
+
+## Início
+
+O teste começa quando o usuário liga a estratégia na VM (`.env` + restart). A data
+e a hora UTC desse restart são registradas aqui, num commit, no mesmo dia:
+
+- Início: _(preencher ao ligar)_
+- Equity simulada no início: _(preencher ao ligar)_
+
+Posições abertas da estratégia pullback no momento da troca não contam. Elas
+terminam pelas regras antigas e ficam fora das métricas.
+
+## Medição
+
+- Trades do teste: linhas do SQLite (`trades`) com `strategy_type = 'donchian_4h'`,
+  fechadas depois do início.
+- P&L: `pnl_net` depois do reconciliador do PR #213 (fills reais da Binance:
+  `pnl_net = pnl_gross − fees + funding`).
+- Expectativa líquida por trade: média do `pnl_net` em USD dos trades fechados.
+- Drawdown: do pico da equity simulada desde o início do teste, como o bot mede.
+
+## Regra de sucesso
+
+O teste termina no que vier **por último** entre 6 meses corridos desde o início e
+150 trades fechados. Os dois precisam ter acontecido. Nesse ponto, passa se as duas
+condições valem:
+
+1. Expectativa líquida por trade > 0 (P&L reconciliado com a exchange).
+2. Drawdown máximo < 20% durante todo o teste.
+
+## Regra de falha
+
+- Drawdown de 20% do pico a qualquer momento encerra o teste. O bot pausa sozinho.
+  Não há retomada com a mesma configuração.
+- Expectativa líquida por trade ≤ 0 no fim do teste.
+
+Se falhar, a conclusão é que não há edge capturável com este universo e estes
+custos. O próximo trabalho é reduzir custo (maker, menos turnover) antes de testar
+outra ideia de sinal.
+
+## Relatório semanal
+
+Toda semana, a partir do SQLite e do log:
+
+- trades fechados na semana e no acumulado, LONG e SHORT;
+- P&L líquido da semana e acumulado, fees e funding;
+- expectativa por trade acumulada, win rate, ganho médio e perda média;
+- drawdown atual e máximo desde o início;
+- posições abertas com stop;
+- trades pulados e o motivo (minNotional, teto de posições, teto bruto, par
+  ausente no testnet);
+- universo da semana e quantos do top 30 faltam no testnet;
+- tempo decorrido e trades restantes até a regra de término.
+
+## Sem mudança de parâmetro
+
+Nenhum parâmetro muda durante o teste: canais, ATR, k, risco, tetos, universo e
+limite de drawdown. Bug que invalide o teste pode ser corrigido. A correção fica
+registrada neste arquivo com a data, e os trades afetados são listados.
+
+## Ressalvas
+
+- Fills do testnet são aproximados. Livro, slippage e preço do testnet diferem da
+  mainnet, e o stop é ancorado no preço do fill do testnet.
+- O funding do testnet não é o da mainnet.
+- Com equity de ~$173, 0,25% é ~$0,43 de risco. Parte dos sinais cai abaixo do
+  minNotional e é pulada. Isso muda a amostra em relação ao backtest.
+- A pesquisa teve ~2485 trades em 4,5 anos (~10 por semana com 0,5% de risco e
+  equity grande). Aqui a frequência esperada é de alguns por semana, então 150
+  trades podem levar mais de 6 meses.
