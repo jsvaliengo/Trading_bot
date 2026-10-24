@@ -158,10 +158,12 @@ class Book:
     da célula vigente no `schedule` (o walk-forward troca de célula entre folds)."""
 
     def __init__(self, bars: Dict[str, Bars], funding: Dict[str, np.ndarray], uni: Universe, grid: List[dict]):
-        self.bars, self.sig, self.atr = bars, {}, {}
+        self.bars, self.sig, self.atr, self.gaps = bars, {}, {}, {}
         self.sym_data: Dict[str, SymbolData] = {}
         for s, b in bars.items():
             self.atr[s] = atr_wilder(b.high, b.low, b.close)
+            # 1ª barra depois de um buraco > 7 dias (deslistado e relistado): trade aberto fecha antes dele
+            self.gaps[s] = np.nonzero(np.diff(b.open_time) > WEEK)[0] + 1
             member = uni.contains(s, b.close_time)
             ok = member & np.isfinite(self.atr[s])
             pairs = set()
@@ -180,6 +182,10 @@ class Book:
         if (i, side) not in ps:
             return None
         b = self.bars[sym]
+        g = self.gaps[sym]
+        k = int(np.searchsorted(g, i, "right"))
+        if k < len(g):
+            end_idx = min(end_idx, int(g[k]))
         sl_pct = params["k"] * self.atr[sym][i] / b.close[i] * 100
         tr = simulate_trade(b, i, side, {"sl_pct": sl_pct}, COSTS, end_idx, self.sym_data[sym].funding,
                             xl if side == LONG else xs, sym)

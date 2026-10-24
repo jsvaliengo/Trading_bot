@@ -218,7 +218,10 @@ def build(sym: str, kind: str, tf: str = "") -> Path:
 
 
 def load_klines(sym: str, tf: str) -> np.ndarray:
-    return np.load(OUT_DIR / f"klines_{tf}" / f"{sym}.npz")["a"]
+    """Sem barras de volume zero: o arquivo de um par deslistado continua até hoje com
+    barras planas de volume 0 no último preço; sem esse corte o par parece vivo."""
+    a = np.load(OUT_DIR / f"klines_{tf}" / f"{sym}.npz")["a"]
+    return a[a[:, 5] > 0]
 
 
 def load_bars(sym: str, tf: str) -> Bars:

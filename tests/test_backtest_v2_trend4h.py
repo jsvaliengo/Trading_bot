@@ -108,11 +108,14 @@ def test_tsmom_cross_needs_previous_bar_below_threshold(monkeypatch):
 
 
 # ───────────── stop ATR + sizing por volatilidade ─────────────
-def _book_one_trade(monkeypatch, c, h, lw, k, atr_val, members=("XUSDT",)):
+def _book_one_trade(monkeypatch, c, h, lw, k, atr_val, members=("XUSDT",), gap_before=None):
     monkeypatch.setattr(t4, "COSTS", t4.Costs(0.0, 0.0, 0.0, 0.0))
     monkeypatch.setattr(t4, "atr_wilder", lambda hh, ll, cc: np.full(len(cc), atr_val))
-    b = Bars("XUSDT", "4h", to_ms("2021-01-04") + np.arange(len(c), dtype=np.int64) * H4,
-             np.asarray(c, float), np.asarray(h, float), np.asarray(lw, float), np.asarray(c, float), np.ones(len(c)))
+    ot = to_ms("2021-01-04") + np.arange(len(c), dtype=np.int64) * H4
+    if gap_before is not None:
+        ot[gap_before:] += 30 * DAY
+    b = Bars("XUSDT", "4h", ot, np.asarray(c, float), np.asarray(h, float), np.asarray(lw, float),
+             np.asarray(c, float), np.ones(len(c)))
     t0, t1 = int(b.open_time[0]), int(b.open_time[-1]) + H4
     uni = t4.Universe(np.array([t0 - DAY]), [frozenset(members)])
     cell = {"v": "don", "n": 2, "m": 2, "k": k}
@@ -214,3 +217,19 @@ def test_candidate_filter():
     assert not vision.is_candidate("BTCUSDT_230331")
     assert not vision.is_candidate("USDCUSDT") and not vision.is_candidate("ETHBTC")
     assert not vision.is_candidate("../x/USDT")
+
+
+def test_load_klines_drops_zero_volume_padding(tmp_path, monkeypatch):
+    monkeypatch.setattr(vision, "OUT_DIR", tmp_path)
+    a = np.array([[0, 1, 2, 0.5, 1.5, 10, 15], [DAY, 1.5, 1.5, 1.5, 1.5, 0, 0], [2 * DAY, 1.5, 1.5, 1.5, 1.5, 0, 0]])
+    (tmp_path / "klines_1d").mkdir()
+    np.savez(tmp_path / "klines_1d" / "XUSDT.npz", a=a, n_zips=1)
+    assert vision.load_klines("XUSDT", "1d")[:, 0].tolist() == [0]
+
+
+def test_trade_closes_before_delisting_gap(monkeypatch):
+    c = [100, 100, 104, 105, 106, 300, 300]
+    _, res = _book_one_trade(monkeypatch, c, np.add(c, 0.5), np.subtract(c, 0.5), k=2, atr_val=2.0,
+                             gap_before=5)
+    tr = res.trades[0]
+    assert tr.reason == "eod" and tr.exit_idx == 4 and tr.exit_price == pytest.approx(106.0)
