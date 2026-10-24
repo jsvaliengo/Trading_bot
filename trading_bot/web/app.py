@@ -117,7 +117,7 @@ def _register_routes(app: Flask, socketio: SocketIO) -> None:
     def resume():
         bot = app.config["BOT"]
         bot.paused = False
-        logger.info("▶️  Bot resumido via dashboard")
+        logger.warning("▶️ Bot retomado via dashboard /api/control/resume")
         socketio.emit("control_changed", {"paused": False})
         return jsonify({"ok": True, "paused": False})
 

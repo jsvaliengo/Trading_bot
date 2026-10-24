@@ -14,6 +14,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from ..core.config import config
+from ..core.equity import effective_equity
 from ..core.trade_store import trading_day_start
 
 
@@ -192,12 +193,9 @@ def collect_summary(bot) -> Dict[str, Any]:
 
     # Equity efetivo (card SALDO). No mainnet vem do wallet real + não-realizado;
     # no testnet simulado, cap fixo + realizado acumulado + não-realizado.
-    if getattr(config, "USE_TESTNET", False) and float(
-        getattr(config, "SIMULATED_BALANCE_USD", 0.0) or 0.0
-    ) > 0:
-        effective_balance = float(getattr(config, "SIMULATED_BALANCE_USD")) + cumulative_realized + binance_unrealized
-    else:
-        effective_balance = wallet_balance + binance_unrealized
+    effective_balance = effective_equity(
+        config, wallet=wallet_balance, cumulative_realized=cumulative_realized, unrealized=binance_unrealized
+    )
 
     # Os cards de P&L vêm da BINANCE (fonte de verdade do dinheiro), NÃO do DB —
     # o DB tinha valores fabricados/estimados (#181) e divergia do extrato.
@@ -477,8 +475,6 @@ def collect_portfolio_history(bot, limit: int = 200) -> List[Dict[str, Any]]:
     """
     history = getattr(bot, "portfolio_history", []) or []
     store = getattr(bot, "trade_store", None)
-    sim_cap = float(getattr(config, "SIMULATED_BALANCE_USD", 0.0) or 0.0)
-    use_sim = bool(getattr(config, "USE_TESTNET", False)) and sim_cap > 0
 
     # Trades fechados (exit_at, pnl_net) ordenados — base do realizado acumulado.
     closed: List = []
@@ -508,10 +504,7 @@ def collect_portfolio_history(bot, limit: int = 200) -> List[Dict[str, Any]]:
         cum_realized = _cumulative_realized_until(snap_ts)
         # Mesma fórmula do card: testnet simulado soma o realizado acumulado ao
         # cap fixo; em mainnet o wallet já reflete o realizado.
-        if use_sim:
-            equity = sim_cap + cum_realized + unrealized
-        else:
-            equity = balance + unrealized
+        equity = effective_equity(config, wallet=balance, cumulative_realized=cum_realized, unrealized=unrealized)
         out.append(
             {
                 "timestamp": _iso(snap.get("timestamp")) or snap.get("timestamp"),

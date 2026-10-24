@@ -170,14 +170,16 @@ def test_pause_sets_paused_true():
     assert bot.paused is True
 
 
-def test_resume_sets_paused_false():
+def test_resume_sets_paused_false(caplog):
     from trading_bot.web.app import create_app
     bot = _make_bot(paused=True)
     app, _ = create_app(bot)
     client = app.test_client()
-    r = client.post("/api/control/resume", headers=_basic_auth("admin", "secret"))
+    with caplog.at_level("WARNING"):
+        r = client.post("/api/control/resume", headers=_basic_auth("admin", "secret"))
     assert r.status_code == 200
     assert bot.paused is False
+    assert "Bot retomado via dashboard /api/control/resume" in [r.getMessage() for r in caplog.records if r.levelname == "WARNING"][0]
 
 
 def test_close_all_invokes_bot_method_with_reason():
