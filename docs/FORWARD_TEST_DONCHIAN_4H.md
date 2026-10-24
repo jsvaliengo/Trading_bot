@@ -34,8 +34,8 @@ drawdown lê variável de ambiente, e ele não muda durante o teste.
 O teste começa quando o usuário liga a estratégia na VM (`.env` + restart). A data
 e a hora UTC desse restart são registradas aqui, num commit, no mesmo dia:
 
-- Início: _(preencher ao ligar)_
-- Equity simulada no início: _(preencher ao ligar)_
+- Início: 2026-10-24 23:43:07 UTC (ver Registro de início)
+- Equity simulada no início: $172,81 (ver Registro de início)
 
 Posições abertas da estratégia pullback no momento da troca não contam. Elas
 terminam pelas regras antigas e ficam fora das métricas.
@@ -98,3 +98,24 @@ registrada neste arquivo com a data, e os trades afetados são listados.
 - A pesquisa teve ~2485 trades em 4,5 anos (~10 por semana com 0,5% de risco e
   equity grande). Aqui a frequência esperada é de alguns por semana, então 150
   trades podem levar mais de 6 meses.
+
+## Registro de início
+
+Registro factual do restart que ligou a estratégia. Nenhuma regra acima mudou.
+
+- Início: **2026-10-24 23:43:07 UTC**, primeira linha do log com o banner
+  `🧭 Estratégia: Donchian 4h (n=40,m=20,k=2,risco 0,25%) — forward test`
+  (o log da VM grava em BRT: `2026-10-24 20:43:07,845`).
+- Deploy: `16a2734` (merge do PR #216), conferido em `runtime/deploy_info.json`.
+- `.env` da VM: `TRADING_BOT_STRATEGY=donchian_4h`, `TRADING_BOT_SIGNAL_DATA_SOURCE=mainnet`,
+  `TRADING_BOT_START_PAUSED=false`, `TRADING_BOT_ENVIRONMENT=testnet`.
+- Equity simulada no início: **$172,81** (`last_balance` do `/api/summary`: cap $173,49
+  + realizado acumulado −$0,68; não-realizado $0,00).
+- Posições pullback abertas na troca: nenhuma.
+- Bot não pausado no início.
+- Universo da semana 2026-10-19: 27 pares (top 30 da mainnet; fora do testnet:
+  PUMPUSDT, BTWUSDT; desabilitado: BNBUSDT): BTCUSDT, ETHUSDT, SOLUSDT, ZECUSDT,
+  XRPUSDT, NEARUSDT, HYPEUSDT, DOGEUSDT, SUIUSDT, QNTUSDT, UNIUSDT, ENAUSDT, WLDUSDT,
+  1000PEPEUSDT, ADAUSDT, AVAXUSDT, TAOUSDT, LINKUSDT, STRKUSDT, ONDOUSDT, BCHUSDT,
+  FILUSDT, AAVEUSDT, AKEUSDT, LTCUSDT, SANDUSDT, ARBUSDT. A lista foi recalculada com
+  as mesmas funções do bot (o log só traz a contagem) e bate com ela.
