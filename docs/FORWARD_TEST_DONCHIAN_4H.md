@@ -35,7 +35,8 @@ O teste começa quando o usuário liga a estratégia na VM (`.env` + restart). A
 e a hora UTC desse restart são registradas aqui, num commit, no mesmo dia:
 
 - Início: 2026-10-24 23:43:07 UTC (ver Registro de início)
-- Equity simulada no início: $172,81 (ver Registro de início)
+- Equity simulada no início: $299,32 (capital simulado $300,00; ajustado em
+  2026-10-25 01:42 UTC antes do 1º trade; ver Registro de início)
 
 Posições abertas da estratégia pullback no momento da troca não contam. Elas
 terminam pelas regras antigas e ficam fora das métricas.
@@ -119,3 +120,21 @@ Registro factual do restart que ligou a estratégia. Nenhuma regra acima mudou.
   1000PEPEUSDT, ADAUSDT, AVAXUSDT, TAOUSDT, LINKUSDT, STRKUSDT, ONDOUSDT, BCHUSDT,
   FILUSDT, AAVEUSDT, AKEUSDT, LTCUSDT, SANDUSDT, ARBUSDT. A lista foi recalculada com
   as mesmas funções do bot (o log só traz a contagem) e bate com ela.
+
+### Ajuste de capital antes do 1º trade (2026-10-25 01:42 UTC)
+
+Registro factual. Nenhuma regra acima mudou.
+
+- Quando: **2026-10-25 01:42 UTC** (2026-10-24 22:42 BRT), com **0 trades** da
+  estratégia Donchian até então.
+- O que: capital simulado de **$173,49 → $300,00**
+  (`TRADING_BOT_SIMULATED_BALANCE_USD=300` no `.env` da VM, bot reiniciado).
+- Equity simulada logo após o restart: **$299,32** (300,00 + histórico realizado
+  pré-teste de −$0,68 da estratégia pullback).
+- Pico de drawdown reconstruído pelo bot em **$300,00** (o pico conta a partir do
+  1º trade Donchian; antes dele, vale o capital simulado). O stop de 20% passa a
+  corresponder a equity ≈ $240.
+- Motivo: a $173, 7–11% dos sinais eram pulados por minNotional e 17–27% eram
+  elevados acima do risco-alvo; $300 reduz ambos. Risco por trade segue 0,25% da
+  equity (≈ $0,75).
+- Nada mais mudou. As regras pré-registradas seguem iguais.
