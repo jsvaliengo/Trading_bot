@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import re
 import time
+from collections import Counter
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -172,6 +173,7 @@ class DonchianRunner:
         self._boundary: Optional[int] = None
         self._pending: Set[str] = set()
         self._retry_universe_at = 0
+        self._bar: Dict[str, Any] = {}
 
     # ---- startup / universo ----
     def start(self) -> None:
@@ -263,7 +265,7 @@ class DonchianRunner:
         self.universe_week = None if partial else t
         logger.info(
             f"🌐 Donchian: universo da semana {time.strftime('%Y-%m-%d', time.gmtime(t / 1000))} "
-            f"= {len(self.universe)} pares (top {len(top)} da mainnet; fora do testnet: "
+            f"= {len(self.universe)} pares [{', '.join(self.universe)}] (top {len(top)} da mainnet; fora do testnet: "
             f"{len(missing)} {missing}; desabilitados: {off}; klines com falha: {len(failed)}) "
             f"em {time.monotonic() - started:.0f}s"
         )
@@ -276,9 +278,14 @@ class DonchianRunner:
         if boundary != self._boundary:
             self._boundary = boundary
             self._pending = set(self.universe) | set(self._donchian_positions())
+            self._bar = {"total": len(self._pending), "ok": 0, "stale": 0, "LONG": 0, "SHORT": 0, "exits": 0,
+                         "entries": 0, "skips": Counter(), "deferred": 0, "defer_reason": "", "open": None,
+                         "logged": False}
         if self._pending:
             self._process(boundary, now_ms)
         bar_done = not self._pending or now_ms - boundary > ENTRY_MAX_DELAY_MS   # 1 par travado não segura o rebalance
+        if bar_done and not self._bar["logged"]:
+            self._log_bar(boundary)
         if bar_done and rebalance_start(now_ms) != self.universe_week and now_ms >= self._retry_universe_at:
             self.refresh_universe(now_ms)
 
@@ -308,6 +315,8 @@ class DonchianRunner:
             positions = ex.get_open_positions(force_refresh=True)
         except Exception as exc:
             logger.warning(f"⚠️ Donchian: posições indisponíveis ({exc}) — barra adiada")
+            self._bar["deferred"] += 1
+            self._bar["defer_reason"] = f"posições indisponíveis ({exc})"
             return
         open_by_sym = {p["symbol"]: p for p in positions}
         tagged = self._donchian_positions()
@@ -324,6 +333,8 @@ class DonchianRunner:
                     if not self._close(pos, "Donchian: dados parados"):
                         continue          # fica pendente: tenta de novo no próximo tick
                     open_by_sym.pop(sym, None)
+                    self._bar["exits"] += 1
+                self._bar["stale"] += 1
                 self._pending.discard(sym)
                 continue
             sig = last_bar_signal(kl, n=c.DONCHIAN_ENTRY_BARS, m=c.DONCHIAN_EXIT_BARS,
@@ -332,8 +343,13 @@ class DonchianRunner:
                 if not self._close(pos, f"Donchian: saída no canal de {c.DONCHIAN_EXIT_BARS}"):
                     continue              # fica pendente: tenta de novo no próximo tick
                 open_by_sym.pop(sym, None)
+                self._bar["exits"] += 1
             self._pending.discard(sym)
             ready[sym] = sig
+            self._bar["ok"] += 1
+            if sig.entry and sym in self.universe:
+                self._bar[sig.entry] += 1
+        self._bar["open"] = len(open_by_sym)
 
         store = getattr(self.bot, "trade_store", None)
         bar_close = datetime.fromtimestamp(boundary / 1000, tz=timezone.utc).isoformat()
@@ -353,6 +369,7 @@ class DonchianRunner:
         if blocked:
             logger.info(f"⏸️ Donchian: {len(entries)} sinal(is) sem entrada ({blocked}): "
                         f"{', '.join(f'{s} {sig.entry}' for s, sig in entries)}")
+            self._bar["skips"][blocked] += len(entries)
             return
         equity = float(self.bot.drawdown_equity(ex.get_account_balance()))
         gross = sum(float(p["quantity"]) * float(p.get("mark_price") or p["entry_price"])
@@ -369,11 +386,43 @@ class DonchianRunner:
             if sizing.skip:
                 logger.warning(f"⏭️ Donchian: {sym} {sig.entry} pulado — {sizing.skip} "
                                f"(equity ${equity:.2f}, stop {sig.stop_pct * 100:.2f}%)")
+                self._bar["skips"][sizing.skip] += 1
                 continue
             notional = self._open(sym, str(sig.entry), sig.stop_pct, sizing, info)
             if notional:
                 count += 1
                 gross += notional
+                self._bar["entries"] += 1
+            else:
+                self._bar["skips"]["falha na abertura"] += 1
+        self._bar["open"] = count
+
+    def _log_bar(self, boundary: int) -> None:
+        """Uma linha por barra 4h: barra quieta e barra não processada não se confundem no log."""
+        b = self._bar
+        b["logged"] = True
+        when = time.strftime("%Y-%m-%d %H:%M", time.gmtime(boundary / 1000))
+        if not b["total"]:
+            logger.info(f"🕓 Donchian: barra {when} UTC não processada — universo vazio e sem posições")
+            return
+        if b["deferred"] and not b["ok"] and not b["stale"]:
+            logger.warning(f"🕓 Donchian: barra {when} UTC NÃO processada — adiada {b['deferred']}x, "
+                           f"{b['defer_reason']}; {len(self._pending)} pares pendentes")
+            return
+        cap = config.DONCHIAN_MAX_POSITIONS
+        held = b["open"] if b["open"] is not None else len(self.bot.known_positions)
+        eq, peak = getattr(self.bot, "last_drawdown_equity", None), float(getattr(self.bot, "peak_equity", 0) or 0)
+        equity = "equity n/d" if eq is None else (
+            f"equity ${eq:.2f} (DD {max(0.0, (peak - eq) / peak * 100) if peak > 0 else 0.0:.1f}% do pico)")
+        skips = sum(b["skips"].values())
+        why = f" ({'; '.join(f'{r} ×{n}' for r, n in b['skips'].items())})" if skips else ""
+        defer = f"adiada {b['deferred']}x antes ({b['defer_reason']}); " if b["deferred"] else ""
+        logger.info(
+            f"🕓 Donchian: barra {when} UTC — {defer}{b['ok']}/{b['total']} pares analisados "
+            f"({len(self._pending)} sem barra, {b['stale']} dados parados), "
+            f"{b['LONG'] + b['SHORT']} rompimentos ({b['LONG']}L/{b['SHORT']}S), {b['exits']} saídas, "
+            f"{b['entries']} entradas, {skips} pulados{why}; posições abertas {held}/{cap}; {equity}"
+        )
 
     # ---- execução ----
     def _close(self, pos: Dict[str, Any], reason: str) -> bool:
