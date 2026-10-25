@@ -155,7 +155,7 @@ def test_universe_score_point_in_time_and_eligibility():
     assert d.rebalance_start(t + 3 * DAY + 7) == t and t % (7 * DAY) == 4 * DAY
 
 
-def test_refresh_universe_mainnet_volume_intersected_with_testnet_minus_disabled(monkeypatch):
+def test_refresh_universe_mainnet_volume_intersected_with_testnet_minus_disabled(monkeypatch, caplog):
     t = d.rebalance_start(1_761_600_000_000)
     vols = {"AAAUSDT": 9.0, "BBBUSDT": 8.0, "CCCUSDT": 7.0, "DDDUSDT": 6.0, "USDCUSDT": 99.0}
     perp = lambda s: {"symbol": s, "contractType": "PERPETUAL", "status": "TRADING", "quoteAsset": "USDT"}  # noqa: E731
@@ -167,9 +167,11 @@ def test_refresh_universe_mainnet_volume_intersected_with_testnet_minus_disabled
     monkeypatch.setattr(config, "DONCHIAN_UNIVERSE_TOP_N", 3)
     monkeypatch.setattr(config, "DISABLED_PAIRS", ["BBBUSDT"])
     runner = d.DonchianRunner(SimpleNamespace(exchange=ex))
-    assert runner.refresh_universe(t + DAY) == ["AAAUSDT"]          # CCC fora do testnet, BBB desabilitado
+    with caplog.at_level(logging.INFO):
+        assert runner.refresh_universe(t + DAY) == ["AAAUSDT"]      # CCC fora do testnet, BBB desabilitado
     assert runner.universe_week == t
     assert ex.get_klines_raw.call_args.kwargs["limit"] == 68
+    assert any("= 1 pares [AAAUSDT]" in m for m in caplog.messages)
 
 
 # ───────────── runner: entrada, stop, saída ─────────────
@@ -541,3 +543,64 @@ def test_donchian_peak_survives_restart_via_state(monkeypatch):
     assert payload["donchian_peak_equity"] == 215.0
     monkeypatch.setattr(config, "STRATEGY", "pullback")
     assert BotStatePersistence(_bot(_Ex({}))).build_payload()["donchian_peak_equity"] is None
+
+
+# ───────────── resumo por barra: barra quieta ≠ barra não processada ─────────────
+def _bar_lines(caplog):
+    return [m for m in caplog.messages if m.startswith("🕓 Donchian: barra")]
+
+
+def test_quiet_bar_logs_exactly_one_summary_line(caplog):
+    bot = _bot(_Ex({"XUSDT": _bars_ending(FLAT + [100.2])}))
+    bot.last_drawdown_equity, bot.peak_equity = 172.81, 172.81
+    runner = d.DonchianRunner(bot)
+    runner.universe, runner.universe_week = ["XUSDT"], d.rebalance_start(BOUNDARY)
+    with caplog.at_level(logging.INFO):
+        runner.tick(BOUNDARY + 60_000)
+        runner.tick(BOUNDARY + 120_000)          # mesma barra: não repete o resumo
+    assert _bar_lines(caplog) == [
+        "🕓 Donchian: barra 2025-10-27 20:00 UTC — 1/1 pares analisados (0 sem barra, 0 dados parados), "
+        "0 rompimentos (0L/0S), 0 saídas, 0 entradas, 0 pulados; posições abertas 0/10; "
+        "equity $172.81 (DD 0.0% do pico)"
+    ]
+
+
+def test_bar_summary_counts_entry_and_exit(caplog):
+    pos = {"symbol": "XUSDT", "side": "LONG", "entry_price": 100.0, "quantity": 0.1, "mark_price": 99.0}
+    ex = _Ex({"XUSDT": _bars_ending(FLAT + [99.0]), "YUSDT": _bars_ending(FLAT + [101.0])}, positions=[pos])
+    bot = _bot(ex, known=_donchian_long())
+    bot.last_drawdown_equity, bot.peak_equity = 180.0, 200.0
+    runner = d.DonchianRunner(bot)
+    runner.universe, runner.universe_week = ["YUSDT"], d.rebalance_start(BOUNDARY)
+    with caplog.at_level(logging.INFO):
+        runner.tick(BOUNDARY + 60_000)
+    [line] = _bar_lines(caplog)
+    assert ("2/2 pares analisados (0 sem barra, 0 dados parados), 1 rompimentos (1L/0S), 1 saídas, "
+            "1 entradas, 0 pulados; posições abertas 1/10; equity $180.00 (DD 10.0% do pico)") in line
+
+
+def test_bar_summary_lists_skip_reasons(caplog):
+    ex = _Ex({"YUSDT": _bars_ending(FLAT + [101.0])})
+    bot = _bot(ex)
+    bot.paused = True
+    runner = d.DonchianRunner(bot)
+    runner.universe, runner.universe_week = ["YUSDT"], d.rebalance_start(BOUNDARY)
+    with caplog.at_level(logging.INFO):
+        runner.tick(BOUNDARY + 60_000)
+    [line] = _bar_lines(caplog)
+    assert "0 entradas, 1 pulados (bot pausado ×1); posições abertas 0/10; equity n/d" in line
+
+
+def test_deferred_bar_logs_that_it_was_not_processed(caplog):
+    ex = _Ex({"XUSDT": _bars_ending(FLAT + [101.0])})
+    ex.get_open_positions = MagicMock(side_effect=RuntimeError("timeout"))
+    runner = d.DonchianRunner(_bot(ex))
+    runner.universe, runner.universe_week = ["XUSDT"], d.rebalance_start(BOUNDARY)
+    with caplog.at_level(logging.INFO):
+        runner.tick(BOUNDARY + 60_000)
+        assert _bar_lines(caplog) == []          # ainda dentro da janela: tenta de novo
+        runner.tick(BOUNDARY + 31 * 60_000)
+    assert _bar_lines(caplog) == [
+        "🕓 Donchian: barra 2025-10-27 20:00 UTC NÃO processada — adiada 2x, "
+        "posições indisponíveis (timeout); 1 pares pendentes"
+    ]
