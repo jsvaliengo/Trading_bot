@@ -39,7 +39,7 @@ MIN_TRAIN_TRADES = 30
 MAKER_FEE, THROUGH_PCT, MAKER_K = 0.0002, 0.01, 3
 COSTS = Costs()
 PCFG = PortfolioConfig(initial_equity=10_000.0, sizing="risk", risk_pct=1.0, max_pos_mult=2.0,
-                       max_gross_mult=5.0, max_concurrent=3, sl_buffer=1.0)
+                       max_gross_mult=5.0, max_concurrent=3, sl_buffer=1.0, size_on_initial=True)
 OUT = OUT_DIR / "scalping"
 
 # Top-12 por quote_volume dos 30 dias antes de 1º de janeiro (dado 1d fechado antes da data). Congelado no pré-registro.
@@ -61,7 +61,8 @@ GRIDS = {
     "s2": [{"s": "s2", "R": R, "W": W} for R in (1.0, 1.5, 2.0) for W in (15, 30)],
     "s3": [{"s": "s3", "sig": sg, "sl": sl} for sg in (2.0, 2.5) for sl in ("3sig", "atr")],
 }
-VARIANTS = [f"{s}_{tf}_{e}" for s, entries in (("s1", "tm"), ("s2", "t"), ("s3", "mt")) for tf in ("1m", "5m") for e in entries]
+# 1m primeiro e as duas S1 1m (as mais pesadas em memória) separadas na fila
+VARIANTS = ["s1_1m_t", "s2_1m_t", "s3_1m_m", "s3_1m_t", "s1_1m_m", "s1_5m_t", "s1_5m_m", "s2_5m_t", "s3_5m_m", "s3_5m_t"]
 
 
 def ckey(cell: dict) -> str:
@@ -475,10 +476,13 @@ def coverage(bars: Dict[str, Bars], bars5: Dict[str, Bars]) -> dict:
             "per_symbol_5m": one(bars5, 300_000)}
 
 
+_DATA: Dict[str, Dict[str, Bars]] = {}   # carregado no pai antes do fork: os filhos leem copy-on-write
+
+
 def run_variant(variant: str) -> dict:
     t0 = time.time()
-    bars5 = load_all("5m")
-    bars = load_all("1m") if variant.split("_")[1] == "1m" else bars5
+    bars5 = _DATA.get("5m") or load_all("5m")
+    bars = (_DATA.get("1m") or load_all("1m")) if variant.split("_")[1] == "1m" else bars5
     fund = {s: vision.load_funding(s) for s in bars}
     book = Book(variant, bars, bars5, fund)
     logger.info("%s: livro pronto, %d sinais (%.0fs)", variant, sum(len(sd.signals.idx) for sd in book.sym_data.values()), time.time() - t0)
@@ -510,10 +514,8 @@ def run_variant(variant: str) -> dict:
 def cmd_run(args):
     OUT.mkdir(parents=True, exist_ok=True)
     variants = args.variants.split(",")
-    bars5 = load_all("5m")
-    bars = load_all("1m")
-    results = {"coverage": coverage(bars, bars5), "prereg_commit": args.prereg, "variants": {}}
-    del bars, bars5
+    _DATA["5m"], _DATA["1m"] = load_all("5m"), load_all("1m")
+    results = {"coverage": coverage(_DATA["1m"], _DATA["5m"]), "prereg_commit": args.prereg, "variants": {}}
     import multiprocessing as mp
     with ProcessPoolExecutor(max_workers=args.workers, mp_context=mp.get_context("fork")) as ex:
         for v, r in zip(variants, ex.map(run_variant, variants)):
@@ -526,18 +528,28 @@ def _f(x, nd=3):
     return "n/d" if x is None or x != x else f"{x:+.{nd}f}%"
 
 
-def _row(name: str, m: dict) -> str:
+def slip_pct(m: dict, variant: str) -> float:
+    """Slippage médio por trade (% do notional) implícito nos preços: 0,03% por perna taker + 0,10% no stop.
+    Determinístico pelas saídas, por isso não precisa estar gravado por trade."""
+    ex, n = m.get("exits", {}), max(1, m["trades"])
+    maker_entry, maker_tp = variant.endswith("_m"), variant.startswith("s3") and variant.endswith("_m")
+    legs = (0.0 if maker_entry else 0.03) + 0.03 * (n - (ex.get("tp", 0) if maker_tp else 0)) / n
+    return legs + 0.10 * ex.get("sl", 0) / n
+
+
+def _row(name: str, m: dict, variant: str = "") -> str:
     lo, hi = m["exp_ci95_pct"]
+    sl_pct = slip_pct(m, variant)
     sd = m.get("by_side", {})
     side = " / ".join(f"{_f(sd.get(k, {}).get('exp_pct'))} ({sd.get(k, {}).get('trades', 0)})" for k in ("LONG", "SHORT"))
     ex = m.get("exits", {})
     return (f"| {name} | {m['trades']} | {m['win_pct']:.1f}% | {_f(m['avg_win_pct'])} / {_f(m['avg_loss_pct'])} | "
-            f"**{_f(m['exp_pct'])}** ({_f(lo)}; {_f(hi)}) | {_f(m['gross_exp_pct'])} | {m['fee_pct_per_trade']:.3f}% "
+            f"**{_f(m['exp_pct'])}** ({_f(lo)}; {_f(hi)}) | {_f(m['gross_exp_pct'] + sl_pct)} / {_f(m['gross_exp_pct'])} | {m['fee_pct_per_trade']:.3f}% + {sl_pct:.3f}% "
             f"({m['fee_pct_of_avg_win'] if m['fee_pct_of_avg_win'] == m['fee_pct_of_avg_win'] else float('nan'):.0f}%) | "
             f"{m['max_dd_pct']:.1f}% | {side} | sl {ex.get('sl', 0)} / tp {ex.get('tp', 0)} / time {ex.get('time', 0)} |")
 
 
-HEAD = ("| variante | trades | win% | ganho / perda méd | exp líq/trade (IC95% bloco-dia) | exp bruta | fee/trade (% do ganho méd) | "
+HEAD = ("| variante | trades | win% | ganho / perda méd | exp líq/trade (IC95% bloco-dia) | exp bruta sem custo / só c/ slippage | fee + slippage/trade (fee % do ganho méd) | "
         "DD máx | LONG / SHORT exp (n) | saídas |\n|---|---|---|---|---|---|---|---|---|---|")
 
 
@@ -550,9 +562,9 @@ def cmd_report(args):
         c5 = cov["per_symbol_5m"].get(s, {})
         L.append(f"| {s} | {c['first']} | {c['last']} | {c['bars']:,} | {c['gaps']} | {c5.get('bars', 0):,} |")
     L += ["", "## Walk-forward OOS (2022-07 → 2026-01)", "", HEAD]
-    L += [_row(v, r["wf"]) for v, r in res["variants"].items()]
+    L += [_row(v, r["wf"], v) for v, r in res["variants"].items()]
     L += ["", "## Holdout (2026-01 → 2026-10), célula escolhida no treino 2025-07 → 2026-01", "", HEAD]
-    L += [_row(f"{v} {json.dumps({k: x for k, x in r['holdout_cell'].items() if k != 's'})}", r["holdout"]) for v, r in res["variants"].items()]
+    L += [_row(f"{v} {json.dumps({k: x for k, x in r['holdout_cell'].items() if k != 's'})}", r["holdout"], v) for v, r in res["variants"].items()]
     for v, r in res["variants"].items():
         w = r["wf"]
         L += ["", f"### {v}", "",

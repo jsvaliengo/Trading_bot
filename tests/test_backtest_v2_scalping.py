@@ -220,3 +220,23 @@ def test_ensure_raw_downloads_only_requested_months(tmp_path, monkeypatch):
     n = vision.ensure_raw("XUSDT", "klines", "1m", H(), months={"2022-02"})
     assert n == 1 and got == [vision.FILE_URL + keys[1]]
     assert sorted(p.name for p in (tmp_path / "klines" / "1m" / "XUSDT").glob("*.zip")) == ["XUSDT-1m-2022-02.zip"]
+
+
+def test_size_on_initial_keeps_trading_after_equity_goes_to_zero():
+    """Sem size_on_initial o motor para quando a equity chega a 0 (gap × alavancagem) e trunca a amostra OOS."""
+    from scripts.backtest_v2.engine import PortfolioConfig, SymbolData, run_portfolio
+    from scripts.backtest_v2.strategies import SignalSet
+
+    n = 400
+    b = _flat(n, 100.0)
+    b.open[2::2] = b.low[2::2] = 30.0                  # entrada em 100 (ímpar), gap de 70% através do stop (par)
+    idx = np.arange(0, n - 2, 2, dtype=np.int64)
+    sd = {"XUSDT": SymbolData(b, SignalSet(idx, np.full(len(idx), LONG, np.int8)), None)}
+    sched = [(0, int(b.open_time[-1]) + 1, {"sl_pct": 5.0})]
+    pc = PortfolioConfig(initial_equity=1000.0, risk_pct=100.0, max_pos_mult=2.0, max_concurrent=3)
+    compounding = run_portfolio(sd, sched, 0, int(b.open_time[-1]) + 1, Costs(), pc, with_curve=False)
+    pc.size_on_initial = True
+    constant = run_portfolio(sd, sched, 0, int(b.open_time[-1]) + 1, Costs(), pc, with_curve=False)
+    assert len(constant.trades) == len(idx)
+    assert len(compounding.trades) == 1 and compounding.final_equity < 0
+    assert all(t.notional == pytest.approx(2000.0) for t in constant.trades)
