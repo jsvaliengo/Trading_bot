@@ -481,6 +481,10 @@ _DATA: Dict[str, Dict[str, Bars]] = {}   # carregado no pai antes do fork: os fi
 
 def run_variant(variant: str) -> dict:
     t0 = time.time()
+    done = OUT / f"result_{variant}.json"
+    if _DATA.get("resume") and done.exists():
+        logger.info("%s: reaproveitando %s", variant, done)
+        return json.loads(done.read_text())
     bars5 = _DATA.get("5m") or load_all("5m")
     bars = (_DATA.get("1m") or load_all("1m")) if variant.split("_")[1] == "1m" else bars5
     fund = {s: vision.load_funding(s) for s in bars}
@@ -489,6 +493,7 @@ def run_variant(variant: str) -> dict:
     wf_res, sel, oos0 = walk_forward(book)
     wf_attempts = book.attempts
     wf = metrics(wf_res, f"{variant}_wf")
+    logger.info("%s: walk-forward pronto, %d trades (%.0fs)", variant, wf["trades"], time.time() - t0)
     OUT.mkdir(parents=True, exist_ok=True)
     write_trades_csv(OUT / f"wf_trades_{variant}.csv", wf_res.trades)
     hcell, hscores = select(book, to_ms("2025-07-01"), HOLD_START)
@@ -515,6 +520,7 @@ def cmd_run(args):
     OUT.mkdir(parents=True, exist_ok=True)
     variants = args.variants.split(",")
     _DATA["5m"], _DATA["1m"] = load_all("5m"), load_all("1m")
+    _DATA["resume"] = args.resume
     results = {"coverage": coverage(_DATA["1m"], _DATA["5m"]), "prereg_commit": args.prereg, "variants": {}}
     import multiprocessing as mp
     with ProcessPoolExecutor(max_workers=args.workers, mp_context=mp.get_context("fork")) as ex:
@@ -594,6 +600,7 @@ def main(argv=None):
     r.add_argument("--variants", default=",".join(VARIANTS))
     r.add_argument("--workers", type=int, default=5)
     r.add_argument("--prereg", default="8797a2d")
+    r.add_argument("--resume", action="store_true", help="reaproveita result_<variante>.json já existente")
     r.set_defaults(fn=cmd_run)
     sub.add_parser("report").set_defaults(fn=cmd_report)
     args = p.parse_args(argv)
