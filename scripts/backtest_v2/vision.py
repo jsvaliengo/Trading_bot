@@ -119,14 +119,18 @@ def list_keys(http: _Http, kind: str, sym: str, tf: str = "") -> List[str]:
     return sorted(keys)
 
 
-def ensure_raw(sym: str, kind: str, tf: str = "", http: Optional[_Http] = None) -> int:
-    """Baixa os zips que faltam. Devolve quantos baixou."""
+def ensure_raw(sym: str, kind: str, tf: str = "", http: Optional[_Http] = None,
+               months: Optional[set] = None) -> int:
+    """Baixa os zips que faltam (só os meses "YYYY-MM" em `months`, se dado). Devolve quantos baixou."""
     if not _SYM_RE.match(sym):
         raise ValueError(f"símbolo inválido: {sym!r}")
     http = http or _Http()
     n = 0
     d = _raw_dir(kind, sym, tf)
+    d.mkdir(parents=True, exist_ok=True)
     for key in list_keys(http, kind, sym, tf):
+        if months is not None and key[-11:-4] not in months:
+            continue
         dst = d / key.rsplit("/", 1)[1]
         if dst.exists():
             continue
@@ -235,9 +239,10 @@ def load_funding(sym: str) -> np.ndarray:
     return np.load(p)["a"] if p.exists() else np.zeros((0, 3))
 
 
-def download(syms: List[str], kind: str, tf: str = "", threads: int = 8) -> Dict[str, int]:
+def download(syms: List[str], kind: str, tf: str = "", threads: int = 8,
+             months: Optional[Dict[str, set]] = None) -> Dict[str, int]:
     def one(s):
-        n = ensure_raw(s, kind, tf, _Http())
+        n = ensure_raw(s, kind, tf, _Http(), None if months is None else months.get(s))
         build(s, kind, tf)
         return s, n
     t0 = time.time()
