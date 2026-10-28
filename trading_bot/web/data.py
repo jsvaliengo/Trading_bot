@@ -172,8 +172,8 @@ def collect_health(bot, summary: Optional[Dict[str, Any]] = None) -> Dict[str, A
         "runtime": runtime,
         "uptime_seconds": uptime,
         "paused_reason": reason,
-        "deploy_sha": str(deploy.get("sha") or deploy.get("commit") or deploy.get("git_sha") or "")[:12] or None,
-        "deploy_at": deploy.get("deployed_at") or deploy.get("timestamp") or deploy.get("date"),
+        "deploy_sha": str(deploy.get("deploy_sha") or deploy.get("sha") or deploy.get("commit") or deploy.get("git_sha") or "")[:12] or None,
+        "deploy_at": deploy.get("deployed_at_utc") or deploy.get("deployed_at") or deploy.get("timestamp") or deploy.get("date"),
     }
 
 

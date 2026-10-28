@@ -181,6 +181,20 @@ def test_collect_engine_e_health(monkeypatch, tmp_path):
     assert dash.collect_engine(SimpleNamespace()) == {}
 
 
+def test_collect_health_le_deploy_info_do_update_server(monkeypatch, tmp_path):
+    # Forma real escrita por scripts/update_server.sh
+    monkeypatch.setattr(config, "PROJECT_ROOT", str(tmp_path))
+    (tmp_path / "runtime").mkdir()
+    (tmp_path / "runtime" / "deploy_info.json").write_text(
+        '{"deployed_at_utc": "2026-10-28T12:34:56Z", "deploy_sha": "b8740eb1234567890abc", '
+        '"deploy_ref": "main", "deploy_actor": "jsvaliengo", "host": "vm"}'
+    )
+    dash._deploy_cache.update({"mtime": None, "data": {}})
+    h = dash.collect_health(SimpleNamespace(), {})
+    assert h["deploy_sha"] == "b8740eb12345"
+    assert h["deploy_at"] == "2026-10-28T12:34:56Z"
+
+
 def test_donchian_runner_snapshot_e_json_safe():
     from collections import Counter
 
