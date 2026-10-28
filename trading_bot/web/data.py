@@ -53,6 +53,8 @@ def collect_snapshot(bot) -> Dict[str, Any]:
         "engine": collect_engine(bot),
         "health": collect_health(bot, summary),
         "server_time": datetime.utcnow().isoformat() + "Z",
+        # fuso em que o dashboard mostra horários (o mesmo do dia de trading)
+        "tz_offset_hours": float(getattr(config, "DAILY_PNL_TZ_OFFSET_HOURS", 0.0) or 0.0),
     }
 
 

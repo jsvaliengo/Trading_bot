@@ -24,9 +24,13 @@
         num(v, d = 2) { if (!isNum(v)) return '—'; return Number(v).toLocaleString('pt-BR', { minimumFractionDigits: d, maximumFractionDigits: d }); },
         price(v) { if (!isNum(v)) return '—'; const a = Math.abs(v); const d = a >= 1000 ? 1 : a >= 10 ? 2 : a >= 1 ? 3 : a >= 0.01 ? 5 : 7; return Number(v).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d }); },
         r(v) { if (!isNum(v)) return '—'; return (v < 0 ? '−' : '+') + Math.abs(v).toFixed(2).replace('.', ',') + 'R'; },
-        time(iso) { if (!iso) return '—'; const d = new Date(iso); return isNaN(d) ? iso : d.toLocaleTimeString('pt-BR', { hour12: false }); },
-        dateTime(iso) { if (!iso) return '—'; const d = new Date(iso); return isNaN(d) ? iso : d.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }); },
-        date(iso) { if (!iso) return '—'; const d = new Date(iso); return isNaN(d) ? iso : d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' }); },
+        // Horários no fuso do dia de trading (snapshot.tz_offset_hours), não no do navegador:
+        // desloca o instante e formata como UTC, porque toLocale* só aceita nomes IANA.
+        _tz(iso) { const d = new Date(iso); return isNaN(d) ? null : new Date(d.getTime() + (fmt.tzOffset || 0) * 3600e3); },
+        tzLabel() { const o = fmt.tzOffset || 0; return o ? `UTC${o > 0 ? '+' : '−'}${Math.abs(o)}` : 'UTC'; },
+        time(iso) { if (!iso) return '—'; const d = fmt._tz(iso); return d ? d.toLocaleTimeString('pt-BR', { hour12: false, timeZone: 'UTC' }) : iso; },
+        dateTime(iso) { if (!iso) return '—'; const d = fmt._tz(iso); return d ? d.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'UTC' }) : iso; },
+        date(iso) { if (!iso) return '—'; const d = fmt._tz(iso); return d ? d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'UTC' }) : iso; },
         dur(h) {
             if (!isNum(h)) return '—';
             if (h < 1) return Math.round(h * 60) + ' min';
@@ -131,7 +135,7 @@
         const d = ft.elapsed_days || 0, td = ft.target_days || 182;
         $('tr-days').textContent = `${Math.floor(d)} / ${td} dias`;
         setMeter('m-days', d / td * 100, td, Math.floor(d));
-        $('tr-days-f').textContent = `início ${fmt.dateTime(ft.start)} UTC · prazo mínimo ${fmt.date(ft.end_by_time)}`;
+        $('tr-days-f').textContent = `início ${fmt.dateTime(ft.start)} ${fmt.tzLabel()} · prazo mínimo ${fmt.date(ft.end_by_time)}`;
         const dd = ft.drawdown_pct || 0, lim = ft.dd_limit_pct || 20;
         $('tr-dd').textContent = `${fmt.pct(dd, 1, false)} / ${lim}%`;
         setMeter('m-dd', dd / lim * 100, lim, dd);
@@ -191,7 +195,7 @@
         return f.length >= 2 ? f : hist.slice(-2);
     }
     function timeScale(p, show) {
-        return { type: 'linear', display: show, ticks: { color: p.mut, font: tickFont, maxTicksLimit: 6, callback: v => { const d = new Date(v); return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }) + ' ' + d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }); } }, grid: { color: p.grid } };
+        return { type: 'linear', display: show, ticks: { color: p.mut, font: tickFont, maxTicksLimit: 6, callback: v => fmt.dateTime(v) }, grid: { color: p.grid } };
     }
     function renderEquity(hist, trades, ft) {
         const el = $('equity-chart'), elD = $('drawdown-chart');
@@ -438,6 +442,7 @@
     function applySnapshot(snap) {
         if (!snap) return;
         state.snapshot = snap;
+        fmt.tzOffset = Number(snap.tz_offset_hours) || 0;
         try { renderAll(snap); } catch (e) { console.error('render falhou', e); }
         $('meta-updated').textContent = fmt.time(snap.server_time);
         resetCountdown();
