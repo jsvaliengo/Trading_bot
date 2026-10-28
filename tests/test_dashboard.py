@@ -142,6 +142,7 @@ def test_snapshot_accepts_valid_auth():
     assert "recent_trades" in payload
     assert "regime" in payload
     assert "portfolio_history" in payload
+    assert payload["tz_offset_hours"] == float(global_config.DAILY_PNL_TZ_OFFSET_HOURS or 0.0)
 
 
 def test_index_requires_auth_returns_html():
@@ -152,7 +153,7 @@ def test_index_requires_auth_returns_html():
     assert r.status_code == 401
     r = client.get("/", headers=_basic_auth("admin", "secret"))
     assert r.status_code == 200
-    assert b"Trading Bot" in r.data
+    assert b"Forward test" in r.data
     assert b"socket.io" in r.data.lower() or b"socket.io" in r.data
 
 

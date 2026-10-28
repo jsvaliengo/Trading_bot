@@ -10,12 +10,15 @@ retornamos campos vazios em vez de bloquear.
 
 from __future__ import annotations
 
+import json
+import os
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from ..core.config import config
-from ..core.equity import effective_equity
+from ..core.equity import effective_equity, simulated_balance
 from ..core.trade_store import trading_day_start
+from . import forward_test as ft
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -35,17 +38,142 @@ def _iso(dt: Any) -> Optional[str]:
 
 def collect_snapshot(bot) -> Dict[str, Any]:
     """Snapshot completo para a primeira carga e fallback de polling."""
+    summary = collect_summary(bot)
     return {
-        "summary": collect_summary(bot),
+        "summary": summary,
         "positions": collect_positions(bot),
-        "recent_trades": collect_recent_trades(bot, limit=50),
+        "recent_trades": collect_recent_trades(bot, limit=300),
         "regime": collect_regime(bot),
-        "portfolio_history": collect_portfolio_history(bot, limit=200),
+        "portfolio_history": collect_portfolio_history(bot, limit=3000),
         "daily_history": collect_daily_history(bot),
         "pnl_analysis": collect_pnl_analysis(bot),
         "pnl_by_symbol": collect_pnl_by_symbol(bot),
         "mfe_distribution": collect_mfe_distribution(bot),
+        "forward_test": collect_forward_test(bot, summary),
+        "engine": collect_engine(bot),
+        "health": collect_health(bot, summary),
         "server_time": datetime.utcnow().isoformat() + "Z",
+        # fuso em que o dashboard mostra horários (o mesmo do dia de trading)
+        "tz_offset_hours": float(getattr(config, "DAILY_PNL_TZ_OFFSET_HOURS", 0.0) or 0.0),
+    }
+
+
+def collect_forward_test(bot, summary: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Progresso do forward test (trades Donchian fechados desde o início) com a
+    MESMA equity/pico do drawdown do bot. Vazio sem TradeStore."""
+    store = getattr(bot, "trade_store", None)
+    if store is None or not hasattr(store, "closed_trades"):
+        return {}
+    try:
+        rows = store.closed_trades(ft.STRATEGY)
+    except Exception:
+        return {}
+    summary = summary or {}
+    peak = _safe_float(getattr(bot, "peak_equity", 0.0) or 0.0)
+    equity = summary.get("last_balance")
+    base = None
+    if equity is not None:
+        # equity no início do teste = equity agora − não-realizado − realizado Donchian
+        start = ft.parse_utc(ft.START_ISO)
+        net = sum(_safe_float(r.get("pnl_net")) for r in rows
+                  if start is None or (ft.parse_utc(r.get("exit_at")) or start) >= start)
+        base = _safe_float(equity) - _safe_float(summary.get("unrealized_pnl")) - net
+    return ft.summarize(
+        rows,
+        sim_balance=simulated_balance(config) or _safe_float(summary.get("initial_capital")),
+        base_equity=base,
+        equity_now=_safe_float(equity) if equity is not None else None,
+        peak_equity=peak or None,
+        dd_limit_pct=_safe_float(getattr(config, "DONCHIAN_MAX_DRAWDOWN_PERCENT", ft.DD_LIMIT_PCT), ft.DD_LIMIT_PCT),
+    )
+
+
+def collect_engine(bot) -> Dict[str, Any]:
+    """Estado do motor Donchian (barra, universo, pulos). {} sem runner."""
+    runner = getattr(bot, "donchian", None)
+    if runner is None or not hasattr(runner, "snapshot"):
+        return {}
+    try:
+        return runner.snapshot()
+    except Exception:
+        return {}
+
+
+_deploy_cache: Dict[str, Any] = {"mtime": None, "data": {}}
+
+
+def _deploy_info() -> Dict[str, Any]:
+    """runtime/deploy_info.json (escrito pelo deploy), relido só quando muda."""
+    path = os.path.join(str(getattr(config, "PROJECT_ROOT", "") or "."), "runtime", "deploy_info.json")
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        return {}
+    if _deploy_cache["mtime"] != mtime:
+        try:
+            with open(path, encoding="utf-8") as fh:
+                _deploy_cache["data"] = json.load(fh)
+        except (OSError, ValueError):
+            _deploy_cache["data"] = {}
+        _deploy_cache["mtime"] = mtime
+    return dict(_deploy_cache["data"])
+
+
+def collect_health(bot, summary: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Saúde operacional: WS de klines, user stream, erros do loop, deploy, uptime
+    e o motivo provável da pausa (o bot não guarda o motivo; inferido do estado)."""
+    summary = summary or {}
+    exchange = getattr(bot, "exchange", None)
+    ws = user = None
+    for name, target in (("get_ws_stats", "ws"), ("get_user_stream_stats", "user")):
+        try:
+            value = getattr(exchange, name)() if exchange is not None and hasattr(exchange, name) else None
+        except Exception:
+            value = None
+        if target == "ws" and value:
+            streams = value.get("streams") or []
+            ws = {
+                "subscriptions": value.get("subscriptions", len(streams)),
+                "reconnects": value.get("reconnects", 0),
+                "recovering": sum(1 for s in streams if s.get("recovering")),
+                "max_age_seconds": max([_safe_float(s.get("age_seconds")) for s in streams] or [0.0]),
+            }
+        elif target == "user" and value:
+            user = {k: value.get(k) for k in ("started", "error_count", "restart_attempts", "last_message_age_seconds")}
+    runtime: Dict[str, Any] = {}
+    try:
+        if hasattr(bot, "get_runtime_stats_report"):
+            r = bot.get_runtime_stats_report(reset=False)
+            runtime = {"loop_errors": r.get("loop_errors", 0), "last_error": r.get("last_error", ""),
+                       "monitor_cycles": r.get("monitor_cycles", 0)}
+    except Exception:
+        runtime = {}
+    started = getattr(bot, "start_time", None)
+    uptime = None
+    if isinstance(started, datetime):
+        now = datetime.now(started.tzinfo) if started.tzinfo else datetime.now()
+        uptime = max(0.0, (now - started).total_seconds())
+    paused = bool(summary.get("paused", getattr(bot, "paused", False)))
+    reason = None
+    if paused:
+        peak = _safe_float(getattr(bot, "peak_equity", 0.0))
+        eq = getattr(bot, "last_drawdown_equity", None)
+        limit = _safe_float(getattr(config, "DONCHIAN_MAX_DRAWDOWN_PERCENT", 20.0), 20.0)
+        if eq is not None and peak > 0 and (peak - _safe_float(eq)) / peak * 100.0 >= limit:
+            reason = f"drawdown ≥ {limit:g}% do pico (regra do forward test)"
+        elif bool(getattr(config, "START_PAUSED", False)):
+            reason = "START_PAUSED no .env"
+        else:
+            reason = "pausa manual (dashboard ou Telegram)"
+    deploy = _deploy_info()
+    return {
+        "ws": ws,
+        "user_stream": user,
+        "runtime": runtime,
+        "uptime_seconds": uptime,
+        "paused_reason": reason,
+        "deploy_sha": str(deploy.get("sha") or deploy.get("commit") or deploy.get("git_sha") or "")[:12] or None,
+        "deploy_at": deploy.get("deployed_at") or deploy.get("timestamp") or deploy.get("date"),
     }
 
 
@@ -353,13 +481,35 @@ def collect_positions(bot) -> List[Dict[str, Any]]:
                 "last_seen": _iso(payload.get("last_seen")),
                 "entry_time": _iso(payload.get("entry_time")),
                 # Donchian não tem trailing: stop na exchange + saída no canal de 20.
-                **({} if payload.get("strategy_type") == "donchian_4h"
+                **(_donchian_position_risk(bot, payload, mark_price, unrealized_pnl)
+                   if payload.get("strategy_type") == "donchian_4h"
                    else _trailing_live_state(bot, position_key, side, entry_price, payload)),
             }
         )
 
     positions.sort(key=lambda p: (p["symbol"], p["side"]))
     return positions
+
+
+def _donchian_position_risk(bot, payload: Dict[str, Any], mark: Optional[float],
+                            unrealized: Optional[float]) -> Dict[str, Any]:
+    """Risco da posição Donchian: $ até o stop, % até o stop, R atual e o nível do
+    canal de saída da última barra (do runner, sem chamada à exchange)."""
+    trade = {"entry_price": payload.get("entry_price"), "stop_loss": payload.get("custom_stop_loss"),
+             "qty": payload.get("quantity")}
+    risk = ft.initial_risk_usd(trade)
+    entry, stop = _safe_float(payload.get("entry_price")), _safe_float(payload.get("custom_stop_loss"))
+    side = payload.get("side", "")
+    ref = mark if mark else entry
+    stop_dist = ((ref - stop) / ref * 100.0 if side == "LONG" else (stop - ref) / ref * 100.0) if stop and ref else None
+    levels = (getattr(getattr(bot, "donchian", None), "exit_levels", None) or {}).get(payload.get("symbol"), {})
+    exit_level = levels.get("exit_long" if side == "LONG" else "exit_short")
+    return {
+        "risk_usd": risk,
+        "stop_distance_pct": stop_dist,
+        "r_now": (unrealized / risk) if (risk and unrealized is not None) else None,
+        "exit_level": exit_level,
+    }
 
 
 def collect_recent_trades(bot, limit: int = 20) -> List[Dict[str, Any]]:
@@ -369,24 +519,31 @@ def collect_recent_trades(bot, limit: int = 20) -> List[Dict[str, Any]]:
     if store is not None:
         try:
             rows = store.recent_trades(limit)  # cronológico
-            out = [
-                {
+            out = []
+            for e in rows:
+                if not isinstance(e, dict):
+                    continue
+                row = {"opened_at": e.get("timestamp"), "exit_at": e.get("exit_time"), **e}
+                out.append({
                     "timestamp": _iso(e.get("timestamp")) or e.get("timestamp"),
+                    "exit_time": _iso(e.get("exit_time")),
                     "symbol": e.get("symbol", ""),
                     "side": e.get("side", ""),
                     "signal": e.get("signal", ""),
                     "entry_price": _safe_float(e.get("entry_price")),
                     "exit_price": _safe_float(e.get("exit_price")),
+                    "qty": e.get("qty"),
+                    "stop_loss": e.get("stop_loss"),
                     "pnl_net": _safe_float(e.get("pnl_net")),
                     "pnl_gross": _safe_float(e.get("pnl_gross")),
                     "fees": _safe_float(e.get("fees")),
+                    "funding": e.get("funding"),
                     "strategy_name": e.get("strategy_name", "primary"),
+                    "strategy_type": e.get("strategy_type"),
                     "close_reason": e.get("close_reason", ""),
                     "mfe_pct": e.get("mfe_pct"),
-                }
-                for e in rows
-                if isinstance(e, dict)
-            ]
+                    **ft.enrich_trade(row),
+                })
             out.reverse()  # mais recentes primeiro
             return out
         except Exception:
@@ -476,8 +633,17 @@ def collect_portfolio_history(bot, limit: int = 200) -> List[Dict[str, Any]]:
     do snapshot, que carrega o realizado do DIA (reseta à meia-noite UTC), então
     o gráfico divergia do card (302 no card, 299 na curva). Agora batem.
     """
-    history = getattr(bot, "portfolio_history", []) or []
     store = getattr(bot, "trade_store", None)
+    # A lista em memória guarda 144 snapshots; a tabela portfolio_history do SQLite
+    # guarda a vida toda, e o forward test precisa da curva desde o início.
+    history: List = []
+    if store is not None and hasattr(store, "recent_equity"):
+        try:
+            history = store.recent_equity(limit) or []
+        except Exception:
+            history = []
+    if not history:
+        history = getattr(bot, "portfolio_history", []) or []
 
     # Trades fechados (exit_at, pnl_net) ordenados — base do realizado acumulado.
     closed: List = []
@@ -519,4 +685,14 @@ def collect_portfolio_history(bot, limit: int = 200) -> List[Dict[str, Any]]:
                 "closed_trades": int(snap.get("closed_trades", 0) or 0),
             }
         )
-    return out
+    return downsample(out, 600)
+
+
+def downsample(points: List[Any], max_points: int) -> List[Any]:
+    """Mantém no máximo max_points, sempre com o primeiro e o último; o Chart.js
+    não precisa de mais que isso em 1000px e o JSON fica pequeno."""
+    n = len(points)
+    if n <= max_points or max_points < 2:
+        return points
+    step = (n - 1) / (max_points - 1)
+    return [points[round(i * step)] for i in range(max_points)]

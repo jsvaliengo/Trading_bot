@@ -176,6 +176,34 @@ class DonchianRunner:
         self._pending: Set[str] = set()
         self._retry_universe_at = 0
         self._bar: Dict[str, Any] = {}
+        # Níveis do canal de saída da última barra processada por símbolo (só leitura,
+        # para o dashboard): {sym: {"exit_long": min low m, "exit_short": max high m}}.
+        self.exit_levels: Dict[str, Dict[str, float]] = {}
+
+    def snapshot(self) -> Dict[str, Any]:
+        """Estado do motor para o dashboard (JSON-safe). Não toca na exchange."""
+        b = self._bar or {}
+        boundary = self._boundary
+
+        def iso(ms: int) -> str:
+            return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).isoformat()
+
+        return {
+            "universe": list(self.universe),
+            "universe_week": iso(self.universe_week) if self.universe_week else None,
+            "bar_close": iso(boundary) if boundary else None,
+            "next_bar_close": iso(boundary + H4_MS) if boundary else None,
+            "pending": sorted(self._pending),
+            "counters": {k: v for k, v in b.items() if k not in ("skips", "logged")},
+            "skips": dict(b.get("skips") or {}),
+            "exit_levels": dict(self.exit_levels),
+            "params": {
+                "entry_bars": config.DONCHIAN_ENTRY_BARS, "exit_bars": config.DONCHIAN_EXIT_BARS,
+                "atr_bars": config.DONCHIAN_ATR_BARS, "stop_atr_mult": config.DONCHIAN_STOP_ATR_MULT,
+                "risk_percent": config.DONCHIAN_RISK_PERCENT, "max_positions": config.DONCHIAN_MAX_POSITIONS,
+                "max_drawdown_percent": config.DONCHIAN_MAX_DRAWDOWN_PERCENT,
+            },
+        }
 
     # ---- startup / universo ----
     def start(self) -> None:
@@ -341,6 +369,9 @@ class DonchianRunner:
                 continue
             sig = last_bar_signal(kl, n=c.DONCHIAN_ENTRY_BARS, m=c.DONCHIAN_EXIT_BARS,
                                   atr_n=c.DONCHIAN_ATR_BARS, k=c.DONCHIAN_STOP_ATR_MULT)
+            tail = kl[-c.DONCHIAN_EXIT_BARS:]
+            self.exit_levels[sym] = {"exit_long": min(float(x["low"]) for x in tail),
+                                     "exit_short": max(float(x["high"]) for x in tail)}
             if pos and (sig.exit_long if pos["side"] == "LONG" else sig.exit_short):
                 if not self._close(pos, f"Donchian: saída no canal de {c.DONCHIAN_EXIT_BARS}"):
                     continue              # fica pendente: tenta de novo no próximo tick
