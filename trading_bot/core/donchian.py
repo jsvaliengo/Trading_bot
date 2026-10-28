@@ -129,35 +129,37 @@ def top_universe(scores: Dict[str, float], top_n: int) -> List[str]:
 # ───────────────────────── sizing ─────────────────────────
 @dataclass(frozen=True)
 class Sizing:
+    qty: float
     notional: float
     risk_usd: float
     skip: Optional[str] = None
 
 
-def size_position(*, equity: float, stop_pct: float, min_notional: float, open_positions: int,
+def size_position(*, equity: float, stop_pct: float, price: float, info: Dict[str, Any], open_positions: int,
                   gross_open: float, risk_pct: float, max_pos_mult: float, max_gross_mult: float,
                   max_positions: int) -> Sizing:
-    """Notional = equity × risco / distância do stop, com os tetos da pesquisa. Abaixo
-    do minNotional sobe para o mínimo, a menos que isso passe de 2× o risco alvo."""
+    """Notional = equity × risco / distância do stop, com os tetos da pesquisa. O risco e os
+    tetos são conferidos na qty FINAL (step do símbolo + minNotional, como a ordem sai):
+    se passar de 2× o risco alvo, pula."""
     if open_positions >= max_positions:
-        return Sizing(0.0, 0.0, f"teto de {max_positions} posições")
-    if equity <= 0 or stop_pct <= 0:
-        return Sizing(0.0, 0.0, "equity ou stop inválido")
+        return Sizing(0.0, 0.0, 0.0, f"teto de {max_positions} posições")
+    if equity <= 0 or stop_pct <= 0 or price <= 0:
+        return Sizing(0.0, 0.0, 0.0, "equity, stop ou preço inválido")
     target_risk = equity * risk_pct / 100.0
     room = equity * max_gross_mult - gross_open
     if room <= 0:
-        return Sizing(0.0, 0.0, f"teto bruto {max_gross_mult:g}x")
-    notional = min(target_risk / stop_pct, equity * max_pos_mult, room)
-    if notional < min_notional:
-        if min_notional * stop_pct > 2 * target_risk:
-            return Sizing(0.0, 0.0, (
-                f"minNotional ${min_notional:g} exige risco ${min_notional * stop_pct:.2f} "
-                f"> 2× alvo ${target_risk:.2f}"
-            ))
-        if min_notional > min(room, equity * max_pos_mult):
-            return Sizing(0.0, 0.0, f"minNotional ${min_notional:g} não cabe nos tetos")
-        notional = min_notional
-    return Sizing(notional, notional * stop_pct)
+        return Sizing(0.0, 0.0, 0.0, f"teto bruto {max_gross_mult:g}x")
+    cap = min(equity * max_pos_mult, room)
+    qty = _round_qty_for_min_notional(min(target_risk / stop_pct, cap) / price, price, info)
+    notional = qty * price
+    risk = notional * stop_pct
+    if risk > 2 * target_risk:
+        return Sizing(0.0, 0.0, 0.0, (
+            f"minNotional/step: risco ${risk:.2f} = {risk / target_risk:.2f}× alvo ${target_risk:.2f} (qty {qty:g})"
+        ))
+    if notional > cap + 1e-9:
+        return Sizing(0.0, 0.0, 0.0, f"qty mínima ${notional:.2f} não cabe nos tetos")
+    return Sizing(qty, notional, risk)
 
 
 # ───────────────────────── runner ao vivo ─────────────────────────
@@ -377,9 +379,13 @@ class DonchianRunner:
         count = len(open_by_sym)
         for sym, sig in entries:
             info = ex.get_symbol_info(sym)
+            try:
+                price = float(ex.get_symbol_ticker(sym).get("price") or 0)
+            except (TypeError, ValueError):
+                price = 0.0
             sizing = size_position(
-                equity=equity, stop_pct=sig.stop_pct, min_notional=float(info.get("minNotional", 5.0)),
-                open_positions=count, gross_open=gross, risk_pct=c.DONCHIAN_RISK_PERCENT,
+                equity=equity, stop_pct=sig.stop_pct, price=price, info=info, open_positions=count,
+                gross_open=gross, risk_pct=c.DONCHIAN_RISK_PERCENT,
                 max_pos_mult=c.DONCHIAN_MAX_POSITION_MULT, max_gross_mult=c.DONCHIAN_MAX_GROSS_MULT,
                 max_positions=c.DONCHIAN_MAX_POSITIONS,
             )
@@ -388,7 +394,7 @@ class DonchianRunner:
                                f"(equity ${equity:.2f}, stop {sig.stop_pct * 100:.2f}%)")
                 self._bar["skips"][sizing.skip] += 1
                 continue
-            notional = self._open(sym, str(sig.entry), sig.stop_pct, sizing, info)
+            notional = self._open(sym, str(sig.entry), sig.stop_pct, sizing, info, price)
             if notional:
                 count += 1
                 gross += notional
@@ -433,17 +439,11 @@ class DonchianRunner:
         self.bot.exchange.cancel_open_orders(pos["symbol"])   # o STOP_MARKET closePosition fica órfão
         return True
 
-    def _open(self, symbol: str, side: str, stop_pct: float, sizing: Sizing, info: Dict[str, Any]) -> float:
+    def _open(self, symbol: str, side: str, stop_pct: float, sizing: Sizing, info: Dict[str, Any],
+              price: float) -> float:
         stop: Optional[float]
         bot, ex = self.bot, self.bot.exchange
-        try:
-            price = float(ex.get_symbol_ticker(symbol).get("price") or 0)
-        except (TypeError, ValueError):
-            price = 0.0
-        if price <= 0:
-            logger.error(f"❌ Donchian: preço inválido para {symbol} — entrada cancelada")
-            return 0.0
-        qty = _round_qty_for_min_notional(sizing.notional / price, price, info)
+        qty = sizing.qty
         ex.cancel_open_orders(symbol)
         ex.set_leverage(symbol, config.LEVERAGE)
         logger.info(f"🚀 Donchian: abrindo {side} {symbol} qty {qty} (~${qty * price:.2f}, "
