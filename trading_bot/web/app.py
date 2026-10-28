@@ -86,6 +86,7 @@ def _register_routes(app: Flask, socketio: SocketIO) -> None:
             "dashboard.html",
             environment="testnet" if getattr(config, "USE_TESTNET", False) else "mainnet",
             poll_interval=int(getattr(config, "DASHBOARD_POLL_INTERVAL_SECONDS", 5)),
+            strategy=str(getattr(config, "STRATEGY", "pullback") or "pullback"),
         )
 
     @app.route("/api/healthz")

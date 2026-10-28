@@ -152,7 +152,7 @@ def test_index_requires_auth_returns_html():
     assert r.status_code == 401
     r = client.get("/", headers=_basic_auth("admin", "secret"))
     assert r.status_code == 200
-    assert b"Trading Bot" in r.data
+    assert b"Forward test" in r.data
     assert b"socket.io" in r.data.lower() or b"socket.io" in r.data
 
 

@@ -840,6 +840,26 @@ class TradeStore:
             logger.exception("🗃️ Falha ao contar trades fechados no TradeStore")
             return 0
 
+    def closed_trades(self, strategy_type: Optional[str] = None, limit: int = 2000) -> List[Dict[str, Any]]:
+        """Trades FECHADOS com todas as colunas (stop_loss, qty, value, funding...),
+        em ordem de saída. Base do painel do forward test (R-múltiplos, calendário).
+        strategy_type=None traz todas as estratégias."""
+        where = "status='closed' AND exit_at IS NOT NULL"
+        params: list = []
+        if strategy_type:
+            where += " AND strategy_type = ?"
+            params.append(strategy_type)
+        try:
+            with self._lock:
+                rows = self._conn.execute(
+                    f"SELECT * FROM trades WHERE {where} ORDER BY exit_at ASC, id ASC LIMIT ?",
+                    [*params, int(limit)],
+                ).fetchall()
+            return [dict(r) for r in rows]
+        except Exception:
+            logger.exception("🗃️ Falha ao ler trades fechados")
+            return []
+
     def count_closed_since(self, start: Any) -> int:
         """Fechados com exit_at >= start (datetime ou ISO; normalizado p/ UTC)."""
         try:
