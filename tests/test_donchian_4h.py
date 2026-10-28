@@ -111,9 +111,9 @@ def test_exit_flags_use_the_opposite_20_bar_channel():
 
 
 # ───────────── sizing ─────────────
-def _size(**kw):
-    base = dict(equity=173.0, stop_pct=0.05, min_notional=5.0, open_positions=0, gross_open=0.0,
-                risk_pct=0.25, max_pos_mult=1.0, max_gross_mult=3.0, max_positions=10)
+def _size(min_notional=5.0, precision=3, **kw):
+    base = dict(equity=173.0, stop_pct=0.05, price=1.0, info={"minNotional": min_notional, "quantityPrecision": precision},
+                open_positions=0, gross_open=0.0, risk_pct=0.25, max_pos_mult=1.0, max_gross_mult=3.0, max_positions=10)
     base.update(kw)
     return d.size_position(**base)
 
@@ -136,7 +136,21 @@ def test_sizing_min_notional_bumps_up_to_2x_risk_then_skips():
     bumped = _size(stop_pct=0.10, min_notional=5.0)          # alvo $4,33 < $5; risco $0,50 ≤ 2×
     assert (bumped.skip, bumped.notional) == (None, 5.0)
     skipped = _size(stop_pct=0.035, min_notional=50.0)       # BTC testnet: risco $1,75 > 2×$0,43
-    assert skipped.skip.startswith("minNotional $50 exige risco $1.75")
+    assert skipped.skip == "minNotional/step: risco $1.75 = 4.05× alvo $0.43 (qty 50)"
+
+
+def test_sizing_checks_2x_risk_on_the_final_rounded_qty():
+    # minNotional $8,20 sozinho dá 1,90× (passaria); o step inteiro sobe a qty para 2 → $9,40 → 2,17×
+    s = _size(stop_pct=0.10, min_notional=8.2, price=4.7, precision=0)
+    assert s.skip == "minNotional/step: risco $0.94 = 2.17× alvo $0.43 (qty 2)"
+    # QNTUSDT LONG 2026-10-26: entrada 216,48, stop 200,96, equity ~$299 → qty 0,1 arrisca $1,55 (2,08×)
+    qnt = _size(equity=299.0, stop_pct=15.52 / 216.48, price=216.48, precision=1)
+    assert qnt.skip == "minNotional/step: risco $1.55 = 2.08× alvo $0.75 (qty 0.1)"
+
+
+def test_sizing_returns_the_final_qty_and_its_risk():
+    s = _size(stop_pct=0.10, price=2.6, precision=0)     # alvo $4,33 → qty 1,66 → 2 (step inteiro) → $5,20
+    assert (s.skip, s.qty, s.notional, s.risk_usd) == (None, 2.0, pytest.approx(5.2), pytest.approx(0.52))
 
 
 # ───────────── universo ─────────────
@@ -283,7 +297,20 @@ def test_runner_skips_trade_when_min_notional_forces_over_2x_risk(caplog):
     with caplog.at_level(logging.WARNING):
         runner.tick(BOUNDARY + 60_000)
     assert ex.orders == []
-    assert "⏭️ Donchian: BTCUSDT LONG pulado — minNotional $50" in caplog.text
+    assert "⏭️ Donchian: BTCUSDT LONG pulado — minNotional/step: risco $" in caplog.text
+
+
+def test_runner_logs_risk_of_the_rounded_qty(caplog):
+    ex = _Ex({"XUSDT": _bars_ending(FLAT + [101.0])})
+    ex.get_symbol_info = lambda _s: {"minNotional": 5.0, "quantityPrecision": 1, "pricePrecision": 4}
+    runner = d.DonchianRunner(_bot(ex))
+    runner.universe, runner.universe_week = ["XUSDT"], d.rebalance_start(BOUNDARY)
+    with caplog.at_level(logging.INFO):
+        runner.tick(BOUNDARY + 60_000)
+    stop_pct = _sig(FLAT + [101.0]).stop_pct
+    qty = round(173 * 0.0025 / stop_pct / 100.0, 1)
+    assert ex.orders[0]["quantity"] == qty
+    assert f"qty {qty} (~${qty * 100:.2f}, risco ~${qty * 100 * stop_pct:.2f}, stop" in caplog.text
 
 
 def test_runner_respects_10_position_cap():
