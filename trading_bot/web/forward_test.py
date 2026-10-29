@@ -153,7 +153,10 @@ def sharpe_annualized(daily_returns: Sequence[float], min_points: int = 20) -> O
         return None
     mean = sum(daily_returns) / n
     var = sum((r - mean) ** 2 for r in daily_returns) / (n - 1)
-    return mean / math.sqrt(var) * math.sqrt(365.0) if var > 0 else None
+    # retornos iguais dão var ~1e-34 por arredondamento, não 0: tolerância relativa
+    if var <= 1e-12 * max(mean * mean, 1e-18):
+        return None
+    return mean / math.sqrt(var) * math.sqrt(365.0)
 
 
 def enrich_trade(trade: Dict[str, Any]) -> Dict[str, Any]:
