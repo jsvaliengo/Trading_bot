@@ -417,7 +417,7 @@ def metrics(res, label: str, attempts: Optional[int] = None) -> dict:
         "gross_exp_pct": s["gross_exp_pct"], "ret_pct": s["net_return_pct"], "max_dd_pct": s["max_dd_pct"],
         "fee_pct_per_trade": float(np.mean([t.fee_frac for t in tr]) * 100) if tr else float("nan"),
         "funding_pct_per_trade": float(np.mean([t.funding_frac for t in tr]) * 100) if tr else float("nan"),
-        "fee_pct_of_avg_win": float(np.mean([t.fee_frac for t in tr]) * 100 / s["avg_win_pct"]) if tr and s["avg_win_pct"] > 0 else float("nan"),
+        "fee_pct_of_avg_win": float(np.mean([t.fee_frac for t in tr]) * 100 / s["avg_win_pct"] * 100) if tr and s["avg_win_pct"] > 0 else float("nan"),
         "years": {y: {"n": len(v), "exp_pct": float(np.mean(v) * 100)} for y, v in sorted(years.items())},
         "by_side": s["by_side"], "exits": s["exits"], "skipped_capacity": res.skipped_capacity,
         "avg_hold_min": float(np.mean([(t.exit_time - t.entry_time) / 60_000 for t in tr])) if tr else float("nan"),
