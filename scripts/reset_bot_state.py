@@ -77,6 +77,7 @@ EMPTY_COLLECTIONS = {
     "pnl_by_symbol": dict,
     "portfolio_history": list,
     "peak_prices": dict,
+    "adverse_prices": dict,
     "trailing_activated": dict,
     "double_first_used": dict,
 }

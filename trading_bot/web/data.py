@@ -265,6 +265,7 @@ def _binance_summary(exchange, store) -> Dict[str, float]:
     if c["exchange"] is exchange and c["data"] is not None and time.monotonic() - c["at"] < _BINANCE_TTL:
         return c["data"]
     out: Dict[str, float] = {}
+    ok = True
     try:
         daily = exchange.get_daily_pnl_from_binance()
         # `total` já é o income de HOJE desde 00:00 do dia de trading (realized+funding+
@@ -276,7 +277,7 @@ def _binance_summary(exchange, store) -> Dict[str, float]:
         out["funding_fee"] = _safe_float(daily.get("funding_fee"))
         out["commission"] = _safe_float(daily.get("commission"))
     except Exception:
-        pass
+        ok = False
     try:
         # Funding/comissão ACUMULADOS do PERÍODO ATUAL — alinhados ao P&L realizado
         # (que recomeça no reset do DB). Âncora = 1º trade do trade_store.
@@ -286,15 +287,17 @@ def _binance_summary(exchange, store) -> Dict[str, float]:
             out["funding_total"] = _safe_float(cum.get("funding_fee"))
             out["commission_total"] = _safe_float(cum.get("commission"))
     except Exception:
-        pass
+        ok = False
     try:
         info = exchange.get_account_info()
         if "wallet_balance" in info:
             out["wallet_balance"] = _safe_float(info.get("wallet_balance"))
         out["unrealized"] = _safe_float(info.get("unrealized_pnl"))
     except Exception:
-        pass
-    c.update(exchange=exchange, at=time.monotonic(), data=out)
+        ok = False
+    # falha transitória não fica presa 15s no cache: o próximo poll tenta de novo
+    if ok:
+        c.update(exchange=exchange, at=time.monotonic(), data=out)
     return out
 
 
