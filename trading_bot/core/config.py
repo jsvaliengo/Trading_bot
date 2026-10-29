@@ -318,7 +318,9 @@ class TradingConfig:
     # "donchian_4h" (forward test pré-registrado em docs/FORWARD_TEST_DONCHIAN_4H.md).
     STRATEGY: str = _env_str("TRADING_BOT_STRATEGY", "pullback").lower()
     # Donchian 4h: configuração FIXA do pré-registro. NÃO alterar durante o forward
-    # test (mudar invalida o teste). Só o limite de drawdown lê env.
+    # test (mudar invalida o teste). Só o limite de drawdown e o tamanho do universo
+    # leem env (universo: 0 = sem teto, todos os pares elegíveis; alteração registrada
+    # em docs/FORWARD_TEST_DONCHIAN_4H.md).
     DONCHIAN_ENTRY_BARS: int = 40
     DONCHIAN_EXIT_BARS: int = 20
     DONCHIAN_ATR_BARS: int = 20
@@ -327,7 +329,7 @@ class TradingConfig:
     DONCHIAN_MAX_POSITIONS: int = 10
     DONCHIAN_MAX_GROSS_MULT: float = 3.0
     DONCHIAN_MAX_POSITION_MULT: float = 1.0
-    DONCHIAN_UNIVERSE_TOP_N: int = 30
+    DONCHIAN_UNIVERSE_TOP_N: int = _env_int("TRADING_BOT_DONCHIAN_UNIVERSE_TOP_N", 30)
     DONCHIAN_UNIVERSE_MIN_DAYS: int = 60
     DONCHIAN_UNIVERSE_VOLUME_DAYS: int = 30
     DONCHIAN_MAX_DRAWDOWN_PERCENT: float = _env_float("TRADING_BOT_DONCHIAN_MAX_DRAWDOWN_PERCENT", 20.0)

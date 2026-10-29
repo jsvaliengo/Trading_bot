@@ -122,8 +122,9 @@ def universe_score(daily: List[List[Any]], t: int, *, min_days: int, vol_days: i
 
 
 def top_universe(scores: Dict[str, float], top_n: int) -> List[str]:
-    """Top-N por score; empate desempata pelo símbolo (argsort estável da pesquisa)."""
-    return [s for s, _ in sorted(scores.items(), key=lambda kv: (-kv[1], kv[0]))[:top_n]]
+    """Top-N por score (top_n <= 0 = todos); empate desempata pelo símbolo (argsort estável)."""
+    ranked = sorted(scores.items(), key=lambda kv: (-kv[1], kv[0]))
+    return [s for s, _ in (ranked[:top_n] if top_n > 0 else ranked)]
 
 
 # ───────────────────────── sizing ─────────────────────────
@@ -237,7 +238,8 @@ class DonchianRunner:
         )
         logger.info(
             f"🧭 Donchian: tetos {c.DONCHIAN_MAX_POSITIONS} posições, {c.DONCHIAN_MAX_POSITION_MULT:g}x "
-            f"por posição, {c.DONCHIAN_MAX_GROSS_MULT:g}x bruto; universo top {c.DONCHIAN_UNIVERSE_TOP_N} "
+            f"por posição, {c.DONCHIAN_MAX_GROSS_MULT:g}x bruto; universo "
+            f"{f'top {c.DONCHIAN_UNIVERSE_TOP_N}' if c.DONCHIAN_UNIVERSE_TOP_N > 0 else 'completo (sem teto)'} "
             f"por volume 30d da mainnet ∩ testnet; sinais da {'mainnet' if c.SIGNALS_FROM_MAINNET else c.ENVIRONMENT}"
         )
         logger.info(
