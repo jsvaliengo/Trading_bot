@@ -139,6 +139,7 @@ class TradeStore:
             self._conn.execute("PRAGMA synchronous=NORMAL")
             self._conn.executescript(_SCHEMA)
             self._ensure_column("trades", "mfe_pct", "REAL")
+            self._ensure_column("trades", "mae_pct", "REAL")
             # FUNDING_FEE atribuído pelo reconciliador; já incluso em pnl_net.
             self._ensure_column("trades", "funding", "REAL")
             self._conn.commit()
@@ -230,6 +231,7 @@ class TradeStore:
         close_reason: str,
         strategy_name: str,
         mfe_pct: Optional[float] = None,
+        mae_pct: Optional[float] = None,
     ) -> bool:
         """Fecha o trade aberto mais recente (symbol+side) — lookup indexado.
 
@@ -258,11 +260,11 @@ class TradeStore:
                         """
                         UPDATE trades
                            SET exit_at=?, exit_price=?, pnl_gross=?, pnl_net=?,
-                               fees=?, close_reason=?, mfe_pct=?, status='closed'
+                               fees=?, close_reason=?, mfe_pct=?, mae_pct=?, status='closed'
                          WHERE id=?
                         """,
                         (exit_at, exit_price, pnl_gross, pnl_net, fees,
-                         close_reason, mfe_pct, row["id"]),
+                         close_reason, mfe_pct, mae_pct, row["id"]),
                     )
                 else:
                     # Close-only: não havia open correspondente.
@@ -271,12 +273,12 @@ class TradeStore:
                         INSERT INTO trades (
                             opened_at, symbol, side, entry_price, strategy_name,
                             exit_at, exit_price, pnl_gross, pnl_net, fees,
-                            close_reason, mfe_pct, status
-                        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?, 'closed')
+                            close_reason, mfe_pct, mae_pct, status
+                        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?, 'closed')
                         """,
                         (exit_at, symbol, side or "", entry_price,
                          str(strategy_name or "primary"), exit_at, exit_price,
-                         pnl_gross, pnl_net, fees, close_reason, mfe_pct),
+                         pnl_gross, pnl_net, fees, close_reason, mfe_pct, mae_pct),
                     )
                 self._conn.commit()
                 return True
@@ -1078,6 +1080,7 @@ class TradeStore:
                     "fees": r["fees"],
                     "close_reason": r["close_reason"],
                     "mfe_pct": (r["mfe_pct"] if "mfe_pct" in r.keys() else None),
+                    "mae_pct": (r["mae_pct"] if "mae_pct" in r.keys() else None),
                 }
             )
         return rec

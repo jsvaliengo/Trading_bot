@@ -21,7 +21,7 @@ from flask_socketio import SocketIO
 
 from ..core.config import config
 from .auth import require_basic_auth
-from .data import collect_snapshot, collect_summary
+from .data import collect_history, collect_live, collect_snapshot, collect_summary
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +99,16 @@ def _register_routes(app: Flask, socketio: SocketIO) -> None:
     def snapshot():
         return jsonify(collect_snapshot(app.config["BOT"]))
 
+    @app.route("/api/live")
+    @require_basic_auth
+    def live():
+        return jsonify(collect_live(app.config["BOT"]))
+
+    @app.route("/api/history")
+    @require_basic_auth
+    def history():
+        return jsonify(collect_history(app.config["BOT"]))
+
     @app.route("/api/summary")
     @require_basic_auth
     def summary():
@@ -146,13 +156,13 @@ def _register_sockets(socketio: SocketIO) -> None:
 
     @socketio.on("connect")
     def on_connect():
-        # No connect, envia um snapshot inicial pro client renderizar.
+        # No connect, envia o estado vivo; o histórico o client pede por HTTP.
         from flask import current_app
         bot = current_app.config["BOT"]
-        socketio.emit("snapshot", collect_snapshot(bot))
+        socketio.emit("snapshot", collect_live(bot))
 
     @socketio.on("request_snapshot")
     def on_request_snapshot():
         from flask import current_app
         bot = current_app.config["BOT"]
-        socketio.emit("snapshot", collect_snapshot(bot))
+        socketio.emit("snapshot", collect_live(bot))

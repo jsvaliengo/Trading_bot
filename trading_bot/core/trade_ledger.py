@@ -38,35 +38,33 @@ class TradeLedger:
     def __init__(self, bot):
         self._bot = bot
 
-    def _compute_mfe_pct(
-        self,
-        symbol: str,
-        side: Optional[str],
-        entry_price: Optional[float],
-    ) -> Optional[float]:
+    def _compute_mfe_pct(self, symbol: str, side: Optional[str], entry_price: Optional[float]) -> Optional[float]:
         """MFE% (pico favorável) lido de bot.peak_prices. None se não rastreado.
+        Floor em 0: se nunca ficou a favor, MFE = 0 (não negativo)."""
+        return self._excursion_pct(symbol, side, entry_price, "peak_prices")
 
-        peak_prices guarda o MAX preço visto (LONG) ou o MIN (SHORT) desde a
-        abertura. Floor em 0: se nunca ficou a favor, MFE = 0 (não negativo).
-        """
+    def _compute_mae_pct(self, symbol: str, side: Optional[str], entry_price: Optional[float]) -> Optional[float]:
+        """MAE% (pior ponto contra), lido de bot.adverse_prices; 0 se nunca ficou contra."""
+        return self._excursion_pct(symbol, side, entry_price, "adverse_prices", favorable=False)
+
+    def _excursion_pct(self, symbol: str, side: Optional[str], entry_price: Optional[float],
+                       attr: str, favorable: bool = True) -> Optional[float]:
         bot = self._bot
         if not entry_price or side is None:
             return None
-        peak = (getattr(bot, "peak_prices", {}) or {}).get(f"{symbol}_{side}")
-        if not peak:
+        price = (getattr(bot, attr, {}) or {}).get(f"{symbol}_{side}")
+        if not price:
             return None
         try:
-            entry_price = float(entry_price)
-            peak = float(peak)
+            entry_price, price = float(entry_price), float(price)
             if entry_price <= 0:
                 return None
-            if side == "LONG":
-                mfe = (peak - entry_price) / entry_price * 100.0
-            else:
-                mfe = (entry_price - peak) / entry_price * 100.0
+            move = (price - entry_price) / entry_price * 100.0
         except (TypeError, ValueError):
             return None
-        return round(max(0.0, mfe), 4)
+        if side != "LONG":
+            move = -move
+        return round(max(0.0, move if favorable else -move), 4)
 
     def record_trade_opened(
         self,
@@ -194,6 +192,7 @@ class TradeLedger:
         # ativação do trailing com dado, não com impressão. None se não rastreado
         # (ex.: posição fechou antes do 1º ciclo de monitoramento).
         mfe_pct = self._compute_mfe_pct(symbol, side, entry_price)
+        mae_pct = self._compute_mae_pct(symbol, side, entry_price)
 
         # Espelha o fechamento no store durável (SQLite). Lookup indexado do
         # open correspondente; close-only se não houver. Best-effort.
@@ -211,6 +210,7 @@ class TradeLedger:
                 close_reason=close_reason,
                 strategy_name=strategy_name,
                 mfe_pct=mfe_pct,
+                mae_pct=mae_pct,
             )
 
         if pnl_net > 0:

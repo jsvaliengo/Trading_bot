@@ -390,7 +390,9 @@ def test_monitor_never_applies_tp_or_trailing_to_donchian_positions(monkeypatch,
     bot = _monitor_bot(_donchian_long(), mark=110.0)     # +10%: TP global e trailing fechariam
     bot.monitor_positions()
     bot._close_position_with_notification.assert_not_called()
-    assert bot.peak_prices == {} and bot.trailing_activated == {}
+    # MFE/MAE são rastreados para toda posição; o trailing nunca arma na Donchian.
+    assert bot.peak_prices == {"XUSDT_LONG": 110.0} and bot.adverse_prices == {"XUSDT_LONG": 110.0}
+    assert bot.trailing_activated == {"XUSDT_LONG": False}
 
 
 @pytest.mark.parametrize("strategy", ["pullback", "donchian_4h"])

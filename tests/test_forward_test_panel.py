@@ -203,7 +203,75 @@ def test_donchian_runner_snapshot_e_json_safe():
     runner.universe, runner.universe_week, runner._boundary = ["BTCUSDT"], 1_761_523_200_000, 1_761_609_600_000
     runner._pending, runner.exit_levels = {"BTCUSDT"}, {"BTCUSDT": {"exit_long": 1.0, "exit_short": 2.0}}
     runner._bar = {"total": 1, "ok": 0, "skips": Counter({"minNotional": 1}), "logged": False}
+    runner._bar_logged_at = 1_761_609_700.0
     snap = runner.snapshot()
     assert snap["bar_close"] == "2025-10-28T00:00:00+00:00" and snap["next_bar_close"] == "2025-10-28T04:00:00+00:00"
+    assert snap["last_bar_processed_at"] == "2025-10-28T00:01:40+00:00"
     assert snap["skips"] == {"minNotional": 1} and "logged" not in snap["counters"]
-    assert snap["pending"] == ["BTCUSDT"] and snap["params"]["exit_bars"] == config.DONCHIAN_EXIT_BARS
+    # a lista do universo (~450 pares) e os exit_levels NÃO vão no JSON: só contagens
+    assert snap["universe_size"] == 1 and snap["pending_count"] == 1
+    assert "universe" not in snap and "exit_levels" not in snap
+    assert snap["params"]["exit_bars"] == config.DONCHIAN_EXIT_BARS and snap["params"]["max_gross_mult"] == config.DONCHIAN_MAX_GROSS_MULT
+
+
+# ───────── dashboard v3: performance, corte do universo, live/history ─────────
+
+def test_sharpe_anualizado_precisa_de_20_dias_e_desvio():
+    assert ft.sharpe_annualized([0.01] * 19) is None            # poucos pontos
+    assert ft.sharpe_annualized([0.01] * 25) is None            # desvio zero
+    rets = [0.01, -0.005] * 15
+    s = ft.sharpe_annualized(rets)
+    mean = sum(rets) / len(rets)
+    var = sum((r - mean) ** 2 for r in rets) / (len(rets) - 1)
+    assert s == pytest.approx(mean / var ** 0.5 * 365 ** 0.5)
+
+
+def test_summarize_profit_factor_corte_do_universo_e_excursoes():
+    before, after = "2026-10-28T12:00:00+00:00", "2026-10-30T12:00:00+00:00"
+    rows = [
+        {**_trade(10.0, exit_at=before), "mfe_pct": 3.0, "mae_pct": 0.5},
+        {**_trade(-5.0, exit_at=before), "mfe_pct": 0.2},
+        {**_trade(-5.0, exit_at=after)},
+    ]
+    s = ft.summarize(rows, now=datetime(2026, 11, 1, tzinfo=timezone.utc), sim_balance=300.0)
+    assert s["profit_factor"] == pytest.approx(1.0)              # 10 / (5 + 5)
+    assert s["trades_before_change"] == 2 and s["trades_after_change"] == 1
+    assert s["sharpe"] is None and s["sharpe_days"] == 8          # 24/10 23:43 → 01/11: < 20 dias
+    assert [e["r"] for e in s["excursions"]] == [2.0, -1.0]      # só trades com mfe_pct
+    assert s["excursions"][0]["mae"] == 0.5 and s["excursions"][1]["mae"] is None
+    assert ft.summarize([], sim_balance=300.0)["profit_factor"] is None
+
+
+def test_collect_live_e_history_dividem_o_snapshot(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "SIMULATED_BALANCE_USD", 0.0, raising=False)
+    store = TradeStore(str(tmp_path / "t.db"))
+    bot = SimpleNamespace(
+        initial_capital=100.0, last_known_balance=100.0, total_pnl=0.0, daily_realized_pnl=0.0,
+        closed_trades_count=0, paused=False, running=True, trade_store=store, known_positions={},
+        donchian=SimpleNamespace(snapshot=lambda: {"universe_size": 448, "counters": {}}),
+        exchange=SimpleNamespace(get_open_positions=lambda: []),
+    )
+    live, hist = dash.collect_live(bot), dash.collect_history(bot)
+    assert {"summary", "positions", "forward_test", "engine", "health", "server_time"} <= set(live)
+    assert live["engine"]["gross_notional"] == 0.0
+    assert {"recent_trades", "portfolio_history", "daily_history"} <= set(hist)
+    assert not (set(live) & set(hist))
+    assert set(dash.collect_snapshot(bot)) == set(live) | set(hist)
+
+
+def test_binance_summary_cacheia_por_15s_por_exchange(monkeypatch):
+    calls = []
+    ex = SimpleNamespace(
+        get_daily_pnl_from_binance=lambda: calls.append("d") or {"total": -1.0, "funding_fee": 0.0, "commission": -0.1},
+        get_account_info=lambda: calls.append("a") or {"wallet_balance": 95.0, "unrealized_pnl": 0.5},
+    )
+    t = [100.0]
+    monkeypatch.setattr(dash.time, "monotonic", lambda: t[0])
+    dash._binance_cache.update(exchange=None, data=None)
+    a = dash._binance_summary(ex, None)
+    assert a["daily_realized"] == -1.0 and a["wallet_balance"] == 95.0 and a["unrealized"] == 0.5
+    assert dash._binance_summary(ex, None) is a and len(calls) == 2           # hit
+    t[0] += 16
+    assert dash._binance_summary(ex, None) is not a and len(calls) == 4       # expirou
+    other = SimpleNamespace(get_daily_pnl_from_binance=lambda: {"total": 7.0}, get_account_info=lambda: {})
+    assert dash._binance_summary(other, None)["daily_realized"] == 7.0       # outra exchange não usa o cache

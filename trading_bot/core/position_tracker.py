@@ -55,6 +55,7 @@ class PositionTracker:
             del bot.peak_prices[position_key]
         if position_key in bot.trailing_activated:
             del bot.trailing_activated[position_key]
+        (getattr(bot, "adverse_prices", None) or {}).pop(position_key, None)
 
     # ------------------------------------------------------------------
     # Operações compostas (cobrem padrões de uso comuns)
