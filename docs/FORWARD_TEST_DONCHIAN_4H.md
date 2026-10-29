@@ -138,3 +138,18 @@ Registro factual. Nenhuma regra acima mudou.
   elevados acima do risco-alvo; $300 reduz ambos. Risco por trade segue 0,25% da
   equity (≈ $0,75).
 - Nada mais mudou. As regras pré-registradas seguem iguais.
+
+### Alteração: universo top 30 → todos os pares (2026-10-29 ~10:00 UTC)
+
+**Desvio do pré-registro**, por decisão do usuário. Nenhuma outra regra mudou.
+
+- O que: o universo deixa de ser o top 30 por volume 30d e passa a ser **todos** os
+  perpétuos USDT da mainnet com ≥ 60 dias de histórico ∩ negociáveis no testnet
+  (`TRADING_BOT_DONCHIAN_UNIVERSE_TOP_N=0` no `.env` da VM; `0` = sem teto).
+  Rebalance semanal, filtro de 60 dias e DISABLED_PAIRS seguem iguais.
+- Quando vale: a partir do restart com essa variável (registrar aqui o horário real
+  do restart e o deploy quando acontecer).
+- Efeito na medição: o teste deixa de ser o pré-registrado. O relatório semanal deve
+  separar **trades antes** (universo top 30) e **trades depois** (universo completo)
+  e não somar os dois na regra de sucesso/falha. Esperado: mais sinais por barra, mais
+  pulos por minNotional em pares de baixo preço/liquidez com risco ≈ $0,75.

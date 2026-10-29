@@ -304,7 +304,10 @@
         $('eng-next').textContent = left != null ? (left > 0 ? `próxima barra em ${fmt.ago(left / 1000)}` : `barra fechou há ${fmt.ago(-left / 1000)}` + ((e.pending || []).length ? ` · ${e.pending.length} pendentes` : '')) : '—';
         $('eng-uni-week').textContent = e.universe_week ? `(${fmt.date(e.universe_week)}, ${e.universe.length} pares)` : '(parcial)';
         const held = new Set(positions.map(p => p.symbol)), pend = new Set(e.pending || []);
-        $('eng-universe').innerHTML = (e.universe || []).map(s => `<span class="${held.has(s) ? 'held' : ''}${pend.has(s) ? ' pending' : ''}" title="${held.has(s) ? 'posição aberta' : ''}${pend.has(s) ? ' aguardando barra' : ''}">${esc(s.replace('USDT', ''))}</span>`).join('') || '<span class="empty">universo vazio</span>';
+        // Universo sem teto (~450 pares): mostra posições abertas primeiro e corta em 60 chips.
+        const uni = [...(e.universe || [])].sort((a, b) => held.has(b) - held.has(a)), MAX_CHIPS = 60;
+        $('eng-universe').innerHTML = uni.slice(0, MAX_CHIPS).map(s => `<span class="${held.has(s) ? 'held' : ''}${pend.has(s) ? ' pending' : ''}" title="${held.has(s) ? 'posição aberta' : ''}${pend.has(s) ? ' aguardando barra' : ''}">${esc(s.replace('USDT', ''))}</span>`).join('')
+            + (uni.length > MAX_CHIPS ? `<span class="empty">+${uni.length - MAX_CHIPS} pares</span>` : '') || '<span class="empty">universo vazio</span>';
     }
 
     // ───────── Saúde ─────────

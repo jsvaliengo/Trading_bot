@@ -166,6 +166,7 @@ def test_universe_score_point_in_time_and_eligibility():
     assert d.universe_score(_daily_rows(t, 59), t, min_days=60, vol_days=30) is None
     assert d.universe_score(_daily_rows(t, 90, last_day=t - 5 * DAY), t, min_days=60, vol_days=30) is None
     assert d.top_universe({"BUSDT": 5.0, "AUSDT": 5.0, "CUSDT": 9.0}, 2) == ["CUSDT", "AUSDT"]
+    assert d.top_universe({"BUSDT": 5.0, "AUSDT": 5.0, "CUSDT": 9.0}, 0) == ["CUSDT", "AUSDT", "BUSDT"]   # 0 = todos
     assert d.rebalance_start(t + 3 * DAY + 7) == t and t % (7 * DAY) == 4 * DAY
 
 
@@ -187,6 +188,18 @@ def test_refresh_universe_mainnet_volume_intersected_with_testnet_minus_disabled
     assert ex.get_klines_raw.call_args.kwargs["limit"] == 68
     assert any("= 1 pares [AAAUSDT]" in m for m in caplog.messages)
 
+
+def test_universe_top_n_reads_env_zero_means_all(monkeypatch):
+    import importlib
+    from trading_bot.core import config as config_module
+
+    assert config.DONCHIAN_UNIVERSE_TOP_N == 30
+    monkeypatch.setenv("TRADING_BOT_DONCHIAN_UNIVERSE_TOP_N", "0")
+    try:
+        assert importlib.reload(config_module).TradingConfig().DONCHIAN_UNIVERSE_TOP_N == 0
+    finally:
+        monkeypatch.delenv("TRADING_BOT_DONCHIAN_UNIVERSE_TOP_N", raising=False)
+        importlib.reload(config_module)   # restaura o default (30) p/ os demais testes
 
 # ───────────── runner: entrada, stop, saída ─────────────
 BOUNDARY = 1_761_600_000_000 // H4 * H4
