@@ -177,6 +177,7 @@ class DonchianRunner:
         self._pending: Set[str] = set()
         self._retry_universe_at = 0
         self._bar: Dict[str, Any] = {}
+        self._bar_logged_at: Optional[float] = None   # epoch s da última barra processada
         # Níveis do canal de saída da última barra processada por símbolo (só leitura,
         # para o dashboard): {sym: {"exit_long": min low m, "exit_short": max high m}}.
         self.exit_levels: Dict[str, Dict[str, float]] = {}
@@ -189,19 +190,22 @@ class DonchianRunner:
         def iso(ms: int) -> str:
             return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).isoformat()
 
+        # Só contagens: a lista de ~450 pares e os níveis de saída não vão no JSON
+        # (o dashboard lê exit_levels direto do runner para as posições abertas).
         return {
-            "universe": list(self.universe),
+            "universe_size": len(self.universe),
             "universe_week": iso(self.universe_week) if self.universe_week else None,
             "bar_close": iso(boundary) if boundary else None,
             "next_bar_close": iso(boundary + H4_MS) if boundary else None,
-            "pending": sorted(self._pending),
+            "last_bar_processed_at": iso(int(self._bar_logged_at * 1000)) if self._bar_logged_at else None,
+            "pending_count": len(self._pending),
             "counters": {k: v for k, v in b.items() if k not in ("skips", "logged")},
             "skips": dict(b.get("skips") or {}),
-            "exit_levels": dict(self.exit_levels),
             "params": {
                 "entry_bars": config.DONCHIAN_ENTRY_BARS, "exit_bars": config.DONCHIAN_EXIT_BARS,
                 "atr_bars": config.DONCHIAN_ATR_BARS, "stop_atr_mult": config.DONCHIAN_STOP_ATR_MULT,
                 "risk_percent": config.DONCHIAN_RISK_PERCENT, "max_positions": config.DONCHIAN_MAX_POSITIONS,
+                "max_gross_mult": config.DONCHIAN_MAX_GROSS_MULT,
                 "max_drawdown_percent": config.DONCHIAN_MAX_DRAWDOWN_PERCENT,
             },
         }
@@ -440,6 +444,7 @@ class DonchianRunner:
         """Uma linha por barra 4h: barra quieta e barra não processada não se confundem no log."""
         b = self._bar
         b["logged"] = True
+        self._bar_logged_at = time.time()
         when = time.strftime("%Y-%m-%d %H:%M", time.gmtime(boundary / 1000))
         if not b["total"]:
             logger.info(f"🕓 Donchian: barra {when} UTC não processada — universo vazio e sem posições")

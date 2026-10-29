@@ -18,13 +18,7 @@
         <span class="env env-{{ environment }}">{{ environment }}</span>
         <span class="state" id="state-pill" aria-live="polite">carregando</span>
     </div>
-    <dl class="top-meta" id="top-meta">
-        <div><dt>sinais</dt><dd id="meta-source">—</dd></div>
-        <div><dt>deploy</dt><dd id="meta-deploy" class="mono">—</dd></div>
-        <div><dt>no ar há</dt><dd id="meta-uptime">—</dd></div>
-        <div><dt>atualizado</dt><dd id="meta-updated" class="mono">—</dd></div>
-        <div><dt>conexão</dt><dd id="meta-conn">—</dd></div>
-    </dl>
+    <p class="top-meta" id="top-meta">—</p>
     <div class="top-ctrls">
         <button class="btn btn-quiet" id="btn-pause" data-action="pause" title="Pausar novas entradas">Pausar</button>
         <button class="btn btn-quiet" id="btn-resume" data-action="resume" title="Retomar entradas">Retomar</button>
@@ -39,115 +33,149 @@
 
 <main class="wrap">
 
-    <!-- Veredito do forward test -->
-    <section class="card hero" aria-labelledby="hero-h">
+    <!-- 1. Linha de status: está vivo? barra, equity, posições, P&L -->
+    <section class="status" aria-label="Status">
+        <div class="tile tile-main">
+            <span class="tl">Equity</span>
+            <b class="tv" id="st-equity">—</b>
+            <span class="tf" id="st-equity-f">—</span>
+        </div>
+        <div class="tile">
+            <span class="tl">Drawdown do pico</span>
+            <b class="tv" id="st-dd">—</b>
+            <span class="tf" id="st-dd-f">—</span>
+        </div>
+        <div class="tile">
+            <span class="tl">Posições</span>
+            <b class="tv" id="st-pos">—</b>
+            <span class="tf" id="st-pos-f">—</span>
+        </div>
+        <div class="tile">
+            <span class="tl">Última barra</span>
+            <b class="tv" id="st-bar">—</b>
+            <span class="tf" id="st-bar-f">—</span>
+        </div>
+        <div class="tile">
+            <span class="tl">Próxima barra</span>
+            <b class="tv" id="st-next">—</b>
+            <span class="tf" id="st-next-f">—</span>
+        </div>
+        <div class="tile">
+            <span class="tl">Não realizado</span>
+            <b class="tv" id="st-unreal">—</b>
+            <span class="tf" id="st-unreal-f">—</span>
+        </div>
+        <div class="tile">
+            <span class="tl">Realizado hoje</span>
+            <b class="tv" id="st-today">—</b>
+            <span class="tf" id="st-today-f">—</span>
+        </div>
+        <div class="tile">
+            <span class="tl">Desde o início</span>
+            <b class="tv" id="st-net">—</b>
+            <span class="tf" id="st-net-f">—</span>
+        </div>
+    </section>
+
+    <!-- 2. Progresso do forward test -->
+    <section class="card" aria-labelledby="ft-h">
         <header class="ch">
-            <div>
-                <h2 id="hero-h">Veredito em andamento</h2>
-                <p class="cs" id="hero-sub">Regra pré-registrada: 150 trades e 6 meses; passa com expectativa líquida &gt; 0 e drawdown &lt; 20%.</p>
-            </div>
+            <div><h2 id="ft-h">Forward test</h2><p class="cs">Regra: 150 trades e 6 meses; passa com expectativa líquida &gt; 0 e drawdown &lt; 20%. Universo mudou de 30 para todos os pares em 29/10 07:28.</p></div>
             <span class="verdict" id="verdict">—</span>
         </header>
-        <div class="hero-grid">
-            <figure class="ci" aria-describedby="ci-cap">
-                <div class="ci-head">
-                    <span class="ci-label">Expectativa líquida por trade</span>
-                    <span class="ci-value" id="ci-value">—</span>
-                </div>
-                <svg class="ci-plot" id="ci-plot" viewBox="0 0 600 120" preserveAspectRatio="none" role="img" aria-label="Intervalo de confiança da expectativa por trade"></svg>
-                <figcaption class="cs" id="ci-cap">—</figcaption>
-            </figure>
-            <div class="tracks">
-                <div class="track">
-                    <div class="track-h"><span>Trades fechados</span><b id="tr-trades" class="num">—</b></div>
-                    <div class="meter" role="progressbar" aria-labelledby="tr-trades" aria-valuemin="0" aria-valuemax="150" id="m-trades"><i></i></div>
-                    <div class="track-f" id="tr-trades-f">—</div>
-                </div>
-                <div class="track">
-                    <div class="track-h"><span>Tempo decorrido</span><b id="tr-days" class="num">—</b></div>
-                    <div class="meter" role="progressbar" aria-valuemin="0" aria-valuemax="182" id="m-days"><i></i></div>
-                    <div class="track-f" id="tr-days-f">—</div>
-                </div>
-                <div class="track track-dd">
-                    <div class="track-h"><span>Drawdown do pico</span><b id="tr-dd" class="num">—</b></div>
-                    <div class="meter meter-dd" role="progressbar" aria-valuemin="0" aria-valuemax="20" id="m-dd"><i></i><s class="meter-max" id="m-dd-max"></s></div>
-                    <div class="track-f" id="tr-dd-f">—</div>
-                </div>
+        <div class="tracks">
+            <div class="track">
+                <div class="track-h"><span>Trades fechados</span><b id="tr-trades">—</b></div>
+                <div class="meter" role="progressbar" aria-valuemin="0" aria-valuemax="150" id="m-trades"><i></i></div>
+                <div class="track-f" id="tr-trades-f">—</div>
+            </div>
+            <div class="track">
+                <div class="track-h"><span>Tempo</span><b id="tr-days">—</b></div>
+                <div class="meter" role="progressbar" aria-valuemin="0" aria-valuemax="182" id="m-days"><i></i></div>
+                <div class="track-f" id="tr-days-f">—</div>
+            </div>
+            <div class="track">
+                <div class="track-h"><span>Expectativa por trade</span><b id="tr-exp">—</b></div>
+                <div class="track-f" id="tr-exp-f">—</div>
+            </div>
+            <div class="track">
+                <div class="track-h"><span>Drawdown máximo</span><b id="tr-dd">—</b></div>
+                <div class="meter meter-dd" role="progressbar" aria-valuemin="0" aria-valuemax="20" id="m-dd"><i></i><s class="meter-max" id="m-dd-max"></s></div>
+                <div class="track-f" id="tr-dd-f">—</div>
             </div>
         </div>
-        <div class="compare-wrap">
-            <table class="compare" id="compare">
-                <thead><tr><th scope="col"></th><th scope="col" class="r">Ao vivo</th><th scope="col" class="r">Pesquisa</th><th scope="col"></th></tr></thead>
-                <tbody>
-                    <tr><th scope="row">Win rate</th><td class="r num" data-k="win_rate">—</td><td class="r num dim">29%</td><td class="cs">% dos trades com P&amp;L &gt; 0</td></tr>
-                    <tr><th scope="row">Ganho médio</th><td class="r num" data-k="avg_win_pct">—</td><td class="r num dim">+17,8%</td><td class="cs">do notional da entrada</td></tr>
-                    <tr><th scope="row">Perda média</th><td class="r num" data-k="avg_loss_pct">—</td><td class="r num dim">−6,7%</td><td class="cs">do notional da entrada</td></tr>
-                    <tr><th scope="row">Trades por semana</th><td class="r num" data-k="trades_per_week">—</td><td class="r num dim">~10</td><td class="cs">a pesquisa tinha equity maior e menos pulos</td></tr>
-                    <tr><th scope="row">R médio</th><td class="r num" data-k="avg_r">—</td><td class="r num dim">—</td><td class="cs">P&amp;L / risco inicial até o stop</td></tr>
-                    <tr><th scope="row">Drawdown máximo</th><td class="r num" data-k="max_drawdown_pct">—</td><td class="r num dim">39%</td><td class="cs">limite do teste: 20%</td></tr>
-                </tbody>
-            </table>
-        </div>
+    </section>
+
+    <!-- 3. Posições -->
+    <section class="card" aria-labelledby="pos-h">
+        <header class="ch"><h2 id="pos-h">Posições abertas <span class="badge" id="positions-count">0</span></h2><span class="cs" id="pos-sum">—</span></header>
+        <div id="positions-list"><p class="empty">Nenhuma posição aberta. O motor entra só no fechamento de barra 4h com rompimento de 40 barras.</p></div>
     </section>
 
     <section class="two">
         <!-- Equity + drawdown -->
-        <article class="card" aria-labelledby="eq-h">
-            <header class="ch">
-                <div><h2 id="eq-h">Equity simulada</h2><p class="cs" id="eq-sub">—</p></div>
-                <div class="chips" role="tablist" aria-label="Janela do gráfico">
-                    <button class="chip" role="tab" data-range="all">Tudo</button>
-                    <button class="chip on" role="tab" data-range="test" aria-selected="true">Teste</button>
-                    <button class="chip" role="tab" data-range="7d">7d</button>
-                    <button class="chip" role="tab" data-range="24h">24h</button>
-                </div>
-            </header>
+        <details class="card" open>
+            <summary><h2>Equity</h2><span class="cs" id="eq-sub">—</span></summary>
+            <div class="chips" role="tablist" aria-label="Janela do gráfico">
+                <button class="chip" role="tab" data-range="all">Tudo</button>
+                <button class="chip on" role="tab" data-range="test" aria-selected="true">Teste</button>
+                <button class="chip" role="tab" data-range="7d">7d</button>
+                <button class="chip" role="tab" data-range="24h">24h</button>
+            </div>
             <div class="cv cv-eq"><canvas id="equity-chart" role="img" aria-label="Curva de equity"></canvas></div>
             <div class="cv cv-dd"><canvas id="drawdown-chart" role="img" aria-label="Drawdown desde o pico"></canvas></div>
             <p class="legend"><i class="sw sw-line"></i> equity <i class="sw sw-dot"></i> trade fechado <i class="sw sw-area"></i> drawdown desde o pico</p>
-        </article>
+        </details>
 
-        <!-- Posições -->
-        <article class="card" aria-labelledby="pos-h">
-            <header class="ch"><h2 id="pos-h">Posições abertas</h2><span class="badge" id="positions-count">0</span></header>
-            <div id="positions-list"><p class="empty">Nenhuma posição aberta. O motor entra só no fechamento de barra 4h com rompimento de 40 barras.</p></div>
-        </article>
+        <!-- Performance & risco -->
+        <details class="card" open>
+            <summary><h2>Performance e risco</h2><span class="cs" id="perf-sub">—</span></summary>
+            <table class="kv" id="perf">
+                <thead><tr><th scope="col"></th><th scope="col" class="r">Ao vivo</th><th scope="col" class="r">Pesquisa</th></tr></thead>
+                <tbody>
+                    <tr><th scope="row">Expectativa por trade</th><td class="r" data-k="expectancy">—</td><td class="r dim">+0,41% notional</td></tr>
+                    <tr><th scope="row">Expectativa em R</th><td class="r" data-k="avg_r">—</td><td class="r dim">—</td></tr>
+                    <tr><th scope="row">Profit factor</th><td class="r" data-k="profit_factor">—</td><td class="r dim">—</td></tr>
+                    <tr><th scope="row">Sharpe (diário, anualizado)</th><td class="r" data-k="sharpe">—</td><td class="r dim">—</td></tr>
+                    <tr><th scope="row">Win rate</th><td class="r" data-k="win_rate">—</td><td class="r dim">29%</td></tr>
+                    <tr><th scope="row">Ganho médio</th><td class="r" data-k="avg_win">—</td><td class="r dim">+17,8%</td></tr>
+                    <tr><th scope="row">Perda média</th><td class="r" data-k="avg_loss">—</td><td class="r dim">−6,7%</td></tr>
+                    <tr><th scope="row">Trades por semana</th><td class="r" data-k="trades_per_week">—</td><td class="r dim">~10</td></tr>
+                    <tr><th scope="row">Drawdown máximo</th><td class="r" data-k="max_drawdown_pct">—</td><td class="r dim">39%</td></tr>
+                    <tr><th scope="row">Taxas + funding pagos</th><td class="r" data-k="costs">—</td><td class="r dim">—</td></tr>
+                </tbody>
+            </table>
+            <figure class="ci" aria-describedby="ci-cap">
+                <svg class="ci-plot" id="ci-plot" viewBox="0 0 600 110" preserveAspectRatio="none" role="img" aria-label="Intervalo de confiança da expectativa por trade"></svg>
+                <figcaption class="cs" id="ci-cap">—</figcaption>
+            </figure>
+        </details>
     </section>
 
     <section class="two">
         <!-- Motor Donchian -->
-        <article class="card" aria-labelledby="eng-h">
-            <header class="ch"><div><h2 id="eng-h">Motor Donchian</h2><p class="cs" id="eng-params">—</p></div><span class="badge" id="eng-next">—</span></header>
-            <div class="eng-grid" id="eng-counters">
-                <div class="stat"><span class="stat-l">Última barra</span><b class="stat-v mono" id="eng-bar">—</b></div>
-                <div class="stat"><span class="stat-l">Pares analisados</span><b class="stat-v num" id="eng-ok">—</b></div>
-                <div class="stat"><span class="stat-l">Rompimentos</span><b class="stat-v num" id="eng-break">—</b></div>
-                <div class="stat"><span class="stat-l">Entradas / saídas</span><b class="stat-v num" id="eng-io">—</b></div>
-                <div class="stat"><span class="stat-l">Posições</span><b class="stat-v num" id="eng-open">—</b></div>
-                <div class="stat"><span class="stat-l">Pulados</span><b class="stat-v num" id="eng-skips">—</b></div>
-            </div>
+        <details class="card">
+            <summary><h2>Motor Donchian</h2><span class="cs" id="eng-sub">—</span></summary>
+            <p class="cs" id="eng-params">—</p>
+            <dl class="kvl" id="eng-list"></dl>
             <ul class="skips" id="eng-skip-list"></ul>
-            <h3 class="h3">Universo da semana <span class="dim" id="eng-uni-week"></span></h3>
-            <div class="uni" id="eng-universe"><span class="empty">—</span></div>
-        </article>
+        </details>
 
         <!-- Saúde -->
-        <article class="card" aria-labelledby="hl-h">
-            <header class="ch"><h2 id="hl-h">Saúde</h2><span class="badge" id="hl-badge">—</span></header>
+        <details class="card">
+            <summary><h2>Saúde</h2><span class="badge" id="hl-badge">—</span></summary>
             <ul class="hlist" id="health-list"></ul>
-        </article>
+        </details>
     </section>
 
     <!-- Trades -->
-    <section class="card" aria-labelledby="tr-h">
-        <header class="ch">
-            <div><h2 id="tr-h">Trades</h2><p class="cs" id="tr-sub">—</p></div>
-            <div class="filters" id="filters">
-                <label>Estratégia <select id="f-strategy"><option value="donchian_4h">Donchian 4h</option><option value="all">todas</option><option value="other">outras</option></select></label>
-                <label>Lado <select id="f-side"><option value="all">ambos</option><option value="LONG">LONG</option><option value="SHORT">SHORT</option></select></label>
-                <label>Saída <select id="f-reason"><option value="all">todas</option><option value="stop">stop</option><option value="channel">canal</option><option value="other">outra</option></select></label>
-            </div>
-        </header>
+    <details class="card" open>
+        <summary><h2>Trades</h2><span class="cs" id="tr-sub">—</span></summary>
+        <div class="filters" id="filters">
+            <label>Estratégia <select id="f-strategy"><option value="donchian_4h">Donchian 4h</option><option value="all">todas</option><option value="other">outras</option></select></label>
+            <label>Lado <select id="f-side"><option value="all">ambos</option><option value="LONG">LONG</option><option value="SHORT">SHORT</option></select></label>
+            <label>Saída <select id="f-reason"><option value="all">todas</option><option value="stop">stop</option><option value="channel">canal</option><option value="other">outra</option></select></label>
+        </div>
         <div class="tr-stats" id="tr-stats"></div>
         <div class="table-scroll">
             <table class="table" id="trades-table">
@@ -159,31 +187,42 @@
                     <th scope="col" class="r" data-sort="exit_price"><button>Saída</button></th>
                     <th scope="col" class="r" data-sort="r_multiple"><button>R</button></th>
                     <th scope="col" class="r" data-sort="pnl_net"><button>P&amp;L líq.</button></th>
-                    <th scope="col" class="r" data-sort="fees"><button>Taxas+fund.</button></th>
+                    <th scope="col" class="r" data-sort="fees"><button>Custos</button></th>
                     <th scope="col" class="r" data-sort="duration_hours"><button>Duração</button></th>
                     <th scope="col" class="r" data-sort="mfe_pct"><button>MFE</button></th>
+                    <th scope="col" class="r" data-sort="mae_pct"><button>MAE</button></th>
                     <th scope="col" data-sort="close_reason"><button>Motivo</button></th>
                 </tr></thead>
-                <tbody><tr><td colspan="11" class="empty">Sem trades ainda.</td></tr></tbody>
+                <tbody><tr><td colspan="12" class="empty">Sem trades ainda.</td></tr></tbody>
             </table>
         </div>
         <div class="pager" id="trades-pager" hidden>
             <button class="pg-btn" id="trades-prev" aria-label="Página anterior">‹</button>
-            <span class="pg-info num" id="trades-page">—</span>
+            <span class="pg-info" id="trades-page">—</span>
             <button class="pg-btn" id="trades-next" aria-label="Próxima página">›</button>
         </div>
-    </section>
+    </details>
 
     <section class="two">
-        <article class="card" aria-labelledby="rh-h">
-            <header class="ch"><div><h2 id="rh-h">Distribuição de R</h2><p class="cs">Trend following paga vários −1R para pegar poucos trades grandes. A cauda direita é a tese.</p></div><span class="badge" id="rh-n">—</span></header>
-            <div class="cv cv-r"><canvas id="r-chart" role="img" aria-label="Histograma de R-múltiplos"></canvas></div>
-        </article>
-        <article class="card" aria-labelledby="cal-h">
-            <header class="ch"><div><h2 id="cal-h">P&amp;L por dia</h2><p class="cs">dia de trading em BRT, só trades Donchian</p></div><span class="badge" id="cal-sum">—</span></header>
+        <details class="card">
+            <summary><h2>Distribuição de R e excursões</h2><span class="badge" id="rh-n">—</span></summary>
+            <p class="cs">Trend following paga vários −1R para pegar poucos trades grandes. À direita, até onde cada trade andou a favor (MFE) contra o resultado em R.</p>
+            <div class="two-cv">
+                <div class="cv cv-r"><canvas id="r-chart" role="img" aria-label="Histograma de R-múltiplos"></canvas></div>
+                <div class="cv cv-r"><canvas id="mfe-chart" role="img" aria-label="MFE por trade contra R realizado"></canvas></div>
+            </div>
+        </details>
+        <details class="card">
+            <summary><h2>Calendário</h2><span class="badge" id="cal-sum">—</span></summary>
+            <p class="cs">dia de trading em BRT, só trades Donchian</p>
             <div class="cal" id="calendar"></div>
             <p class="legend"><i class="sw sw-neg"></i> perda <i class="sw sw-zero"></i> sem trade <i class="sw sw-pos"></i> ganho</p>
-        </article>
+            <div class="chips chips-cal" role="tablist" aria-label="Agregado">
+                <button class="chip on" role="tab" data-agg="week" aria-selected="true">Por semana</button>
+                <button class="chip" role="tab" data-agg="month">Por mês</button>
+            </div>
+            <table class="kv" id="cal-table"><thead><tr><th scope="col">Período</th><th scope="col" class="r">Trades</th><th scope="col" class="r">Win rate</th><th scope="col" class="r">Líquido</th></tr></thead><tbody></tbody></table>
+        </details>
     </section>
 </main>
 

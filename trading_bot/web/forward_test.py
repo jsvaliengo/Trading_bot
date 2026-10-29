@@ -9,6 +9,7 @@ fechados; passa se expectativa líquida/trade > 0 e drawdown máximo < 20%.
 
 from __future__ import annotations
 
+import math
 import random
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
@@ -18,6 +19,9 @@ from ..core.trade_store import trading_day
 STRATEGY = "donchian_4h"
 # Registro de início (docs/FORWARD_TEST_DONCHIAN_4H.md, "Registro de início").
 START_ISO = "2026-10-24T23:43:07+00:00"
+# Universo top 30 → todos os pares (docs/FORWARD_TEST_DONCHIAN_4H.md, "Alteração"):
+# trades antes e depois são contados separadamente.
+UNIVERSE_CHANGE_ISO = "2026-10-29T10:28:08+00:00"
 TARGET_TRADES = 150
 TARGET_DAYS = 182
 DD_LIMIT_PCT = 20.0
@@ -141,6 +145,17 @@ def daily_calendar(trades: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return [days[k] for k in sorted(days)]
 
 
+def sharpe_annualized(daily_returns: Sequence[float], min_points: int = 20) -> Optional[float]:
+    """Sharpe dos retornos diários (rf = 0), anualizado por √365. None com menos de
+    `min_points` dias ou desvio zero: o número não diria nada."""
+    n = len(daily_returns)
+    if n < min_points:
+        return None
+    mean = sum(daily_returns) / n
+    var = sum((r - mean) ** 2 for r in daily_returns) / (n - 1)
+    return mean / math.sqrt(var) * math.sqrt(365.0) if var > 0 else None
+
+
 def enrich_trade(trade: Dict[str, Any]) -> Dict[str, Any]:
     """Campos derivados que a tabela mostra: R, risco, % do notional, duração."""
     return {
@@ -212,6 +227,15 @@ def summarize(
         verdict, label = "inconclusive", f"Inconclusivo: n={n}, IC cruza zero"
 
     done = n >= target_trades and elapsed_days >= target_days
+    cal = daily_calendar(rows)
+    # retorno diário = P&L do dia / equity-base; dias sem trade fechado = 0
+    by_day = {d["day"]: d["net"] for d in cal}
+    n_days = int(elapsed_days) + 1
+    daily_returns = [by_day.get(trading_day(start + timedelta(days=i)), 0.0) / base if base > 0 else 0.0
+                     for i in range(n_days)]
+    change = parse_utc(UNIVERSE_CHANGE_ISO)
+    before = sum(1 for t in rows if (parse_utc(t.get("exit_at")) or start) < change)
+    gross_win, gross_loss = sum(wins), -sum(losses)
     return {
         "strategy": STRATEGY,
         "start": start.isoformat(),
@@ -248,5 +272,18 @@ def summarize(
         "verdict_label": label,
         "research": dict(RESEARCH),
         "r_histogram": r_histogram(rs),
-        "calendar": daily_calendar(rows),
+        "calendar": cal,
+        # performance & risco
+        "profit_factor": (gross_win / gross_loss) if gross_loss > 0 else None,
+        "sharpe": sharpe_annualized(daily_returns),
+        "sharpe_days": n_days,
+        "universe_change": UNIVERSE_CHANGE_ISO,
+        "trades_before_change": before,
+        "trades_after_change": n - before,
+        # MFE/MAE × R por trade (scatter); mae_pct só existe nos trades novos
+        "excursions": [
+            {"symbol": t.get("symbol"), "r": r, "mfe": _f(t.get("mfe_pct")), "mae": _f(t.get("mae_pct")),
+             "pnl": _f(t.get("pnl_net"), 0.0)}
+            for t, r in zip(rows, rs) if r is not None and t.get("mfe_pct") is not None
+        ],
     }

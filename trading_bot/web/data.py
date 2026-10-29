@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -37,11 +38,37 @@ def _iso(dt: Any) -> Optional[str]:
 
 
 def collect_snapshot(bot) -> Dict[str, Any]:
-    """Snapshot completo para a primeira carga e fallback de polling."""
+    """Snapshot completo (/api/snapshot): o que muda a cada poll + o histórico."""
+    return {**collect_live(bot), **collect_history(bot)}
+
+
+def collect_live(bot) -> Dict[str, Any]:
+    """O que o dashboard pede a cada poll (pequeno): KPIs, posições, motor, saúde,
+    progresso do forward test."""
     summary = collect_summary(bot)
+    positions = collect_positions(bot)
+    engine = collect_engine(bot)
+    if engine:
+        engine["gross_notional"] = sum(
+            _safe_float(p.get("quantity")) * _safe_float(p.get("mark_price") or p.get("entry_price"))
+            for p in positions
+        )
     return {
         "summary": summary,
-        "positions": collect_positions(bot),
+        "positions": positions,
+        "forward_test": collect_forward_test(bot, summary),
+        "engine": engine,
+        "health": collect_health(bot, summary),
+        "server_time": datetime.utcnow().isoformat() + "Z",
+        # fuso em que o dashboard mostra horários (o mesmo do dia de trading)
+        "tz_offset_hours": float(getattr(config, "DAILY_PNL_TZ_OFFSET_HOURS", 0.0) or 0.0),
+    }
+
+
+def collect_history(bot) -> Dict[str, Any]:
+    """O que muda só quando um trade fecha (pedido a cada minuto): trades,
+    curva de equity e agregados do TradeStore."""
+    return {
         "recent_trades": collect_recent_trades(bot, limit=300),
         "regime": collect_regime(bot),
         "portfolio_history": collect_portfolio_history(bot, limit=3000),
@@ -49,12 +76,6 @@ def collect_snapshot(bot) -> Dict[str, Any]:
         "pnl_analysis": collect_pnl_analysis(bot),
         "pnl_by_symbol": collect_pnl_by_symbol(bot),
         "mfe_distribution": collect_mfe_distribution(bot),
-        "forward_test": collect_forward_test(bot, summary),
-        "engine": collect_engine(bot),
-        "health": collect_health(bot, summary),
-        "server_time": datetime.utcnow().isoformat() + "Z",
-        # fuso em que o dashboard mostra horários (o mesmo do dia de trading)
-        "tz_offset_hours": float(getattr(config, "DAILY_PNL_TZ_OFFSET_HOURS", 0.0) or 0.0),
     }
 
 
@@ -232,6 +253,51 @@ def collect_daily_history(bot, limit: int = 90) -> List[Dict[str, Any]]:
         return []
 
 
+_BINANCE_TTL = 15.0
+_binance_cache: Dict[str, Any] = {"exchange": None, "at": 0.0, "data": None}
+
+
+def _binance_summary(exchange, store) -> Dict[str, float]:
+    """As 3 chamadas REST da Binance do card de KPIs, uma vez a cada 15s: com o
+    poll de 5s eram ~0,6s de latência em TODA resposta. Guarda a referência da
+    exchange (não só o id) para o cache não vazar entre objetos diferentes."""
+    c = _binance_cache
+    if c["exchange"] is exchange and c["data"] is not None and time.monotonic() - c["at"] < _BINANCE_TTL:
+        return c["data"]
+    out: Dict[str, float] = {}
+    try:
+        daily = exchange.get_daily_pnl_from_binance()
+        # `total` já é o income de HOJE desde 00:00 do dia de trading (realized+funding+
+        # commission) = exatamente o P&L do dia da Binance. NÃO subtrair o
+        # daily_pnl_binance_baseline: ele re-ancora a cada restart e zerava o
+        # card no meio do dia (#136). O dia reseta naturalmente à meia-noite.
+        out["daily_realized"] = _safe_float(daily.get("total"))
+        # funding_fee é negativo quando paga, positivo quando recebe; commission sempre negativo.
+        out["funding_fee"] = _safe_float(daily.get("funding_fee"))
+        out["commission"] = _safe_float(daily.get("commission"))
+    except Exception:
+        pass
+    try:
+        # Funding/comissão ACUMULADOS do PERÍODO ATUAL — alinhados ao P&L realizado
+        # (que recomeça no reset do DB). Âncora = 1º trade do trade_store.
+        start_ms = store.first_trade_time_ms() if store is not None else None
+        if start_ms is not None:
+            cum = exchange.get_cumulative_income_from_binance(start_ms=start_ms)
+            out["funding_total"] = _safe_float(cum.get("funding_fee"))
+            out["commission_total"] = _safe_float(cum.get("commission"))
+    except Exception:
+        pass
+    try:
+        info = exchange.get_account_info()
+        if "wallet_balance" in info:
+            out["wallet_balance"] = _safe_float(info.get("wallet_balance"))
+        out["unrealized"] = _safe_float(info.get("unrealized_pnl"))
+    except Exception:
+        pass
+    c.update(exchange=exchange, at=time.monotonic(), data=out)
+    return out
+
+
 def collect_summary(bot) -> Dict[str, Any]:
     """KPIs do topo da página.
 
@@ -275,39 +341,14 @@ def collect_summary(bot) -> Dict[str, Any]:
     wallet_balance = _safe_float(getattr(bot, "last_known_balance", 0.0) or 0.0)
     exchange = getattr(bot, "exchange", None)
     if exchange is not None:
-        try:
-            daily = exchange.get_daily_pnl_from_binance()
-            # `total` já é o income de HOJE desde 00:00 do dia de trading (realized+funding+
-            # commission) = exatamente o P&L do dia da Binance. NÃO subtrair o
-            # daily_pnl_binance_baseline: ele re-ancora a cada restart e zerava o
-            # card no meio do dia (#136). Como reiniciamos o bot a cada deploy, o
-            # baseline ficava ≈ o total do dia e o card mostrava ~$0 numa perda
-            # real. O dia já reseta naturalmente à meia-noite do dia de trading.
-            binance_daily_realized = _safe_float(daily.get("total"))
-            # funding_fee é negativo quando paga, positivo quando recebe.
-            # commission é sempre negativo (custo).
-            binance_funding_fee = _safe_float(daily.get("funding_fee"))
-            binance_commission = _safe_float(daily.get("commission"))
-        except Exception:
-            pass
-        try:
-            # Funding/comissão ACUMULADOS do PERÍODO ATUAL — alinhados ao P&L
-            # realizado (que recomeça no reset do DB). Âncora = 1º trade do
-            # trade_store; sem trades, fica em 0 (período recém-começado).
-            _store = getattr(bot, "trade_store", None)
-            _start_ms = _store.first_trade_time_ms() if _store is not None else None
-            if _start_ms is not None:
-                cum = exchange.get_cumulative_income_from_binance(start_ms=_start_ms)
-                binance_funding_total = _safe_float(cum.get("funding_fee"))
-                binance_commission_total = _safe_float(cum.get("commission"))
-        except Exception:
-            pass
-        try:
-            info = exchange.get_account_info()
-            wallet_balance = _safe_float(info.get("wallet_balance", wallet_balance))
-            binance_unrealized = _safe_float(info.get("unrealized_pnl"))
-        except Exception:
-            pass
+        b = _binance_summary(exchange, getattr(bot, "trade_store", None))
+        binance_daily_realized = b.get("daily_realized", 0.0)
+        binance_funding_fee = b.get("funding_fee", 0.0)
+        binance_commission = b.get("commission", 0.0)
+        binance_funding_total = b.get("funding_total", 0.0)
+        binance_commission_total = b.get("commission_total", 0.0)
+        wallet_balance = b.get("wallet_balance", wallet_balance)
+        binance_unrealized = b.get("unrealized", 0.0)
 
     # Realizado ACUMULADO do TradeStore — usado só no effective_balance do testnet
     # simulado (cap fixo). Em mainnet o wallet real já reflete o realizado.
@@ -542,6 +583,7 @@ def collect_recent_trades(bot, limit: int = 20) -> List[Dict[str, Any]]:
                     "strategy_type": e.get("strategy_type"),
                     "close_reason": e.get("close_reason", ""),
                     "mfe_pct": e.get("mfe_pct"),
+                    "mae_pct": e.get("mae_pct"),
                     **ft.enrich_trade(row),
                 })
             out.reverse()  # mais recentes primeiro
@@ -674,17 +716,8 @@ def collect_portfolio_history(bot, limit: int = 200) -> List[Dict[str, Any]]:
         # Mesma fórmula do card: testnet simulado soma o realizado acumulado ao
         # cap fixo; em mainnet o wallet já reflete o realizado.
         equity = effective_equity(config, wallet=balance, cumulative_realized=cum_realized, unrealized=unrealized)
-        out.append(
-            {
-                "timestamp": _iso(snap.get("timestamp")) or snap.get("timestamp"),
-                "balance": balance,
-                "equity": equity,
-                "pnl_realized": cum_realized,
-                "pnl_unrealized": unrealized,
-                "pnl_total": cum_realized + unrealized,
-                "closed_trades": int(snap.get("closed_trades", 0) or 0),
-            }
-        )
+        # só o que o gráfico usa: 600 pontos × 7 campos eram 127 KB por poll
+        out.append({"timestamp": _iso(snap.get("timestamp")) or snap.get("timestamp"), "equity": round(equity, 4)})
     return downsample(out, 600)
 
 

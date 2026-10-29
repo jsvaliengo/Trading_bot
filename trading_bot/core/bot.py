@@ -333,6 +333,8 @@ class TradingBot:
         self.last_transfer_check_ts_ms = 0
         self.processed_transfer_ids = []
         self.peak_prices = {}
+        # Pior preço visto por posição (MAE); o peak_prices é o melhor (MFE).
+        self.adverse_prices = {}
         self.trailing_activated = {}
         # symbol -> epoch do último fechamento negativo; barra reentrada
         # imediata no mesmo símbolo (anti-churn). Ver
@@ -762,6 +764,7 @@ class TradingBot:
             # None) — slice em dict lançaria "unhashable type: 'slice'".
             self.trade_history = (state.get('trade_history') or [])[-500:]  # Mantém apenas os últimos 500
             self.peak_prices = state.get('peak_prices', {})
+            self.adverse_prices = state.get('adverse_prices', {})
             self.trailing_activated = state.get('trailing_activated', {})
             raw_cooldowns = state.get('symbol_reentry_cooldowns', {})
             self.symbol_reentry_cooldowns = {
@@ -2330,6 +2333,7 @@ class TradingBot:
         for key in orphan_trailing:
             self.trailing_activated.pop(key, None)
             self.peak_prices.pop(key, None)
+            self.adverse_prices.pop(key, None)
             logger.info(f"🧹 Removido trailing/peak órfão: {key}")
 
         # Notifica Telegram se houve divergência significativa
@@ -4110,6 +4114,7 @@ class TradingBot:
             logger.info(f"   {side} {symbol}: P&L ${pnl:.2f} ({profit_pct:+.2f}%) | Preço: ${current_price:.4f}")
 
             known_meta = self._get_known_position(position_key)
+            self._track_excursion(position_key, side, current_price)
             # Donchian: stop na exchange + saída no canal (DonchianRunner). Sem TP,
             # trailing nem SL local aqui.
             if known_meta.get('strategy_type') == DONCHIAN:
@@ -4539,6 +4544,14 @@ class TradingBot:
             raw = peak_price * (1 + distance)
             breakeven_ceiling = entry_price * (1 - fee_floor)
             return min(raw, breakeven_ceiling)
+
+    def _track_excursion(self, position_key: str, side: str, current_price: float) -> None:
+        """MFE/MAE: melhor (peak_prices) e pior (adverse_prices) preço desde a abertura,
+        para toda posição — o trailing só rastreia o pico das que ele cuida."""
+        better, worse = (max, min) if side == "LONG" else (min, max)
+        self.peak_prices[position_key] = better(self.peak_prices.get(position_key, current_price), current_price)
+        self.adverse_prices[position_key] = worse(self.adverse_prices.get(position_key, current_price), current_price)
+        self.trailing_activated.setdefault(position_key, False)
 
     def _check_trailing_stop(
         self,
