@@ -273,6 +273,8 @@ class PortfolioConfig:
     max_gross_mult: float = 3.0      # teto da soma dos notionals abertos (× equity)
     max_concurrent: int = 6
     sl_buffer: float = 1.0           # SLIPPAGE_BUFFER_MULT do bot: notional dimensionado contra sl × buffer
+    size_on_initial: bool = False    # notional e tetos sobre a equity INICIAL (sem compounding): a amostra
+                                     # de trades não é truncada quando a equity vai a zero
 
 
 @dataclass
@@ -347,8 +349,9 @@ def run_portfolio(sym_data: Dict[str, SymbolData], schedule: Sequence[tuple], t_
         if len(open_heap) >= pcfg.max_concurrent:
             skipped += 1
             continue
-        if equity <= 0:
+        if equity <= 0 and not pcfg.size_on_initial:
             break
+        base = pcfg.initial_equity if pcfg.size_on_initial else equity
         sd = sym_data[sym]
         flags = None
         if sd.signals.exit_long is not None:
@@ -361,11 +364,11 @@ def run_portfolio(sym_data: Dict[str, SymbolData], schedule: Sequence[tuple], t_
             continue
         sl_pct = params.get("sl_pct") or (abs(tr.sl / tr.entry_price - 1) * 100 if tr.sl else None)
         if pcfg.sizing == "risk" and sl_pct:
-            notional = equity * (pcfg.risk_pct / 100.0) / (sl_pct * pcfg.sl_buffer / 100.0)
+            notional = base * (pcfg.risk_pct / 100.0) / (sl_pct * pcfg.sl_buffer / 100.0)
         else:
-            notional = equity * pcfg.fraction
-        notional = min(notional, equity * pcfg.max_pos_mult)
-        room = equity * pcfg.max_gross_mult - gross_open
+            notional = base * pcfg.fraction
+        notional = min(notional, base * pcfg.max_pos_mult)
+        room = base * pcfg.max_gross_mult - gross_open
         if room <= 0:
             skipped += 1
             continue
