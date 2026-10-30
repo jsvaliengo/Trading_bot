@@ -197,4 +197,4 @@ data/hora do deploy desta regra; o que foi medido antes vira histórico.
   no backtest Donchian, os poucos trades de +3R a +5R pagam os ~70% de stops. Este
   trailing corta exatamente esses. Não foi rodado backtest desta variante antes de
   ligar; o forward test é a medição.
-- Quando vale / deploy: **a preencher no deploy** (data UTC, hash, valor da env).
+- Quando vale / deploy: 2026-10-30 23:30 UTC, deploy `f922e3c` (PR #233); `TRADING_BOT_FORWARD_TEST_RESTART_AT=2026-10-30T23:28:00Z` na `.env` da VM. Posições abertas no reinício: 1000000MOG, 1000CAT (SHORT), BEAMX, HUMA (LONG).
