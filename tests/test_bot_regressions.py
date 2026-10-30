@@ -1,4 +1,5 @@
 import json
+import sqlite3
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -3177,3 +3178,58 @@ def test_open_records_fill_avg_price_as_entry(monkeypatch, open_kwargs, side, se
     assert bot.execute_signal_trade(setup, strategy_name="trend_strong", **open_kwargs) is True
     assert bot.known_positions[f"NEARUSDT_{side}"]["entry_price"] == pytest.approx(4.9945)
     assert bot.trade_history[-1]["entry_price"] == pytest.approx(4.9945)
+
+
+def test_manual_close_nao_duplica_registro_quando_monitor_ve_posicao_sumir():
+    """30/10: fechamento manual (thread do Flask) e monitor_positions (loop)
+    correram: a ordem a mercado tirou a posição da exchange, o monitor viu o
+    sumiço antes de positions.close e registrou um 2º fechamento "(Binance)"
+    (BATUSDT ids 121 e 126). Só UM registro, com o motivo manual."""
+    bot = _bot_for_market_close({"orderId": 7, "status": "FILLED", "avgPrice": "99.0"})
+    pos = {"symbol": "BATUSDT", "side": "SHORT", "entry_price": 100.0, "quantity": 1.0}
+    bot.known_positions = {"BATUSDT_SHORT": dict(pos, strategy_type="donchian_4h")}
+    bot._process_binance_closed_position = MagicMock()
+    live = [dict(pos, mark_price=99.0, unrealized_pnl=1.0)]
+
+    def close_and_race(_symbol, _side):
+        live.clear()                # a exchange já não tem a posição...
+        bot.monitor_positions()     # ...e o monitor passa antes do registro manual
+        return {"orderId": 7, "status": "FILLED", "avgPrice": "99.0"}
+
+    bot.exchange.close_position = close_and_race
+    bot.exchange.get_open_positions = lambda *a, **kw: list(live)
+    bot.exchange.cancel_open_orders = MagicMock(return_value=True)
+
+    assert bot.close_position_manual("BATUSDT") is True
+
+    bot._process_binance_closed_position.assert_not_called()
+    bot.ledger.record_trade_closed.assert_called_once()
+    assert bot.ledger.record_trade_closed.call_args.kwargs["close_reason"] == "Manual (dashboard)"
+    assert "BATUSDT_SHORT" not in bot.known_positions
+
+
+def test_dedupe_manual_close_script_apaga_so_a_linha_binance_do_mesmo_minuto(tmp_path, capsys):
+    from trading_bot.core.trade_store import TradeStore
+    from scripts.dedupe_manual_close import main
+
+    db = str(tmp_path / "t.db")
+    store = TradeStore(db)
+    base = {"symbol": "BATUSDT", "side": "SHORT", "entry_price": 0.1, "exit_price": 0.09,
+            "pnl_gross": 0.4, "pnl_net": 0.36, "fees": 0.04, "strategy_name": "donchian_4h"}
+    store.record_open({"opened_at": "2026-10-29T10:00:00+00:00", "symbol": "BATUSDT", "side": "SHORT",
+                       "entry_price": 0.1, "qty": 10.0, "strategy_name": "donchian_4h"})
+    store.record_close(exit_at="2026-10-30T21:26:05+00:00", close_reason="Manual (dashboard)", **base)
+    store.record_close(exit_at="2026-10-30T21:26:07+00:00", close_reason="Take Profit (Binance)", **base)  # a duplicata
+    # Fechamento legítimo pela Binance horas depois: fica
+    store.record_close(exit_at="2026-10-31T03:00:00+00:00", close_reason="Stop Loss (Binance)", **base)
+    store.close()
+
+    assert main(["--db", db]) == 0
+    assert "duplicatas: 1" in capsys.readouterr().out
+    con = sqlite3.connect(db)
+    assert con.execute("SELECT count(*) FROM trades").fetchone()[0] == 3   # dry-run não apaga
+
+    assert main(["--db", db, "--apply"]) == 0
+    rows = con.execute("SELECT close_reason FROM trades WHERE status='closed' ORDER BY id").fetchall()
+    assert [r[0] for r in rows] == ["Manual (dashboard)", "Stop Loss (Binance)"]
+    assert list(tmp_path.glob("t.db.bak.dedupe.*"))

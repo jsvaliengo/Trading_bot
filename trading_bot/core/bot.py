@@ -345,6 +345,9 @@ class TradingBot:
         self.last_known_balance: float | None = None
         self.last_drawdown_equity: float | None = None
         self.known_positions = {}
+        # Chaves com ordem de fechamento em voo (engine). O monitor não as trata
+        # como "fechadas pela Binance": a posição some da exchange antes do registro.
+        self.closing_keys: set = set()
         self.double_first_used = {}
         self.commission_rates = None
         self.pair_selector = None
@@ -4050,7 +4053,7 @@ class TradingBot:
             # limpeza de trailing (positions.close) ainda roda após processar.
             closed_by_binance = []
             for pk in list(self.known_positions.keys()):
-                if pk not in current_position_keys:
+                if pk not in current_position_keys and pk not in self.closing_keys:
                     closed_by_binance.append((pk, dict(self.known_positions[pk])))
                     self.known_positions.pop(pk, None)
 
