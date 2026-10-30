@@ -295,6 +295,7 @@
     }
     function renderPositions(positions) {
         const root = $('positions-list'); $('positions-count').textContent = positions.length;
+        for (const s of closing) if (!positions.some(p => p.symbol === s)) closing.delete(s);   // símbolo já saiu: libera o botão numa reentrada
         const unreal = positions.map(p => p.unrealized_pnl_usd).filter(isNum), risk = positions.map(p => p.risk_usd).filter(isNum);
         $('pos-sum').textContent = positions.length ? `não realizado ${fmt.usd(sum(unreal), { signed: true })} · risco inicial total ${fmt.usd(sum(risk))}` : '';
         if (!positions.length) { root.innerHTML = '<p class="empty">Nenhuma posição aberta. O motor entra só no fechamento de barra 4h com rompimento de 40 barras.</p>'; return; }
