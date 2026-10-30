@@ -147,6 +147,25 @@ def _register_routes(app: Flask, socketio: SocketIO) -> None:
         logger.warning(f"🚨 close_all via dashboard: {reason}")
         return jsonify({"ok": True, "reason": reason})
 
+    @app.route("/api/positions/<symbol>/close", methods=["POST"])
+    @require_basic_auth
+    def close_position(symbol: str):
+        bot = app.config["BOT"]
+        payload = request.get_json(silent=True) or {}
+        if payload.get("confirm") != symbol:
+            return jsonify({"ok": False, "error": "confirm precisa ser igual ao símbolo"}), 400
+        # Mesmo caminho do exit do Donchian: fecha a mercado, registra, cancela o stop órfão.
+        try:
+            closed = bot.close_position_manual(symbol, "Manual (dashboard)")
+        except LookupError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 404
+        except Exception as exc:
+            logger.exception(f"Falha no fechamento manual de {symbol} via dashboard")
+            return jsonify({"ok": False, "error": str(exc)}), 500
+        if not closed:
+            return jsonify({"ok": False, "error": "a exchange não confirmou o fechamento"}), 502
+        return jsonify({"ok": True, "symbol": symbol})
+
 
 # ----------------------------------------------------------------------
 # Socket.IO event handlers

@@ -66,6 +66,7 @@ def _make_bot(*, username: str = "admin", password: str = "secret", **overrides)
         _regime_observations=overrides.get("_regime_observations", {}),
         _positions_lock=None,
         _close_all_positions_daily_target=MagicMock(),
+        close_position_manual=MagicMock(return_value=True),
     )
     return bot
 
@@ -195,6 +196,52 @@ def test_close_all_invokes_bot_method_with_reason():
     )
     assert r.status_code == 200
     bot._close_all_positions_daily_target.assert_called_once_with("test reason")
+
+
+def _close_position(client, symbol, body):
+    return client.post(
+        f"/api/positions/{symbol}/close",
+        headers={**_basic_auth("admin", "secret"), "Content-Type": "application/json"},
+        json=body,
+    )
+
+
+def test_close_position_requires_matching_confirm():
+    from trading_bot.web.app import create_app
+    bot = _make_bot()
+    app, _ = create_app(bot)
+    client = app.test_client()
+    for body in ({}, {"confirm": "ETHUSDT"}):
+        r = _close_position(client, "BTCUSDT", body)
+        assert r.status_code == 400 and r.get_json()["ok"] is False
+    bot.close_position_manual.assert_not_called()
+
+
+def test_close_position_rejects_symbol_not_open():
+    from trading_bot.web.app import create_app
+    bot = _make_bot()
+    bot.close_position_manual = MagicMock(side_effect=LookupError("BTCUSDT não tem posição aberta"))
+    app, _ = create_app(bot)
+    r = _close_position(app.test_client(), "BTCUSDT", {"confirm": "BTCUSDT"})
+    assert r.status_code == 404 and "BTCUSDT" in r.get_json()["error"]
+
+
+def test_close_position_calls_bot_with_symbol_and_manual_reason():
+    from trading_bot.web.app import create_app
+    bot = _make_bot()
+    app, _ = create_app(bot)
+    r = _close_position(app.test_client(), "BTCUSDT", {"confirm": "BTCUSDT"})
+    assert r.status_code == 200 and r.get_json() == {"ok": True, "symbol": "BTCUSDT"}
+    bot.close_position_manual.assert_called_once_with("BTCUSDT", "Manual (dashboard)")
+
+
+def test_close_position_reports_unconfirmed_close():
+    from trading_bot.web.app import create_app
+    bot = _make_bot()
+    bot.close_position_manual = MagicMock(return_value=False)
+    app, _ = create_app(bot)
+    r = _close_position(app.test_client(), "BTCUSDT", {"confirm": "BTCUSDT"})
+    assert r.status_code == 502 and r.get_json()["ok"] is False
 
 
 def test_close_all_returns_500_when_bot_method_fails():

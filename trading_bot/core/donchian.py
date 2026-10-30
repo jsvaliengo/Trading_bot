@@ -470,12 +470,7 @@ class DonchianRunner:
 
     # ---- execução ----
     def _close(self, pos: Dict[str, Any], reason: str) -> bool:
-        key = f"{pos['symbol']}_{pos['side']}"
-        if not self.bot._close_position_with_notification(pos, reason):
-            return False
-        self.bot.positions.close(key)
-        self.bot.exchange.cancel_open_orders(pos["symbol"])   # o STOP_MARKET closePosition fica órfão
-        return True
+        return self.bot.close_position(pos, reason)
 
     def _open(self, symbol: str, side: str, stop_pct: float, sizing: Sizing, info: Dict[str, Any],
               price: float) -> float:

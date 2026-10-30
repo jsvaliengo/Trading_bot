@@ -283,6 +283,7 @@ def summarize(
         "universe_change": UNIVERSE_CHANGE_ISO,
         "trades_before_change": before,
         "trades_after_change": n - before,
+        "manual_closes": sum(1 for t in rows if str(t.get("close_reason") or "").startswith("Manual")),
         # MFE/MAE × R por trade (scatter); mae_pct só existe nos trades novos
         "excursions": [
             {"symbol": t.get("symbol"), "r": r, "mfe": _f(t.get("mfe_pct")), "mae": _f(t.get("mae_pct")),

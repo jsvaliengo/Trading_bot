@@ -4647,6 +4647,23 @@ class TradingBot:
         """Delegador — lógica real em ExecutionEngine (preserva API interna)."""
         return self.execution_engine.close_position_with_notification(pos, reason)
 
+    def close_position(self, pos: dict, reason: str) -> bool:
+        """Fecha a mercado, registra no TradeStore/Telegram, tira do rastreamento e
+        cancela o STOP_MARKET closePosition que ficaria órfão. Caminho do exit Donchian."""
+        if not self._close_position_with_notification(pos, reason):
+            return False
+        self.positions.close(f"{pos['symbol']}_{pos['side']}")
+        self.exchange.cancel_open_orders(pos["symbol"])
+        return True
+
+    def close_position_manual(self, symbol: str, reason: str = "Manual (dashboard)") -> bool:
+        """Fechamento manual (dashboard). LookupError se o símbolo não tem posição aberta."""
+        live = [p for p in self.exchange.get_open_positions(force_refresh=True) if p["symbol"] == symbol]
+        if not live:
+            raise LookupError(f"{symbol} não tem posição aberta")
+        logger.warning(f"🖐️ Fechamento manual de {live[0]['side']} {symbol}: {reason}")
+        return self.close_position(live[0], reason)
+
     def check_global_stop_loss(self) -> bool:
         """Delegador — lógica real em ExecutionEngine."""
         return self.execution_engine.check_global_stop_loss()
