@@ -18,17 +18,49 @@ def _bins(prices_by_bin):
         low[b], high[b], last[b], cnt[b] = min(ps), max(ps), ps[-1], len(ps)
     idx = np.maximum.accumulate(np.where(np.isnan(last), -1, np.arange(n)))
     last = np.where(idx >= 0, last[np.maximum(idx, 0)], np.nan)
-    return {"low": low, "high": high, "last": last, "n": cnt}
+    # fixture sem bounce: último trade no bid = no ask = último trade (mid = last)
+    return {"low": low, "high": high, "last": last, "last_bid": last, "last_ask": last, "n": cnt}
 
 
 def test_bin_day_matches_manual_bins():
     day0 = 1_740_787_200_000  # 2025-03-01 00:00 UTC
-    trades = np.array([[100.0, day0 + 10], [99.0, day0 + 50], [101.0, day0 + 150], [100.5, day0 + 86_399_999]])
+    # (preço, ts, is_buyer_maker): 1 = agressor vendedor (trade no bid), 0 = comprador (no ask)
+    trades = np.array([[100.0, day0 + 10, 0], [99.0, day0 + 50, 1], [101.0, day0 + 150, 0],
+                       [100.5, day0 + 86_399_999, 1]])
     b = mm.bin_day(trades)
     assert b["low"][0] == 99.0 and b["high"][0] == 100.0 and b["last"][0] == 99.0 and b["n"][0] == 2
     assert b["low"][1] == 101.0 and b["n"][1] == 1
     assert b["last"][2] == 101.0  # forward fill
     assert b["last"][-1] == 100.5 and np.isinf(b["low"][2])
+    assert b["last_bid"][0] == 99.0 and b["last_ask"][0] == 100.0
+    assert b["last_bid"][2] == 99.0 and b["last_ask"][2] == 101.0  # mid no bin 2 = 100,0, sem bounce
+    assert b["last_bid"][-1] == 100.5 and b["last_ask"][-1] == 101.0
+
+
+def test_bounce_does_not_fill_inside_real_spread_and_taker_crosses_it():
+    # SNX-like: prints alternam 0,990 (bid) / 1,010 (ask); mid = 1,000; s = 10 bps → bid 0,999, ask 1,001
+    n = mm.BINS_PER_DAY
+    last_bid = np.full(n, 0.990)
+    last_ask = np.full(n, 1.010)
+    low = np.full(n, np.inf)
+    high = np.full(n, -np.inf)
+    cnt = np.zeros(n, np.int32)
+    for b in range(0, 200, 10):
+        low[b], high[b], cnt[b] = 0.990, 1.010, 2
+    bins = {"low": low, "high": high, "last": last_ask, "last_bid": last_bid, "last_ask": last_ask, "n": cnt}
+    r = mm.simulate_day("ADAUSDT", bins, 1, 10, 10.0, equal_fills=False)  # tick 0,0001 = 1 bp aqui
+    # prints cruzam as duas cotações (0,990 < 0,999 e 1,010 > 1,001) em todo intervalo: compra e vende
+    assert r["n_fills"] > 0 and r["n_fills"] % 2 == 0 and r["taker_notional"] == 0.0
+    # ... e cada par captura ~2 × 10 bps de $10 (± 1 tick de arredondamento): bruto positivo
+    per_pair = r["gross"] / (r["n_fills"] / 2)
+    assert 10.0 * 0.0018 <= per_pair <= 10.0 * 0.0023
+    # inventário comprado zerado a mercado no fim do dia vende no bid (0,990), não no mid
+    low2 = np.full(n, np.inf)
+    low2[15] = 0.990
+    bins2 = dict(bins, low=low2, high=np.full(n, -np.inf))
+    r2 = mm.simulate_day("ADAUSDT", bins2, 1, 10, 10.0, equal_fills=False)
+    assert r2["n_fills"] == 1 and r2["n_flatten"] == 0
+    assert -10.0 * 0.0102 <= r2["gross"] <= -10.0 * 0.0088  # ≈ 10 × (0,990 − 0,999)
 
 
 def test_end_of_queue_needs_strict_cross_equal_fills_at_touch():

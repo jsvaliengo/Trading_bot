@@ -82,47 +82,60 @@ def download(sym: str, day: str, session: Optional[requests.Session] = None) -> 
     return None
 
 
+BIN_KEYS = ("low", "high", "last", "last_bid", "last_ask", "n")
+
+
 def _parse_zip(path: Path) -> np.ndarray:
-    """Colunas (price, ts_ms) dos trades, lidas em memória. Lida com e sem cabeçalho."""
+    """Colunas (price, ts_ms, is_buyer_maker) dos trades, lidas em memória. Com ou sem cabeçalho."""
     with zipfile.ZipFile(path) as zf:
         name = zf.namelist()[0]
         raw = zf.read(name)
     skip = 0 if raw[:1].isdigit() else 1
-    arr = np.loadtxt(io.BytesIO(raw), delimiter=",", skiprows=skip, usecols=(1, 5), dtype=np.float64)
-    return arr.reshape(-1, 2)
+    arr = np.loadtxt(io.BytesIO(raw), delimiter=",", skiprows=skip, usecols=(1, 5, 6), dtype=np.float64,
+                     converters={6: lambda s: 1.0 if str(s).strip().lower() in ("true", "1") else 0.0})
+    return arr.reshape(-1, 3)
+
+
+def _ffill(x: np.ndarray) -> np.ndarray:
+    idx = np.maximum.accumulate(np.where(np.isnan(x), -1, np.arange(len(x))))
+    return np.where(idx >= 0, x[np.maximum(idx, 0)], np.nan)
+
+
+def _last_by_bin(b: np.ndarray, price: np.ndarray) -> np.ndarray:
+    out = np.full(BINS_PER_DAY, np.nan)
+    if len(b) == 0:
+        return out
+    starts = np.flatnonzero(np.r_[True, b[1:] != b[:-1]])
+    out[b[starts]] = price[np.r_[starts[1:], len(price)] - 1]
+    return _ffill(out)
 
 
 def bin_day(trades: np.ndarray) -> Dict[str, np.ndarray]:
-    """Bins de 100 ms: low (+inf se vazio), high (−inf), last (ffill; NaN antes do 1º trade), n."""
-    price, ts = trades[:, 0], trades[:, 1]
+    """Bins de 100 ms: low (+inf se vazio), high (−inf), last (ffill; NaN antes do 1º trade), n,
+    last_bid / last_ask = último trade com agressor vendedor (is_buyer_maker) / comprador."""
+    price, ts, bm = trades[:, 0], trades[:, 1], trades[:, 2] > 0.5
     day0 = (ts[0] // 86_400_000) * 86_400_000
     b = ((ts - day0) // BIN_MS).astype(np.int64)
     b = np.clip(b, 0, BINS_PER_DAY - 1)
     order = np.argsort(b, kind="stable")
-    b, price = b[order], price[order]
+    b, price, bm = b[order], price[order], bm[order]
     starts = np.flatnonzero(np.r_[True, b[1:] != b[:-1]])
     ub = b[starts]
     low = np.full(BINS_PER_DAY, np.inf)
     high = np.full(BINS_PER_DAY, -np.inf)
-    last = np.full(BINS_PER_DAY, np.nan)
     n = np.zeros(BINS_PER_DAY, np.int32)
     low[ub] = np.minimum.reduceat(price, starts)
     high[ub] = np.maximum.reduceat(price, starts)
-    ends = np.r_[starts[1:], len(price)] - 1
-    last[ub] = price[ends]
     n[ub] = np.diff(np.r_[starts, len(price)])
-    # forward fill do último preço
-    idx = np.where(np.isnan(last), -1, np.arange(BINS_PER_DAY))
-    idx = np.maximum.accumulate(idx)
-    last = np.where(idx >= 0, last[np.maximum(idx, 0)], np.nan)
-    return {"low": low, "high": high, "last": last, "n": n}
+    return {"low": low, "high": high, "last": _last_by_bin(b, price), "n": n,
+            "last_bid": _last_by_bin(b[bm], price[bm]), "last_ask": _last_by_bin(b[~bm], price[~bm])}
 
 
 def load_day(sym: str, day: str) -> Optional[Dict[str, np.ndarray]]:
     out = BIN_DIR / f"{sym}-{day}.npz"
     if out.exists():
         with np.load(out) as z:
-            return {k: z[k] for k in ("low", "high", "last", "n")}
+            return {k: z[k] for k in BIN_KEYS}
     path = download(sym, day)
     if path is None:
         return None
@@ -137,29 +150,30 @@ def load_day(sym: str, day: str) -> Optional[Dict[str, np.ndarray]]:
 # ----------------------------------------------------------------------------- simulação
 def interval_arrays(bins: Dict[str, np.ndarray], requote_s: int) -> Dict[str, np.ndarray]:
     """Agrega bins de 100 ms em intervalos de requote: L/H do intervalo, mid de referência
-    (último trade até t − 200 ms), índice do bin de fim do intervalo."""
+    ((último trade no bid + último no ask)/2 até t − 200 ms), índice do bin de fim do intervalo."""
     k = requote_s * 1000 // BIN_MS
     n_int = BINS_PER_DAY // k
     low = bins["low"][: n_int * k].reshape(n_int, k)
     high = bins["high"][: n_int * k].reshape(n_int, k)
-    last = bins["last"]
+    mid = (bins["last_bid"] + bins["last_ask"]) / 2.0
     ref_idx = np.arange(n_int) * k - LATENCY_BINS
-    m_ref = np.where(ref_idx >= 0, last[np.maximum(ref_idx, 0)], np.nan)
+    m_ref = np.where(ref_idx >= 0, mid[np.maximum(ref_idx, 0)], np.nan)
     return {"L": low.min(1), "H": high.max(1), "m_ref": m_ref, "end_bin": np.arange(1, n_int + 1) * k - 1,
-            "last": last, "k": k}
+            "mid": mid, "bid_px": bins["last_bid"], "ask_px": bins["last_ask"], "k": k}
 
 
 def simulate_day(sym: str, bins: Dict[str, np.ndarray], requote_s: int, spread_bps: float,
                  notional: float, equal_fills: bool, chunk: int = 4096) -> Dict[str, float]:
     """Um dia, um símbolo, uma célula. Devolve P&L bruto (sem fee maker), notionals, markouts."""
     ia = interval_arrays(bins, requote_s)
-    L, H, m_ref, end_bin, last = ia["L"], ia["H"], ia["m_ref"], ia["end_bin"], ia["last"]
+    L, H, m_ref, end_bin, mid = ia["L"], ia["H"], ia["m_ref"], ia["end_bin"], ia["mid"]
+    bid_px, ask_px = ia["bid_px"], ia["ask_px"]
     tick = TICK[sym]
     notional = max(notional, MIN_NOTIONAL.get(sym, 0.0))
     s = spread_bps / 1e4
     q_max = INV_MULT * notional
     n_int = len(L)
-    n_bins = len(last)
+    n_bins = len(mid)
     q = 0.0
     cash = 0.0
     maker_notional = 0.0
@@ -171,8 +185,12 @@ def simulate_day(sym: str, bins: Dict[str, np.ndarray], requote_s: int, spread_b
     mark_mid = {h: 0.0 for h in AS_HORIZONS}
     i = 0
 
-    def flatten(px: float) -> None:
+    def flatten(b: int) -> None:
+        """Taker: vende no último preço do lado bid, compra no do lado ask (cruza o spread real)."""
         nonlocal q, cash, taker_notional
+        px = bid_px[b] if q > 0 else ask_px[b]
+        if np.isnan(px):
+            return
         cash += q * px
         taker_notional += abs(q) * px
         q = 0.0
@@ -184,8 +202,7 @@ def simulate_day(sym: str, bins: Dict[str, np.ndarray], requote_s: int, spread_b
             continue
         inv0 = q * m0
         if abs(inv0) >= q_max:
-            px_bin = min(i * ia["k"] + LATENCY_BINS, n_bins - 1)
-            flatten(last[px_bin])
+            flatten(min(i * ia["k"] + LATENCY_BINS, n_bins - 1))
             n_flatten += 1
         # varre em blocos até o primeiro intervalo em que algum lado preenche
         j = -1
@@ -223,15 +240,14 @@ def simulate_day(sym: str, bins: Dict[str, np.ndarray], requote_s: int, spread_b
             maker_notional += qty * px
             n_fills += 1
             for h, nb in AS_HORIZONS.items():
-                p_after = last[min(e + nb, n_bins - 1)]
+                p_after = mid[min(e + nb, n_bins - 1)]
                 if not np.isnan(p_after):
                     mark[h] += side * (p_after - px) * qty
                     mark_mid[h] += side * (p_after - m_ref[j]) * qty
         max_inv = max(max_inv, abs(q * m_ref[j]))
         i = j + 1
-    px_end = last[-1] if not np.isnan(last[-1]) else float(np.nan)
-    if q != 0.0 and not np.isnan(px_end):
-        flatten(px_end)
+    if q != 0.0:
+        flatten(n_bins - 1)
     return {"gross": cash, "maker_notional": maker_notional, "taker_notional": taker_notional,
             "n_fills": n_fills, "n_flatten": n_flatten, "max_inv": max_inv,
             "mark_1s": mark["1s"], "mark_10s": mark["10s"],
