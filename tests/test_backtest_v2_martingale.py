@@ -36,8 +36,11 @@ def test_ladder_avg_and_tp_long_leg():
 
 def test_no_tp_in_same_bar_as_add():
     # barra que cai 2% e volta ao preço: a LONG adiciona (1 nível), mas não dá TP na mesma barra
-    o = np.array([[100.0], [100.0]]); c = np.array([[100.0], [100.0]])
-    h = np.array([[100.0], [100.0]]); lo = np.array([[100.0], [98.0]]); f = np.zeros_like(c)
+    o = np.array([[100.0], [100.0]])
+    c = np.array([[100.0], [100.0]])
+    h = np.array([[100.0], [100.0]])
+    lo = np.array([[100.0], [98.0]])
+    f = np.zeros_like(c)
     eq, un, gr, dep, ev, st = mg.simulate(o, h, lo, c, f, 10.0, 0.015, 2.0, 0.01, 1000, 1000.0, 0.0)
     assert int(st[0]) == 1 and int(st[6]) == 2  # só a SHORT fecha (TP em 98,97 ≥ low); LONG adiciona 1 nível e não dá TP
 
@@ -70,8 +73,12 @@ def test_base_order_sizing():
 
 def test_metrics_net_discounts_deposits():
     grid_t = mg.to_ms("2024-01-01") + np.arange(4) * 300_000
-    eq = np.array([300.0, 150.0, 300.0, 310.0]); un = np.zeros(4); gr = np.ones(4); dep = np.array([300.0, 300.0, 600.0, 600.0])
-    ev = np.array([0, 0, mg.LIQ, 0.0]); st = np.array([10, 9, 20.0, 1, 2, 0, 3, 0.8, 600.0, 310.0])
+    eq = np.array([300.0, 150.0, 300.0, 310.0])
+    un = np.zeros(4)
+    gr = np.ones(4)
+    dep = np.array([300.0, 300.0, 600.0, 600.0])
+    ev = np.array([0, 0, mg.LIQ, 0.0])
+    st = np.array([10, 9, 20.0, 1, 2, 0, 3, 0.8, 600.0, 310.0])
     m = mg.metrics(grid_t, eq, un, gr, dep, ev, st, 300.0)
     assert m["net_usd"] == -290.0 and m["liquidations"] == 1 and m["win_rate"] == 90.0
     assert abs(m["net_after_perf_fee_usd"] - (-290.0 - 4.0)) < 1e-9

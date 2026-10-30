@@ -11,11 +11,10 @@ Python puro (mesmo resultado, ~100× mais lento).
 from __future__ import annotations
 
 import argparse
-import datetime as dt
 import json
 import logging
 import time
-from typing import Dict, List
+from typing import List
 
 import numpy as np
 
