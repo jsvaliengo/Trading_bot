@@ -89,6 +89,10 @@ Nenhum parâmetro muda durante o teste: canais, ATR, k, risco, tetos, universo e
 limite de drawdown. Bug que invalide o teste pode ser corrigido. A correção fica
 registrada neste arquivo com a data, e os trades afetados são listados.
 
+Fechamento manual pelo botão "Fechar" do dashboard sai pelo mesmo caminho do exit
+do Donchian, fica com `close_reason` "Manual (dashboard)" no SQLite e é contado
+separadamente no relatório (`manual_closes`).
+
 ## Ressalvas
 
 - Fills do testnet são aproximados. Livro, slippage e preço do testnet diferem da

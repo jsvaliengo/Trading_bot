@@ -646,3 +646,15 @@ def test_deferred_bar_logs_that_it_was_not_processed(caplog):
         "🕓 Donchian: barra 2025-10-27 20:00 UTC NÃO processada — adiada 2x, "
         "posições indisponíveis (timeout); 1 pares pendentes"
     ]
+
+
+def test_bot_close_position_manual_uses_donchian_exit_path():
+    held = [{"symbol": "XUSDT", "side": "LONG", "entry_price": 100.0, "quantity": 1.0}]
+    ex = _Ex({}, positions=held)
+    bot = _bot(ex, known={"XUSDT_LONG": {"symbol": "XUSDT", "side": "LONG", "strategy_type": "donchian_4h"}})
+    assert bot.close_position_manual("XUSDT") is True
+    bot._close_position_with_notification.assert_called_once_with(held[0], "Manual (dashboard)")
+    assert "XUSDT_LONG" not in bot.known_positions
+    ex.cancel_open_orders.assert_called_once_with("XUSDT")
+    with pytest.raises(LookupError):
+        bot.close_position_manual("YUSDT")

@@ -295,6 +295,7 @@
     }
     function renderPositions(positions) {
         const root = $('positions-list'); $('positions-count').textContent = positions.length;
+        for (const s of closing) if (!positions.some(p => p.symbol === s)) closing.delete(s);   // símbolo já saiu: libera o botão numa reentrada
         const unreal = positions.map(p => p.unrealized_pnl_usd).filter(isNum), risk = positions.map(p => p.risk_usd).filter(isNum);
         $('pos-sum').textContent = positions.length ? `não realizado ${fmt.usd(sum(unreal), { signed: true })} · risco inicial total ${fmt.usd(sum(risk))}` : '';
         if (!positions.length) { root.innerHTML = '<p class="empty">Nenhuma posição aberta. O motor entra só no fechamento de barra 4h com rompimento de 40 barras.</p>'; return; }
@@ -307,11 +308,40 @@
                     <span class="pr-pnl ${cls(p.unrealized_pnl_usd)}">${fmt.usd(p.unrealized_pnl_usd, { signed: true })}<small>${fmt.pct(p.unrealized_pnl_percent)}</small></span>
                     <span class="pr-r ${cls(p.r_now)}">${fmt.r(p.r_now)}<small>risco ${fmt.usd(p.risk_usd)}</small></span>
                     <span class="pr-meta">${fmt.price(p.quantity)} un · ${fmt.dur(age)}</span>
+                    <span class="pr-close" data-symbol="${esc(p.symbol)}" data-pnl="${esc(fmt.usd(p.unrealized_pnl_usd, { signed: true }))}">${
+                        closing.has(p.symbol) ? '<small class="dim">fechando…</small>' : '<button type="button" class="btn btn-quiet btn-xs" data-close="ask">Fechar</button>'
+                    }</span>
                 </div>
                 ${isD ? ruler(p) : `<div class="ruler-l"><span>stop <b>${fmt.price(p.custom_stop_loss)}</b></span><span>TP <b>${fmt.price(p.custom_take_profit)}</b></span></div>`}
             </div>`;
         }).join('');
     }
+
+    // Fechar posição: o botão vira Confirmar/Cancelar inline; o próximo poll remove o card.
+    const closing = new Set();
+    $('positions-list').addEventListener('click', async (e) => {
+        const btn = e.target.closest('[data-close]'); if (!btn) return;
+        const cell = btn.closest('.pr-close'), sym = cell.dataset.symbol;
+        if (btn.dataset.close === 'ask') {
+            cell.innerHTML = `<small>fechar ${esc(sym)} a mercado (${esc(cell.dataset.pnl)})?</small>
+                <button type="button" class="btn btn-danger btn-xs" data-close="yes">Confirmar</button>
+                <button type="button" class="btn btn-quiet btn-xs" data-close="no">Cancelar</button>`;
+        } else if (btn.dataset.close === 'no') {
+            cell.innerHTML = '<button type="button" class="btn btn-quiet btn-xs" data-close="ask">Fechar</button>';
+        } else {
+            closing.add(sym); cell.innerHTML = '<small class="dim">fechando…</small>';
+            try {
+                const r = await fetch(`/api/positions/${encodeURIComponent(sym)}/close`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirm: sym }), credentials: 'include' });
+                const body = await r.json().catch(() => ({}));
+                if (!r.ok || !body.ok) throw new Error(body.error || ('HTTP ' + r.status));
+            } catch (err) {
+                closing.delete(sym);
+                cell.innerHTML = `<small class="neg">${esc(err.message)}</small> <button type="button" class="btn btn-quiet btn-xs" data-close="ask">Fechar</button>`;
+                return;
+            }
+            reqRefresh();
+        }
+    });
 
     // ───────── Motor Donchian ─────────
     function renderEngine(e, positions) {

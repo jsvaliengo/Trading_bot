@@ -275,3 +275,9 @@ def test_binance_summary_cacheia_por_15s_por_exchange(monkeypatch):
     assert dash._binance_summary(ex, None) is not a and len(calls) == 4       # expirou
     other = SimpleNamespace(get_daily_pnl_from_binance=lambda: {"total": 7.0}, get_account_info=lambda: {})
     assert dash._binance_summary(other, None)["daily_realized"] == 7.0       # outra exchange não usa o cache
+
+
+def test_summarize_counts_manual_closes_separately():
+    rows = [_trade(-1.0), {**_trade(2.0), "close_reason": "Manual (dashboard)"}]
+    out = ft.summarize(rows, sim_balance=300.0)
+    assert out["trades"] == 2 and out["manual_closes"] == 1
