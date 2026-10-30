@@ -38,7 +38,10 @@ LEV, MAINT, FEE, SLIP, PERF_FEE = 10.0, 0.005, 0.0005, 0.0003, 0.20
 UNIVERSE_3 = ["BTCUSDT", "ETHUSDT", "ADAUSDT"]
 GRID = [{"X": x, "m": m, "tp": tp} for x in (0.01, 0.015, 0.02) for m in (1.5, 2.0) for tp in (0.006, 0.01)]
 DEFAULT_CELL = {"X": 0.015, "m": 2.0, "tp": 0.01}
-VARIANTS = {"v1_original": (1000, 0.0), "v2a_n5": (5, 0.0), "v2b_n7": (7, 0.0), "v3_n7_stop20": (7, 0.20)}
+# (N, stop de portfólio, redimensiona B pela equity depois do stop). v3b é sensibilidade pós-hoc, declarada no relatório:
+# com B fixo em $, cada stop de 20% deixa a escada relativamente maior e o próximo stop vem mais rápido.
+VARIANTS = {"v1_original": (1000, 0.0, 0), "v2a_n5": (5, 0.0, 0), "v2b_n7": (7, 0.0, 0), "v3_n7_stop20": (7, 0.20, 0),
+            "v3b_n7_stop20_resize": (7, 0.20, 1)}
 CAPITALS = (300.0, 3000.0)
 LIQ, STOP = 1.0, 2.0  # marcadores em ev[t]
 
@@ -79,12 +82,13 @@ def load_grid(syms: List[str], t0: int, t1: int, membership: bool):
 
 # ───────────────────────── núcleo ─────────────────────────
 @njit(cache=True)
-def simulate(o, h, lo, c, fund, B, X, m, tp, N, capital, port_stop):
+def simulate(o, h, lo, c, fund, B, X, m, tp, N, capital, port_stop, resize_on_stop=0):
     T, S = c.shape
     qty = np.zeros((S, 2)); avg = np.zeros((S, 2)); last = np.zeros((S, 2)); cost = np.zeros((S, 2))
     lfee = np.zeros((S, 2)); lvl = np.zeros((S, 2), np.int64); last_close = np.full(S, np.nan)
     dirs = np.array([1.0, -1.0])
     cash, deposits, peak = capital, capital, capital
+    B0 = B
     equity_prev, gross_prev = capital, 0.0
     closed = 0; wins = 0; profit_pos = 0.0; liqs = 0; first_liq = -1; stops = 0
     max_lvl = 0; max_gross = 0.0
@@ -182,6 +186,8 @@ def simulate(o, h, lo, c, fund, B, X, m, tp, N, capital, port_stop):
                 cash = capital; deposits += capital; peak = capital  # recapitaliza
             else:
                 stops += 1; ev[t] = STOP; peak = cash
+                if resize_on_stop:
+                    B = B0 * cash / capital
             equity, gross = cash, 0.0
         if equity > peak:
             peak = equity
@@ -200,7 +206,7 @@ def metrics(grid_t, eq, un, gr, dep, ev, stats, capital):
     months = grid_t.astype("datetime64[ms]").astype("datetime64[M]")
     _, first_rev = np.unique(months[::-1], return_index=True)
     ends = np.sort(len(months) - 1 - first_rev)  # última barra de cada mês
-    monthly = np.diff(np.r_[capital, adj[ends]])
+    monthly = np.diff(np.r_[0.0, adj[ends]])  # adj já desconta o depósito inicial
     worst_i = int(np.argmin(monthly))
     return {
         "net_usd": net, "net_pct": net / capital * 100.0,
@@ -232,19 +238,20 @@ def cmd_run(args):
             syms, grid_t, o, h, lo, c, f = load_grid(syms_all, t0, t1, membership)
             logger.info("universo %s %s: %d símbolos, %d barras, %s→%s", uni, period, len(syms), len(grid_t),
                         ms_to_date(int(grid_t[0])), ms_to_date(int(grid_t[-1])))
-            for variant, (N, port_stop) in VARIANTS.items():
+            for variant, (N, port_stop, resize) in VARIANTS.items():
                 for capital in args.capital:
                     for cell in GRID:
-                        key = (uni, capital, variant, period, cell["X"], cell["m"], cell["tp"])
+                        tag = f"{capital:g}" + (f"_B{args.size_as:g}" if args.size_as else "")
+                        key = (uni, tag, variant, period, cell["X"], cell["m"], cell["tp"])
                         if key in done:
                             continue
-                        B = base_order(capital, n_pairs, cell["m"], N if N < 1000 else 7)
+                        B = base_order(args.size_as or capital, n_pairs, cell["m"], N if N < 1000 else 7)
                         tic = time.time()
-                        out = simulate(o, h, lo, c, f, B, cell["X"], cell["m"], cell["tp"], N, capital, port_stop)
-                        r = dict(universe=uni, capital=capital, variant=variant, period=period, base_order_usd=B, **cell,
+                        out = simulate(o, h, lo, c, f, B, cell["X"], cell["m"], cell["tp"], N, capital, port_stop, resize)
+                        r = dict(universe=uni, capital=tag, variant=variant, period=period, base_order_usd=B, **cell,
                                  **metrics(grid_t, *out, capital))
                         results.append(r)
-                        logger.info("%s cap=%g %s %s X=%.3f m=%.1f tp=%.3f B=%.2f → net=%.1f dd=%.0f%% liq=%d (%.1fs)", uni, capital,
+                        logger.info("%s cap=%s %s %s X=%.3f m=%.1f tp=%.3f B=%.2f → net=%.1f dd=%.0f%% liq=%d (%.1fs)", uni, tag,
                                     variant, period, cell["X"], cell["m"], cell["tp"], B, r["net_usd"], r["max_dd_pct"], r["liquidations"], time.time() - tic)
                         (OUT / "results.json").write_text(json.dumps(results, indent=1))
             del o, h, lo, c, f
@@ -264,8 +271,9 @@ def cmd_report(args):
     by = {(r["universe"], r["capital"], r["variant"], r["period"], r["X"], r["m"], r["tp"]): r for r in results}
     lines = ["# Tabelas do backtest martingale/DCA (geradas por `martingale report`)", ""]
     verdict_rows = []
+    tags = sorted({r["capital"] for r in results}, key=lambda x: (len(x), x))
     for uni in ("31", "3"):
-        for capital in CAPITALS:
+        for capital in tags:
             for variant in VARIANTS:
                 rows, n_pass = [], 0
                 for cell in GRID:
@@ -289,13 +297,13 @@ def cmd_report(args):
                         "PASS" if ok else "FAIL"]) + " |")
                 if not rows:
                     continue
-                lines += [f"## Universo {uni} · capital ${capital:,.0f} · {variant} ({n_pass}/{len(rows)} células passam)", "",
+                lines += [f"## Universo {uni} · capital ${capital} · {variant} ({n_pass}/{len(rows)} células passam)", "",
                           "| X / m / TP | B ($) | líq ($) | líq % | win% | trades | pior flutuante | DD máx | liq | 1ª liq | stops | pior mês ($) | nível máx | margem máx $ (% cap) | líq após 20% ($) | holdout líq ($) | holdout liq | holdout DD | critérios |",
                           "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|", *rows, ""]
     lines += ["## Célula padrão (X=1,5% / m=2 / TP=1%) por variante", "",
               "| universo | capital | variante | líq ($) | win% | DD máx | liq | 1ª liq | pior flutuante | holdout líq ($) | critérios |", "|---|---|---|---|---|---|---|---|---|---|---|"]
     for uni, capital, variant, full, hold, ok in verdict_rows:
-        lines.append(f"| {uni} | ${capital:,.0f} | {variant} | {_fmt(full['net_usd'], 0)} | {_fmt(full['win_rate'], 1)}% | {_fmt(full['max_dd_pct'], 0)}% | "
+        lines.append(f"| {uni} | ${capital} | {variant} | {_fmt(full['net_usd'], 0)} | {_fmt(full['win_rate'], 1)}% | {_fmt(full['max_dd_pct'], 0)}% | "
                      f"{full['liquidations']} | {full['first_liq_date'] or '—'} | {_fmt(full['max_floating_loss_pct'], 0)}% | {_fmt(hold['net_usd'], 0)} | {'PASS' if ok else 'FAIL'} |")
     (OUT / "tables.md").write_text("\n".join(lines) + "\n")
     print("\n".join(lines))
@@ -309,6 +317,7 @@ def main():
     r.add_argument("--universe", nargs="+", default=["31", "3"], choices=["31", "3"])
     r.add_argument("--capital", nargs="+", type=float, default=list(CAPITALS))
     r.add_argument("--resume", action="store_true")
+    r.add_argument("--size-as", type=float, default=None, help="pós-hoc: escada dimensionada para este capital (ex. 300) rodando com --capital maior")
     r.set_defaults(fn=cmd_run)
     sub.add_parser("report").set_defaults(fn=cmd_report)
     args = ap.parse_args()

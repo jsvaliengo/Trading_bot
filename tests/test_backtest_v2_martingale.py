@@ -55,7 +55,7 @@ def test_liquidation_recapitalizes_and_counts():
 def test_portfolio_stop_closes_everything():
     px = 100 * 0.985 ** np.arange(60)
     o, h, lo, c, f = _path(px)
-    eq, un, gr, dep, ev, st = mg.simulate(o, h, lo, c, f, 50.0, 0.015, 2.0, 0.01, 7, 300.0, 0.20)
+    eq, un, gr, dep, ev, st = mg.simulate(o, h, lo, c, f, 50.0, 0.015, 2.0, 0.01, 7, 300.0, 0.20, 1)
     assert int(st[5]) >= 1 and int(st[3]) == 0  # stop antes de liquidar
     t = int(np.argmax(ev == mg.STOP))
     assert gr[t] > 0 and (t + 1 >= len(eq) or True)
@@ -75,3 +75,4 @@ def test_metrics_net_discounts_deposits():
     m = mg.metrics(grid_t, eq, un, gr, dep, ev, st, 300.0)
     assert m["net_usd"] == -290.0 and m["liquidations"] == 1 and m["win_rate"] == 90.0
     assert abs(m["net_after_perf_fee_usd"] - (-290.0 - 4.0)) < 1e-9
+    assert m["worst_month_usd"] == -290.0  # único mês: variação da equity descontando depósitos, não "equity − capital" duas vezes
