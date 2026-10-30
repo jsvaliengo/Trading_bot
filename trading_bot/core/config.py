@@ -333,6 +333,16 @@ class TradingConfig:
     DONCHIAN_UNIVERSE_MIN_DAYS: int = 60
     DONCHIAN_UNIVERSE_VOLUME_DAYS: int = 30
     DONCHIAN_MAX_DRAWDOWN_PERCENT: float = _env_float("TRADING_BOT_DONCHIAN_MAX_DRAWDOWN_PERCENT", 20.0)
+    # Trailing por múltiplo de risco (R = P&L não realizado / risco inicial em $), a cada
+    # tick do monitor: a partir de ARM R arma um piso = maior múltiplo de STEP R abaixo do
+    # pico de R; o piso nunca desce; R abaixo do piso fecha a mercado. O stop 2×ATR na
+    # exchange segue valendo. Desvio do pré-registro: docs/FORWARD_TEST_DONCHIAN_4H.md.
+    DONCHIAN_TRAIL_R_ENABLED: bool = _env_bool("TRADING_BOT_DONCHIAN_TRAIL_R_ENABLED", True)
+    DONCHIAN_TRAIL_R_ARM: float = _env_float("TRADING_BOT_DONCHIAN_TRAIL_R_ARM", 0.60)
+    DONCHIAN_TRAIL_R_STEP: float = _env_float("TRADING_BOT_DONCHIAN_TRAIL_R_STEP", 0.05)
+    # Reinício do forward test (ISO 8601 UTC, ex. "2026-10-31T12:00:00+00:00"): trades
+    # fechados antes ficam como histórico e não contam no critério. Vazio = sem reinício.
+    FORWARD_TEST_RESTART_AT: str = _env_str("TRADING_BOT_FORWARD_TEST_RESTART_AT", "")
     MIN_VOLATILITY_PERCENT: float = 1.5       # Volatilidade mínima 1.5%
     MAX_MIN_NOTIONAL: float = 10.0            # Mínimo notional máximo $10 (exclui BTC $100, ETH $20)
     # RVOL = volume da última hora fechada ÷ média horária recente. Piso baixo

@@ -169,3 +169,32 @@ universo 26 pares, 10 posições reconciliadas. Posições abertas em pares fora
 top 30 (ARC, BAT, MOG, CAT, HUMA, BEAMX) continuam geridas até a saída pelo
 canal ou stop; só não há entradas novas fora do top 30. Trades abertos entre
 2026-10-29 10:28 e 2026-10-30 13:40 UTC ficam fora da regra de sucesso.
+
+### Reinício: variante com trailing R (2026-10-31)
+
+**Desvio do pré-registro**, por decisão do usuário. O forward test **reinicia** na
+data/hora do deploy desta regra; o que foi medido antes vira histórico.
+
+- Regra de saída adicional, avaliada a **cada tick do monitor** (não só no fechamento
+  da barra 4h), com R = P&L não realizado ÷ risco inicial em $ (|entrada − stop| × qty,
+  o mesmo R do dashboard):
+  - quando o R atinge **+0,60R**, arma um piso em 0,60R;
+  - a cada novo máximo o piso sobe em degraus de **0,05R** (piso = maior múltiplo de
+    0,05R ≤ pico de R; nunca desce);
+  - se o R atual cai **abaixo do piso**, fecha a mercado com `close_reason`
+    `Trailing R (<piso>R)`.
+  - O stop original de 2×ATR continua na exchange e vale enquanto o trailing não armou.
+  - Env: `TRADING_BOT_DONCHIAN_TRAIL_R_ENABLED` (default `true`),
+    `TRADING_BOT_DONCHIAN_TRAIL_R_ARM` (`0.60`), `TRADING_BOT_DONCHIAN_TRAIL_R_STEP` (`0.05`).
+    O piso armado é persistido no state (`trail_floors`) e sobrevive a restart.
+- Reinício da contagem: `TRADING_BOT_FORWARD_TEST_RESTART_AT=<ISO 8601 UTC do deploy>` no
+  `.env` da VM (em código o default é `None` = sem reinício). Os trades fechados antes
+  dessa data — **16 fechados**, 6 deles manuais via dashboard em 2026-10-30 21:25 UTC —
+  ficam como histórico e **não contam** no critério de 150 trades nem na regra de
+  sucesso/falha; o painel mostra quantos ficaram de fora. A equity-base e o prazo de
+  6 meses contam a partir do reinício.
+- Aviso honesto: as variantes de saída cedo falharam no backtest de 24/10 (PR #214) e,
+  no backtest Donchian, os poucos trades de +3R a +5R pagam os ~70% de stops. Este
+  trailing corta exatamente esses. Não foi rodado backtest desta variante antes de
+  ligar; o forward test é a medição.
+- Quando vale / deploy: **a preencher no deploy** (data UTC, hash, valor da env).

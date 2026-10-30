@@ -281,3 +281,30 @@ def test_summarize_counts_manual_closes_separately():
     rows = [_trade(-1.0), {**_trade(2.0), "close_reason": "Manual (dashboard)"}]
     out = ft.summarize(rows, sim_balance=300.0)
     assert out["trades"] == 2 and out["manual_closes"] == 1
+
+
+def test_summarize_restart_counts_only_trades_after_restart():
+    before, after = "2026-10-28T12:00:00+00:00", "2026-11-02T12:00:00+00:00"
+    rows = [_trade(10.0, exit_at=before), _trade(-5.0, exit_at=before), _trade(3.0, exit_at=after)]
+    s = ft.summarize(rows, now=datetime(2026, 11, 3, tzinfo=timezone.utc), sim_balance=300.0,
+                     restart_iso="2026-10-31T12:00:00+00:00")
+    assert s["trades"] == 1 and s["net_usd"] == 3.0 and s["trades_before_restart"] == 2
+    assert s["start"] == "2026-10-31T12:00:00+00:00" and s["restart"] == s["start"]
+    assert s["elapsed_days"] == pytest.approx(2.5)
+    s0 = ft.summarize(rows, now=datetime(2026, 11, 3, tzinfo=timezone.utc), sim_balance=300.0)
+    assert s0["trades"] == 3 and s0["restart"] is None and s0["trades_before_restart"] == 0
+
+
+def test_collect_positions_donchian_expoe_piso_do_trailing_r():
+    bot = SimpleNamespace(
+        known_positions={"ETHUSDT_SHORT": {"symbol": "ETHUSDT", "side": "SHORT", "entry_price": 4000.0, "quantity": 0.01,
+                                           "strategy_type": "donchian_4h", "custom_stop_loss": 4200.0}},
+        _positions_lock=None, trail_floors={"ETHUSDT_SHORT": 0.65},
+        exchange=SimpleNamespace(get_open_positions=lambda: [{"symbol": "ETHUSDT", "side": "SHORT", "mark_price": 3850.0, "unrealized_pnl": 1.5}]),
+        donchian=SimpleNamespace(exit_levels={}),
+    )
+    p = dash.collect_positions(bot)[0]
+    assert p["r_now"] == pytest.approx(0.75) and p["trail_floor_r"] == 0.65
+    assert p["trail_floor_price"] == pytest.approx(4000.0 - 0.65 * 200.0)
+    bot.trail_floors = {}
+    assert dash.collect_positions(bot)[0]["trail_floor_price"] is None

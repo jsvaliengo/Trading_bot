@@ -335,6 +335,8 @@ class TradingBot:
         self.peak_prices = {}
         # Pior preço visto por posição (MAE); o peak_prices é o melhor (MFE).
         self.adverse_prices = {}
+        # Piso do trailing por R das posições Donchian (position_key -> R).
+        self.trail_floors = {}
         self.trailing_activated = {}
         # symbol -> epoch do último fechamento negativo; barra reentrada
         # imediata no mesmo símbolo (anti-churn). Ver
@@ -768,6 +770,7 @@ class TradingBot:
             self.trade_history = (state.get('trade_history') or [])[-500:]  # Mantém apenas os últimos 500
             self.peak_prices = state.get('peak_prices', {})
             self.adverse_prices = state.get('adverse_prices', {})
+            self.trail_floors = state.get('trail_floors', {})
             self.trailing_activated = state.get('trailing_activated', {})
             raw_cooldowns = state.get('symbol_reentry_cooldowns', {})
             self.symbol_reentry_cooldowns = {
@@ -2337,6 +2340,7 @@ class TradingBot:
             self.trailing_activated.pop(key, None)
             self.peak_prices.pop(key, None)
             self.adverse_prices.pop(key, None)
+            self.trail_floors.pop(key, None)
             logger.info(f"🧹 Removido trailing/peak órfão: {key}")
 
         # Notifica Telegram se houve divergência significativa
@@ -4118,9 +4122,11 @@ class TradingBot:
 
             known_meta = self._get_known_position(position_key)
             self._track_excursion(position_key, side, current_price)
-            # Donchian: stop na exchange + saída no canal (DonchianRunner). Sem TP,
-            # trailing nem SL local aqui.
+            # Donchian: stop na exchange + saída no canal (DonchianRunner) + trailing
+            # por R a cada tick. Sem TP, trailing % nem SL local aqui.
             if known_meta.get('strategy_type') == DONCHIAN:
+                if self.donchian is not None:
+                    self.donchian.trail_tick(pos, known_meta)
                 continue
             custom_take_profit = known_meta.get('custom_take_profit')
             custom_stop_loss = known_meta.get('custom_stop_loss')

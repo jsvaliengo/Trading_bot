@@ -56,6 +56,7 @@ class PositionTracker:
         if position_key in bot.trailing_activated:
             del bot.trailing_activated[position_key]
         (getattr(bot, "adverse_prices", None) or {}).pop(position_key, None)
+        (getattr(bot, "trail_floors", None) or {}).pop(position_key, None)
 
     # ------------------------------------------------------------------
     # Operações compostas (cobrem padrões de uso comuns)

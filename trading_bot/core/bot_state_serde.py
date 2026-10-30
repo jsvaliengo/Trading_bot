@@ -99,6 +99,7 @@ class BotStatePersistence:
             'daily_baseline_date': getattr(bot, '_daily_baseline_date', None),
             'peak_prices': bot.peak_prices,
             'adverse_prices': dict(getattr(bot, 'adverse_prices', {}) or {}),
+            'trail_floors': dict(getattr(bot, 'trail_floors', {}) or {}),
             'trailing_activated': bot.trailing_activated,
             # Cooldowns de reentrada (symbol -> epoch do último loss). Persiste
             # para um deploy não zerar o anti-churn no meio de uma maré de losses.

@@ -12,6 +12,7 @@ regime, scoring de pares).
 from __future__ import annotations
 
 import logging
+import math
 import re
 import time
 from collections import Counter
@@ -163,6 +164,35 @@ def size_position(*, equity: float, stop_pct: float, price: float, info: Dict[st
     return Sizing(qty, notional, risk)
 
 
+# ───────────────────────── R e trailing por R ─────────────────────────
+def initial_risk_usd(trade: Dict[str, Any]) -> Optional[float]:
+    """Risco inicial em $ = |entrada − stop| × qty. None sem stop registrado."""
+    try:
+        entry, stop, qty = float(trade.get("entry_price")), float(trade.get("stop_loss")), float(trade.get("qty"))
+    except (TypeError, ValueError):
+        return None
+    if entry <= 0 or stop <= 0 or qty <= 0:
+        return None
+    risk = abs(entry - stop) * qty
+    return risk if risk > 0 else None
+
+
+def r_multiple_now(unrealized: Any, entry: Any, stop: Any, qty: Any) -> Optional[float]:
+    """R atual = P&L não realizado / risco inicial (o mesmo R do dashboard)."""
+    risk = initial_risk_usd({"entry_price": entry, "stop_loss": stop, "qty": qty})
+    try:
+        return float(unrealized) / risk if risk else None
+    except (TypeError, ValueError):
+        return None
+
+
+def trail_floor(peak_r: float, *, arm: float, step: float) -> Optional[float]:
+    """Piso do trailing: maior múltiplo de `step` ≤ peak_r, só a partir de `arm`; None antes."""
+    if step <= 0 or peak_r < arm:
+        return None
+    return round(math.floor(round(peak_r / step, 6)) * step, 6)
+
+
 # ───────────────────────── runner ao vivo ─────────────────────────
 class DonchianRunner:
     """Uma passada por barra 4h fechada: saídas primeiro, depois entradas em ordem
@@ -207,6 +237,8 @@ class DonchianRunner:
                 "risk_percent": config.DONCHIAN_RISK_PERCENT, "max_positions": config.DONCHIAN_MAX_POSITIONS,
                 "max_gross_mult": config.DONCHIAN_MAX_GROSS_MULT,
                 "max_drawdown_percent": config.DONCHIAN_MAX_DRAWDOWN_PERCENT,
+                "trail_r_enabled": config.DONCHIAN_TRAIL_R_ENABLED, "trail_r_arm": config.DONCHIAN_TRAIL_R_ARM,
+                "trail_r_step": config.DONCHIAN_TRAIL_R_STEP,
             },
         }
 
@@ -250,6 +282,9 @@ class DonchianRunner:
             f"🛡️ Donchian: parada por drawdown em {c.DONCHIAN_MAX_DRAWDOWN_PERCENT:g}% do pico "
             f"(pausa o bot); limite de perda diária ${c.DAILY_LOSS_LIMIT:g} mantido"
         )
+        if c.DONCHIAN_TRAIL_R_ENABLED:
+            logger.info(f"🔒 Donchian: trailing por R arma em {c.DONCHIAN_TRAIL_R_ARM:.2f}R, sobe de "
+                        f"{c.DONCHIAN_TRAIL_R_STEP:.2f}R, fecha a mercado abaixo do piso (stop 2×ATR mantido)")
         logger.info(
             "🛡️ Donchian: DESLIGADOS pausa por dias negativos, piso de win rate, meta de lucro "
             "diário, stop loss global, trailing, regime swap, viés HTF, IA e scoring de pares"
@@ -467,6 +502,35 @@ class DonchianRunner:
             f"{b['LONG'] + b['SHORT']} rompimentos ({b['LONG']}L/{b['SHORT']}S), {b['exits']} saídas, "
             f"{b['entries']} entradas, {skips} pulados{why}; posições abertas {held}/{cap}; {equity}"
         )
+
+    # ---- trailing por R (a cada tick do monitor, não só na barra) ----
+    def trail_tick(self, pos: Dict[str, Any], meta: Dict[str, Any]) -> None:
+        """Arma/sobe o piso em R da posição e fecha a mercado se o R atual cair abaixo dele.
+        O piso vive em bot.trail_floors (persistido no state, limpo ao fechar)."""
+        c = config
+        if not c.DONCHIAN_TRAIL_R_ENABLED:
+            return
+        r = r_multiple_now(pos.get("unrealized_pnl"), meta.get("entry_price"), meta.get("custom_stop_loss"),
+                           pos.get("quantity") or meta.get("quantity"))
+        if r is None:
+            return
+        key = f"{pos['symbol']}_{pos['side']}"
+        floors = self.bot.trail_floors
+        prev = floors.get(key)
+        new = trail_floor(r, arm=c.DONCHIAN_TRAIL_R_ARM, step=c.DONCHIAN_TRAIL_R_STEP)
+        if new is not None and (prev is None or new > prev):
+            floors[key] = new
+            logger.info(f"🔒 Donchian: {pos['side']} {pos['symbol']} piso {'armado' if prev is None else 'subiu'} "
+                        f"em {new:.2f}R (R atual {r:.2f})")
+            if prev is None:
+                self.bot.telegram.send_message(
+                    f"🔒 <b>Trailing R armado</b>\n{pos['side']} {pos['symbol']}: piso {new:.2f}R (R atual {r:.2f}). "
+                    "Fecha a mercado se cair abaixo do piso."
+                )
+            return
+        if prev is not None and r < prev:
+            logger.info(f"🔓 Donchian: {pos['side']} {pos['symbol']} R {r:.2f} < piso {prev:.2f}R — saindo a mercado")
+            self._close(pos, f"Trailing R ({prev:.2f}R)")
 
     # ---- execução ----
     def _close(self, pos: Dict[str, Any], reason: str) -> bool:

@@ -378,6 +378,7 @@ def _monitor_bot(known, mark):
     bot.exchange = SimpleNamespace(get_open_positions=lambda *a, **kw: [dict(pos)])
     bot._close_position_with_notification = MagicMock(return_value=True)
     bot._process_binance_closed_position = MagicMock()
+    bot.telegram = SimpleNamespace(send_message=MagicMock(), send_trade_alert=MagicMock())
     bot.known_positions = known
     return bot
 
@@ -390,9 +391,11 @@ def test_monitor_never_applies_tp_or_trailing_to_donchian_positions(monkeypatch,
     bot = _monitor_bot(_donchian_long(), mark=110.0)     # +10%: TP global e trailing fechariam
     bot.monitor_positions()
     bot._close_position_with_notification.assert_not_called()
-    # MFE/MAE são rastreados para toda posição; o trailing nunca arma na Donchian.
+    # MFE/MAE são rastreados para toda posição; o trailing % nunca arma na Donchian.
     assert bot.peak_prices == {"XUSDT_LONG": 110.0} and bot.adverse_prices == {"XUSDT_LONG": 110.0}
     assert bot.trailing_activated == {"XUSDT_LONG": False}
+    # Trailing por R: unrealized $1 / risco $0,50 (|100−95|×0,1) = 2R → piso 2,00R, só com o runner
+    assert bot.trail_floors == ({"XUSDT_LONG": 2.0} if strategy == "donchian_4h" else {})
 
 
 @pytest.mark.parametrize("strategy", ["pullback", "donchian_4h"])
@@ -658,3 +661,80 @@ def test_bot_close_position_manual_uses_donchian_exit_path():
     ex.cancel_open_orders.assert_called_once_with("XUSDT")
     with pytest.raises(LookupError):
         bot.close_position_manual("YUSDT")
+
+
+# ───────────── trailing por R: a cada tick do monitor ─────────────
+@pytest.mark.parametrize("peak_r,floor", [
+    (0.0, None), (0.59, None), (0.60, 0.60), (0.649, 0.60), (0.65, 0.65), (0.70, 0.70), (1.23, 1.20), (3.0, 3.0),
+])
+def test_trail_floor_arms_at_060_and_steps_by_005(peak_r, floor):
+    assert d.trail_floor(peak_r, arm=0.60, step=0.05) == floor
+
+
+def test_r_multiple_now_matches_dashboard_and_handles_missing_stop():
+    assert d.r_multiple_now(1.0, 100.0, 95.0, 0.1) == pytest.approx(2.0)
+    assert d.r_multiple_now(-0.25, 100.0, 105.0, 0.1) == pytest.approx(-0.5)      # SHORT: mesmo cálculo
+    assert d.r_multiple_now(1.0, 100.0, None, 0.1) is None and d.r_multiple_now(None, 100.0, 95.0, 0.1) is None
+
+
+def _trail_bot(side="LONG", stop=95.0):
+    key = f"XUSDT_{side}"
+    known = {key: {"symbol": "XUSDT", "side": side, "entry_price": 100.0, "quantity": 0.1,
+                   "strategy_name": "donchian_4h", "strategy_type": "donchian_4h", "custom_stop_loss": stop}}
+    bot = _bot(_Ex({}), known=known)
+    bot.telegram = SimpleNamespace(send_message=MagicMock(), send_trade_alert=MagicMock())
+    runner = d.DonchianRunner(bot)
+
+    def tick(unrealized):
+        pos = {"symbol": "XUSDT", "side": side, "entry_price": 100.0, "quantity": 0.1, "unrealized_pnl": unrealized}
+        runner.trail_tick(pos, bot.known_positions.get(key, known[key]))
+        return pos
+    return bot, runner, tick
+
+
+@pytest.mark.parametrize("side,stop", [("LONG", 95.0), ("SHORT", 105.0)])
+def test_trailing_r_arms_steps_up_never_down_and_closes_below_floor(monkeypatch, side, stop):
+    monkeypatch.setattr(config, "DONCHIAN_TRAIL_R_ENABLED", True)
+    bot, runner, tick = _trail_bot(side, stop)
+    risk = 0.5                                   # |100 − stop| × 0,1
+    tick(0.59 * risk)
+    assert bot.trail_floors == {} and not bot.telegram.send_message.called
+    tick(0.30 * risk)                            # caiu sem piso armado: não fecha
+    bot._close_position_with_notification.assert_not_called()
+    tick(0.60 * risk)
+    assert bot.trail_floors[f"XUSDT_{side}"] == 0.60 and bot.telegram.send_message.call_count == 1
+    tick(0.72 * risk)
+    assert bot.trail_floors[f"XUSDT_{side}"] == 0.70 and bot.telegram.send_message.call_count == 1   # sem spam
+    tick(0.71 * risk)                            # acima do piso: segura; piso não desce
+    assert bot.trail_floors[f"XUSDT_{side}"] == 0.70
+    bot._close_position_with_notification.assert_not_called()
+    pos = tick(0.69 * risk)                      # abaixo do piso: fecha a mercado pelo caminho único
+    bot._close_position_with_notification.assert_called_once_with(pos, "Trailing R (0.70R)")
+    assert f"XUSDT_{side}" not in bot.known_positions and f"XUSDT_{side}" not in bot.trail_floors
+    bot.exchange.cancel_open_orders.assert_called_with("XUSDT")
+
+
+def test_trailing_r_disabled_or_without_stop_does_nothing(monkeypatch):
+    monkeypatch.setattr(config, "DONCHIAN_TRAIL_R_ENABLED", False)
+    bot, _, tick = _trail_bot()
+    tick(5.0)
+    assert bot.trail_floors == {}
+    monkeypatch.setattr(config, "DONCHIAN_TRAIL_R_ENABLED", True)
+    bot, _, tick = _trail_bot(stop=None)         # posição SEM STOP (stop recusado): sem R, sem trailing
+    tick(5.0)
+    assert bot.trail_floors == {}
+
+
+def test_trailing_r_floor_survives_restart_and_is_cleared_on_close():
+    from trading_bot.core.bot_state_serde import BotStatePersistence
+    from trading_bot.core.position_tracker import PositionTracker
+
+    bot = _bot(_Ex({}))
+    bot.trail_floors = {"XUSDT_LONG": 0.65}
+    for attr in ("daily_realized_pnl", "trades_win_count", "trades_loss_count", "trades_win_total",
+                 "trades_loss_total", "total_fees_paid", "total_pnl", "closed_trades_count"):
+        setattr(bot, attr, getattr(bot, attr, 0))
+    payload = BotStatePersistence(bot).build_payload()
+    assert payload["trail_floors"] == {"XUSDT_LONG": 0.65}
+    PositionTracker(bot).clear_trailing("XUSDT_LONG")
+    assert bot.trail_floors == {}
