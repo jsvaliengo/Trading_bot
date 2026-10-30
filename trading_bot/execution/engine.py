@@ -817,6 +817,18 @@ class ExecutionEngine:
     # ------------------------------------------------------------------
 
     def close_position_with_notification(self, pos: dict, reason: str) -> bool:
+        """Marca a chave como "fechando" enquanto a ordem roda, senão o monitor vê a
+        posição sumir da exchange antes do registro e grava um 2º fechamento
+        "(Binance)" (30/10: BATUSDT duplicado no SQLite via fechamento manual)."""
+        bot = self._bot
+        position_key = f"{pos['symbol']}_{pos['side']}"
+        bot.closing_keys.add(position_key)
+        try:
+            return self._close_position_with_notification(pos, reason)
+        finally:
+            bot.closing_keys.discard(position_key)
+
+    def _close_position_with_notification(self, pos: dict, reason: str) -> bool:
         """
         Fecha uma posição e envia notificação com P&L líquido.
         Também atualiza o contador de trades fechados e o P&L diário.
@@ -900,6 +912,9 @@ class ExecutionEngine:
             exit_price=current_price,
             pnl_gross=pnl_gross,
         )
+        # Sai do rastreamento AQUI (antes de soltar closing_keys), sem janela
+        # para o monitor reclamar a chave; o positions.close do caller é idempotente.
+        bot.positions.remove(position_key)
 
         logger.info(
             f"💰 P&L Bruto: ${pnl_gross:.4f} | Taxas: ${total_fees:.4f} | "
