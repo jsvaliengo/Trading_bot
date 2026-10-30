@@ -78,6 +78,7 @@ EMPTY_COLLECTIONS = {
     "portfolio_history": list,
     "peak_prices": dict,
     "adverse_prices": dict,
+    "trail_floors": dict,
     "trailing_activated": dict,
     "double_first_used": dict,
 }

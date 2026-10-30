@@ -155,7 +155,8 @@
         const d = ft.elapsed_days || 0, td = ft.target_days || 182;
         $('tr-days').textContent = `${Math.floor(d)} / ${td} dias`;
         setMeter('m-days', d / td * 100, td, Math.floor(d));
-        $('tr-days-f').textContent = `início ${fmt.dateTime(ft.start)} ${fmt.tzLabel()} · prazo mínimo ${fmt.date(ft.end_by_time)}`;
+        $('tr-days-f').textContent = `início ${fmt.dateTime(ft.start)} ${fmt.tzLabel()} · prazo mínimo ${fmt.date(ft.end_by_time)}` +
+            (ft.restart ? ` · reinício (trailing R): ${ft.trades_before_restart ?? 0} trades anteriores fora do critério` : '');
         const ex = $('tr-exp'); ex.textContent = fmt.usd(ft.expectancy_usd, { signed: true }) + (isNum(ft.avg_r) ? ` · ${fmt.r(ft.avg_r)}` : ''); ex.className = cls(ft.expectancy_usd || 0);
         const ci = ft.expectancy_ci95;
         $('tr-exp-f').textContent = ci ? `IC 95% de ${fmt.usd(ci[0], { signed: true })} a ${fmt.usd(ci[1], { signed: true })} (bootstrap, ${tr} trades)` : `o intervalo de confiança aparece a partir de 5 trades (${tr} até agora)`;
@@ -273,9 +274,9 @@
 
     // ───────── Posições ─────────
     function ruler(p) {
-        const en = p.entry_price, st = p.custom_stop_loss, mk = p.mark_price, ex = p.exit_level, long = p.side === 'LONG';
+        const en = p.entry_price, st = p.custom_stop_loss, mk = p.mark_price, ex = p.exit_level, tf = p.trail_floor_price, long = p.side === 'LONG';
         if (!en || !st) return '';
-        const vals = [en, st, mk, ex].filter(isNum);
+        const vals = [en, st, mk, ex, tf].filter(isNum);
         let lo = Math.min(...vals), hi = Math.max(...vals); const pad = (hi - lo) * 0.08 || en * 0.01; lo -= pad; hi += pad;
         const at = (v) => ((v - lo) / (hi - lo) * 100).toFixed(2) + '%';
         const zone = long ? `left:${at(en)};right:0` : `left:0;right:calc(100% - ${at(en)})`;
@@ -284,6 +285,7 @@
             <span class="mk stop" style="left:${at(st)}" title="stop ${fmt.price(st)}"></span>
             <span class="mk entry" style="left:${at(en)}" title="entrada ${fmt.price(en)}"></span>
             ${isNum(ex) ? `<span class="mk exit" style="left:${at(ex)}" title="canal de saída ${fmt.price(ex)}"></span>` : ''}
+            ${isNum(tf) ? `<span class="mk trail" style="left:${at(tf)}" title="piso trailing ${fmt.r(p.trail_floor_r)} ${fmt.price(tf)}"></span>` : ''}
             ${isNum(mk) ? `<span class="mk mark" style="left:${at(mk)}" title="preço ${fmt.price(mk)}"></span>` : ''}
         </div>
         <div class="ruler-l">
@@ -306,7 +308,7 @@
                 <div class="prow-top">
                     <span class="psym">${esc(p.symbol)} <span class="side ${p.side === 'LONG' ? 'l' : 's'}">${esc(p.side)}</span>${isD ? '' : `<small class="dim">${esc(p.strategy_type)}</small>`}</span>
                     <span class="pr-pnl ${cls(p.unrealized_pnl_usd)}">${fmt.usd(p.unrealized_pnl_usd, { signed: true })}<small>${fmt.pct(p.unrealized_pnl_percent)}</small></span>
-                    <span class="pr-r ${cls(p.r_now)}">${fmt.r(p.r_now)}<small>risco ${fmt.usd(p.risk_usd)}</small></span>
+                    <span class="pr-r ${cls(p.r_now)}">${fmt.r(p.r_now)}<small>risco ${fmt.usd(p.risk_usd)}${isNum(p.trail_floor_r) ? ` · piso ${fmt.r(p.trail_floor_r)}` : ''}</small></span>
                     <span class="pr-meta">${fmt.price(p.quantity)} un · ${fmt.dur(age)}</span>
                     <span class="pr-close" data-symbol="${esc(p.symbol)}" data-pnl="${esc(fmt.usd(p.unrealized_pnl_usd, { signed: true }))}">${
                         closing.has(p.symbol) ? '<small class="dim">fechando…</small>' : '<button type="button" class="btn btn-quiet btn-xs" data-close="ask">Fechar</button>'

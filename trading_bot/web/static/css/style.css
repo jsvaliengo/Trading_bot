@@ -193,6 +193,7 @@ details.card > :not(summary):first-of-type { margin-top:10px; }
 .ruler .mk.stop { background:var(--bad); }
 .ruler .mk.entry { background:var(--text-muted); }
 .ruler .mk.exit { background:var(--accent); }
+.ruler .mk.trail { background:var(--good); }
 .ruler .mk.mark { top:5px; width:12px; height:12px; border-radius:50%; background:var(--text); border:2px solid var(--bg-card); }
 .ruler-l { display:flex; justify-content:space-between; gap:8px; font-size:11px; color:var(--text-muted); flex-wrap:wrap; margin-top:2px; }
 .ruler-l b { color:var(--text-dim); font-weight:500; }

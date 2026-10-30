@@ -17,6 +17,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from ..core.config import config
+from ..core.donchian import r_multiple_now
 from ..core.equity import effective_equity, simulated_balance
 from ..core.trade_store import trading_day_start
 from . import forward_test as ft
@@ -95,7 +96,7 @@ def collect_forward_test(bot, summary: Optional[Dict[str, Any]] = None) -> Dict[
     base = None
     if equity is not None:
         # equity no início do teste = equity agora − não-realizado − realizado Donchian
-        start = ft.parse_utc(ft.START_ISO)
+        start = ft.parse_utc(_forward_test_restart() or ft.START_ISO)
         net = sum(_safe_float(r.get("pnl_net")) for r in rows
                   if start is None or (ft.parse_utc(r.get("exit_at")) or start) >= start)
         base = _safe_float(equity) - _safe_float(summary.get("unrealized_pnl")) - net
@@ -105,8 +106,13 @@ def collect_forward_test(bot, summary: Optional[Dict[str, Any]] = None) -> Dict[
         base_equity=base,
         equity_now=_safe_float(equity) if equity is not None else None,
         peak_equity=peak or None,
+        restart_iso=_forward_test_restart(),
         dd_limit_pct=_safe_float(getattr(config, "DONCHIAN_MAX_DRAWDOWN_PERCENT", ft.DD_LIMIT_PCT), ft.DD_LIMIT_PCT),
     )
+
+
+def _forward_test_restart() -> Optional[str]:
+    return str(getattr(config, "FORWARD_TEST_RESTART_AT", "") or "").strip() or ft.RESTART_ISO
 
 
 def collect_engine(bot) -> Dict[str, Any]:
@@ -548,11 +554,17 @@ def _donchian_position_risk(bot, payload: Dict[str, Any], mark: Optional[float],
     stop_dist = ((ref - stop) / ref * 100.0 if side == "LONG" else (stop - ref) / ref * 100.0) if stop and ref else None
     levels = (getattr(getattr(bot, "donchian", None), "exit_levels", None) or {}).get(payload.get("symbol"), {})
     exit_level = levels.get("exit_long" if side == "LONG" else "exit_short")
+    floor_r = (getattr(bot, "trail_floors", None) or {}).get(f"{payload.get('symbol')}_{side}")
+    # preço onde R == piso: entrada ± piso × |entrada − stop| (só se o piso armou)
+    floor_px = (entry + (1 if side == "LONG" else -1) * floor_r * abs(entry - stop)) if (floor_r and entry and stop) else None
     return {
         "risk_usd": risk,
         "stop_distance_pct": stop_dist,
-        "r_now": (unrealized / risk) if (risk and unrealized is not None) else None,
+        "r_now": r_multiple_now(unrealized, payload.get("entry_price"), payload.get("custom_stop_loss"),
+                                payload.get("quantity")),
         "exit_level": exit_level,
+        "trail_floor_r": floor_r,
+        "trail_floor_price": floor_px,
     }
 
 

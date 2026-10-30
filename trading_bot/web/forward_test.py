@@ -14,6 +14,7 @@ import random
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from ..core.donchian import initial_risk_usd  # noqa: F401  (R do painel = R do trailing do bot)
 from ..core.trade_store import trading_day
 
 STRATEGY = "donchian_4h"
@@ -22,6 +23,9 @@ START_ISO = "2026-10-24T23:43:07+00:00"
 # Universo top 30 → todos os pares (docs/FORWARD_TEST_DONCHIAN_4H.md, "Alteração"):
 # trades antes e depois são contados separadamente.
 UNIVERSE_CHANGE_ISO = "2026-10-29T10:28:08+00:00"
+# Reinício do teste (variante com trailing por R, docs "Reinício"): trades fechados antes
+# ficam como histórico. None = sem reinício; a VM define via TRADING_BOT_FORWARD_TEST_RESTART_AT.
+RESTART_ISO: Optional[str] = None
 TARGET_TRADES = 150
 TARGET_DAYS = 182
 DD_LIMIT_PCT = 20.0
@@ -49,15 +53,6 @@ def parse_utc(value: Any) -> Optional[datetime]:
         except (TypeError, ValueError):
             return None
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
-
-
-def initial_risk_usd(trade: Dict[str, Any]) -> Optional[float]:
-    """Risco inicial em $ = |entrada − stop| × qty. None sem stop registrado."""
-    entry, stop, qty = _f(trade.get("entry_price")), _f(trade.get("stop_loss")), _f(trade.get("qty"))
-    if not entry or not stop or not qty or entry <= 0 or stop <= 0:
-        return None
-    risk = abs(entry - stop) * qty
-    return risk if risk > 0 else None
 
 
 def r_multiple(trade: Dict[str, Any], pnl: Optional[float] = None) -> Optional[float]:
@@ -174,6 +169,7 @@ def summarize(
     *,
     now: Optional[datetime] = None,
     start_iso: str = START_ISO,
+    restart_iso: Optional[str] = RESTART_ISO,
     sim_balance: float = 0.0,
     base_equity: Optional[float] = None,
     equity_now: Optional[float] = None,
@@ -191,6 +187,11 @@ def summarize(
     base = float(base_equity if base_equity is not None else sim_balance)
     now = now or datetime.now(timezone.utc)
     start = parse_utc(start_iso) or now
+    restart = parse_utc(restart_iso) if restart_iso else None
+    before_restart = 0
+    if restart is not None and restart > start:
+        before_restart = sum(1 for t in trades if start <= (parse_utc(t.get("exit_at")) or start) < restart)
+        start = restart
     rows = [t for t in trades if (parse_utc(t.get("exit_at")) or start) >= start]
     pnls = [_f(t.get("pnl_net"), 0.0) or 0.0 for t in rows]
     n = len(pnls)
@@ -283,6 +284,8 @@ def summarize(
         "universe_change": UNIVERSE_CHANGE_ISO,
         "trades_before_change": before,
         "trades_after_change": n - before,
+        "restart": restart.isoformat() if restart is not None else None,
+        "trades_before_restart": before_restart,
         "manual_closes": sum(1 for t in rows if str(t.get("close_reason") or "").startswith("Manual")),
         # MFE/MAE × R por trade (scatter); mae_pct só existe nos trades novos
         "excursions": [
