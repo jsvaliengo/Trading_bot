@@ -155,3 +155,13 @@ Registro factual. Nenhuma regra acima mudou.
   separar **trades antes** (universo top 30) e **trades depois** (universo completo)
   e não somar os dois na regra de sucesso/falha. Esperado: mais sinais por barra, mais
   pulos por minNotional em pares de baixo preço/liquidez com risco ≈ $0,75.
+
+### Reversão: universo de volta ao top 30 (2026-10-30 13:40 UTC)
+
+Decisão do usuário após 10 trades fechados (todos stop, −$7,85), 6 deles em
+pares que só entraram com o universo completo. `TRADING_BOT_DONCHIAN_UNIVERSE_TOP_N=30`
+no `.env` da VM, restart 13:39:49 UTC pelo `update_server.sh` (deploy d3d3995),
+universo 26 pares, 10 posições reconciliadas. Posições abertas em pares fora do
+top 30 (ARC, BAT, MOG, CAT, HUMA, BEAMX) continuam geridas até a saída pelo
+canal ou stop; só não há entradas novas fora do top 30. Trades abertos entre
+2026-10-29 10:28 e 2026-10-30 13:40 UTC ficam fora da regra de sucesso.
