@@ -330,6 +330,9 @@ class TradingConfig:
     DONCHIAN_MAX_GROSS_MULT: float = 3.0
     DONCHIAN_MAX_POSITION_MULT: float = 1.0
     DONCHIAN_UNIVERSE_TOP_N: int = _env_int("TRADING_BOT_DONCHIAN_UNIVERSE_TOP_N", 30)
+    # Núcleo fixo do universo Donchian: entram primeiro (se negociáveis no testnet),
+    # ignorando ranking e DISABLED_PAIRS; o resto completa TOP_N por volume.
+    DONCHIAN_UNIVERSE_CORE: List[str] = None  # Será definido no __post_init__
     DONCHIAN_UNIVERSE_MIN_DAYS: int = 60
     DONCHIAN_UNIVERSE_VOLUME_DAYS: int = 30
     DONCHIAN_MAX_DRAWDOWN_PERCENT: float = _env_float("TRADING_BOT_DONCHIAN_MAX_DRAWDOWN_PERCENT", 20.0)
@@ -1077,17 +1080,22 @@ class TradingConfig:
                 [p.strip() for p in _raw_uni.split(",") if p.strip()]
             ) if _raw_uni else []
 
-        # Pares desabilitados por padrão (safety). BNBUSDT add 2026-06-18:
-        # na mainnet (06-17/18) foi -$2,18 de -$2,27 do prejuízo — 4× LONG
-        # stop-out num downtrend, com slippage de 0,65-0,92% além do stop em
-        # STOP_MARKET. Ver bot.py: disabled_pairs é UNIÃO config ∪ state, então
-        # este default não é desfeito por state antigo.
+        if self.DONCHIAN_UNIVERSE_CORE is None:
+            _raw_core = os.getenv("TRADING_BOT_DONCHIAN_UNIVERSE_CORE", "BTCUSDT,ETHUSDT,BNBUSDT").strip()
+            self.DONCHIAN_UNIVERSE_CORE = self.normalize_pair_list(
+                [p.strip() for p in _raw_core.split(",") if p.strip()]
+            ) if _raw_core else []
+
+        # Pares desabilitados por padrão (safety). Ver bot.py: disabled_pairs é
+        # UNIÃO config ∪ state, então este default não é desfeito por state antigo.
         if self.DISABLED_PAIRS is None:
             # BTCUSDT religado em 23/06 (user): par mais líquido, bom p/ trend-pullback.
             # O erro -4164 (min-notional, conta pequena) é tratado pelo
-            # _round_qty_for_min_notional (#133) — BTC sai no mínimo (~$100). BNB
-            # segue off (sangrou); RIVER/SIGN delistados.
-            self.DISABLED_PAIRS = ["RIVERUSDT", "SIGNUSDT", "BNBUSDT"]
+            # _round_qty_for_min_notional (#133) — BTC sai no mínimo (~$100).
+            # BNBUSDT esteve off de 2026-06-18 (4× LONG stop-out c/ slippage no
+            # pullback mainnet) até 2026-10-31, religado pelo user p/ o Donchian.
+            # RIVER/SIGN delistados.
+            self.DISABLED_PAIRS = ["RIVERUSDT", "SIGNUSDT"]
         self.DISABLED_PAIRS = self.normalize_pair_list(self.DISABLED_PAIRS)
 
         # Buckets do alerta de drawdown intraday — % do capital, ordem crescente.
