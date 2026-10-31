@@ -202,6 +202,41 @@ class DailyEMATrend(Strategy):
         return SignalSet(idx.astype(np.int64), side, exit_long=~up, exit_short=~dn)
 
 
+# ───────────────────────── Donchian breakout (H4) ─────────────────────────
+class DonchianBreakout(Strategy):
+    """Rompimento do canal de `n_entry` barras (close > máxima anterior → LONG;
+    close < mínima anterior → SHORT). Saída trailing pelo canal oposto de
+    `n_exit` barras (flag na barra fechada → sai na abertura seguinte) + SL %
+    fixo do grid. Sem TP."""
+
+    def __init__(self, exec_tf: str, n_entry: int, n_exit: int, sl_grid: List[float]):
+        super().__init__(
+            name=f"donchian_{exec_tf}_{n_entry}_{n_exit}", exec_tf=exec_tf, tfs=[exec_tf],
+            grid=[{"sl_pct": sl} for sl in sl_grid], sizing="risk",
+            meta={"kind": "donchian", "tf": exec_tf, "n": n_entry, "x": n_exit, "v": 1},
+        )
+        self.n_entry, self.n_exit = n_entry, n_exit
+
+    @staticmethod
+    def _prior(x: np.ndarray, n: int, fn) -> np.ndarray:
+        out = np.full(len(x), np.nan)
+        if len(x) > n:
+            out[n:] = fn(np.lib.stride_tricks.sliding_window_view(x, n)[:-1], axis=1)
+        return out
+
+    def compute(self, sym, bars, start_ms, end_ms) -> SignalSet:
+        b = bars[self.exec_tf]
+        c = b.close
+        hi_n, lo_n = self._prior(b.high, self.n_entry, np.max), self._prior(b.low, self.n_entry, np.min)
+        hi_x, lo_x = self._prior(b.high, self.n_exit, np.max), self._prior(b.low, self.n_exit, np.min)
+        in_range = (b.open_time >= start_ms) & (b.open_time < end_ms)
+        up = in_range & (c > hi_n)
+        dn = in_range & (c < lo_n)
+        idx = np.nonzero(up | dn)[0]
+        side = np.where(up[idx], LONG, SHORT).astype(np.int8)
+        return SignalSet(idx.astype(np.int64), side, exit_long=c < lo_x, exit_short=c > hi_x)
+
+
 # ───────────────────────── registro ─────────────────────────
 # Grid pequeno (6 células) de SL% × RR por TF de execução. Faixa do 3m cobre a
 # banda ao vivo (1,0–1,5%); TFs maiores escalam o stop com a volatilidade típica.
@@ -220,6 +255,8 @@ def build_registry(n_universe: int) -> Dict[str, Strategy]:
         LivePullback("1h", "4h", "1d", _grid("1h")),
         DailyEMATrend(long_short=False, n_universe=n_universe),
         DailyEMATrend(long_short=True, n_universe=n_universe),
+        DonchianBreakout("1h", 20, 10, [2.0, 3.0, 5.0]),
+        DonchianBreakout("4h", 20, 10, [3.0, 5.0, 8.0]),
     ]
     return {s.name: s for s in strats}
 
