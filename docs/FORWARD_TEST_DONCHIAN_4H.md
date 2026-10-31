@@ -198,3 +198,17 @@ data/hora do deploy desta regra; o que foi medido antes vira histórico.
   trailing corta exatamente esses. Não foi rodado backtest desta variante antes de
   ligar; o forward test é a medição.
 - Quando vale / deploy: 2026-10-30 23:30 UTC, deploy `f922e3c` (PR #233); `TRADING_BOT_FORWARD_TEST_RESTART_AT=2026-10-30T23:28:00Z` na `.env` da VM. Posições abertas no reinício: 1000000MOG, 1000CAT (SHORT), BEAMX, HUMA (LONG).
+
+### Alteração: universo completa 30 após filtro + núcleo BTC/ETH/BNB (2026-10-31)
+
+Decisão do usuário, em meio ao forward test reiniciado acima. Nenhuma outra regra mudou.
+
+- Antes: top 30 por volume e **depois** o corte por testnet/`DISABLED_PAIRS` — a semana
+  2026-10-26 ficou com 26 pares (PUMP, BTW, IRYS fora do testnet; BNB desabilitado).
+- Agora: filtra primeiro e corta depois, então o universo **completa 30**. BTC, ETH e
+  BNB são **núcleo fixo** (`TRADING_BOT_DONCHIAN_UNIVERSE_CORE`, default
+  `BTCUSDT,ETHUSDT,BNBUSDT`): entram primeiro, ignorando ranking e `DISABLED_PAIRS`,
+  desde que negociáveis no testnet; as 27 vagas restantes vêm por volume. Total segue 30.
+- BNBUSDT sai do `DISABLED_PAIRS` padrão (estava off desde 2026-06-18 por stop-outs do
+  pullback na mainnet — não se aplica ao Donchian).
+- Quando vale / deploy: a preencher no deploy.

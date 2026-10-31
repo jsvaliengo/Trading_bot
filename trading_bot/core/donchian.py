@@ -324,21 +324,29 @@ class DonchianRunner:
                                    vol_days=config.DONCHIAN_UNIVERSE_VOLUME_DAYS)
             if score is not None:
                 scores[sym] = score
-        top = top_universe(scores, config.DONCHIAN_UNIVERSE_TOP_N)
+        ranked = top_universe(scores, 0)
         tradable = {
             s["symbol"] for s in (ex.get_exchange_info().get("symbols") or [])
             if s.get("contractType") == "PERPETUAL" and s.get("status") == "TRADING"
         }
         disabled = set(config.DISABLED_PAIRS or [])
-        missing = [s for s in top if s not in tradable]
-        off = [s for s in top if s in tradable and s in disabled]
-        self.universe = [s for s in top if s in tradable and s not in disabled]
+        # Núcleo entra primeiro (ignora ranking e DISABLED_PAIRS); filtra ANTES do
+        # corte para o universo completar TOP_N em vez de perder vagas.
+        core = [s for s in (config.DONCHIAN_UNIVERSE_CORE or []) if s in tradable]
+        for s in config.DONCHIAN_UNIVERSE_CORE or []:
+            if s not in tradable:
+                logger.warning(f"⚠️ Donchian: núcleo {s} não negociável no testnet — pulado")
+        missing = [s for s in ranked if s not in tradable]
+        off = [s for s in ranked if s in tradable and s in disabled and s not in core]
+        eligible = core + [s for s in ranked if s in tradable and s not in disabled and s not in core]
+        top_n = config.DONCHIAN_UNIVERSE_TOP_N
+        self.universe = eligible[:top_n] if top_n > 0 else eligible
         self.universe_week = None if partial else t
         logger.info(
             f"🌐 Donchian: universo da semana {time.strftime('%Y-%m-%d', time.gmtime(t / 1000))} "
-            f"= {len(self.universe)} pares [{', '.join(self.universe)}] (top {len(top)} da mainnet; fora do testnet: "
-            f"{len(missing)} {missing}; desabilitados: {off}; klines com falha: {len(failed)}) "
-            f"em {time.monotonic() - started:.0f}s"
+            f"= {len(self.universe)} pares [{', '.join(self.universe)}] (núcleo: {core}; {len(ranked)} ranqueados "
+            f"na mainnet; fora do testnet: {len(missing)} {missing}; desabilitados: {off}; "
+            f"klines com falha: {len(failed)}) em {time.monotonic() - started:.0f}s"
         )
         return self.universe
 

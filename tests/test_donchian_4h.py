@@ -170,23 +170,49 @@ def test_universe_score_point_in_time_and_eligibility():
     assert d.rebalance_start(t + 3 * DAY + 7) == t and t % (7 * DAY) == 4 * DAY
 
 
-def test_refresh_universe_mainnet_volume_intersected_with_testnet_minus_disabled(monkeypatch, caplog):
-    t = d.rebalance_start(1_761_600_000_000)
-    vols = {"AAAUSDT": 9.0, "BBBUSDT": 8.0, "CCCUSDT": 7.0, "DDDUSDT": 6.0, "USDCUSDT": 99.0}
+def _universe_exchange(t, vols, testnet):
     perp = lambda s: {"symbol": s, "contractType": "PERPETUAL", "status": "TRADING", "quoteAsset": "USDT"}  # noqa: E731
-    ex = SimpleNamespace(
+    return SimpleNamespace(
         get_market_exchange_info=lambda: {"symbols": [perp(s) for s in vols]},
         get_klines_raw=MagicMock(side_effect=lambda s, _i, limit: _daily_rows(t, limit - 1, vols[s])),
-        get_exchange_info=lambda: {"symbols": [perp("AAAUSDT"), perp("BBBUSDT"), perp("DDDUSDT")]},
+        get_exchange_info=lambda: {"symbols": [perp(s) for s in testnet]},
     )
+
+
+def test_refresh_universe_fills_top_n_after_testnet_and_disabled_filter(monkeypatch, caplog):
+    t = d.rebalance_start(1_761_600_000_000)
+    vols = {"AAAUSDT": 9.0, "BBBUSDT": 8.0, "CCCUSDT": 7.0, "DDDUSDT": 6.0, "EEEUSDT": 5.0, "USDCUSDT": 99.0}
+    ex = _universe_exchange(t, vols, ["AAAUSDT", "BBBUSDT", "DDDUSDT", "EEEUSDT"])
     monkeypatch.setattr(config, "DONCHIAN_UNIVERSE_TOP_N", 3)
+    monkeypatch.setattr(config, "DONCHIAN_UNIVERSE_CORE", [])
     monkeypatch.setattr(config, "DISABLED_PAIRS", ["BBBUSDT"])
     runner = d.DonchianRunner(SimpleNamespace(exchange=ex))
     with caplog.at_level(logging.INFO):
-        assert runner.refresh_universe(t + DAY) == ["AAAUSDT"]      # CCC fora do testnet, BBB desabilitado
+        # CCC fora do testnet e BBB desabilitado são pulados ANTES do corte: completa 3
+        assert runner.refresh_universe(t + DAY) == ["AAAUSDT", "DDDUSDT", "EEEUSDT"]
     assert runner.universe_week == t
     assert ex.get_klines_raw.call_args.kwargs["limit"] == 68
-    assert any("= 1 pares [AAAUSDT]" in m for m in caplog.messages)
+    assert any("= 3 pares [AAAUSDT, DDDUSDT, EEEUSDT]" in m and "CCCUSDT" in m and "BBBUSDT" in m
+               for m in caplog.messages)
+
+
+def test_refresh_universe_core_first_bypasses_rank_and_disabled_within_top_n(monkeypatch, caplog):
+    t = d.rebalance_start(1_761_600_000_000)
+    vols = {"AAAUSDT": 9.0, "BBBUSDT": 8.0, "CCCUSDT": 7.0, "BNBUSDT": 1.0, "ETHUSDT": 2.0, "BTCUSDT": 3.0}
+    ex = _universe_exchange(t, vols, ["AAAUSDT", "BBBUSDT", "CCCUSDT", "BNBUSDT", "ETHUSDT"])   # BTC fora
+    monkeypatch.setattr(config, "DONCHIAN_UNIVERSE_TOP_N", 4)
+    monkeypatch.setattr(config, "DONCHIAN_UNIVERSE_CORE", ["BTCUSDT", "ETHUSDT", "BNBUSDT"])
+    monkeypatch.setattr(config, "DISABLED_PAIRS", ["BNBUSDT"])
+    runner = d.DonchianRunner(SimpleNamespace(exchange=ex))
+    with caplog.at_level(logging.INFO):
+        # núcleo primeiro (BNB mesmo desabilitado, BTC pulado), 2 vagas restantes por rank
+        assert runner.refresh_universe(t + DAY) == ["ETHUSDT", "BNBUSDT", "AAAUSDT", "BBBUSDT"]
+    assert any("núcleo BTCUSDT não negociável" in m for m in caplog.messages)
+
+
+def test_universe_core_default_and_bnb_enabled():
+    assert config.DONCHIAN_UNIVERSE_CORE == ["BTCUSDT", "ETHUSDT", "BNBUSDT"]
+    assert "BNBUSDT" not in config.DISABLED_PAIRS
 
 
 def test_universe_top_n_reads_env_zero_means_all(monkeypatch):
