@@ -211,4 +211,4 @@ Decisão do usuário, em meio ao forward test reiniciado acima. Nenhuma outra re
   desde que negociáveis no testnet; as 27 vagas restantes vêm por volume. Total segue 30.
 - BNBUSDT sai do `DISABLED_PAIRS` padrão (estava off desde 2026-06-18 por stop-outs do
   pullback na mainnet — não se aplica ao Donchian).
-- Quando vale / deploy: a preencher no deploy.
+- Quando vale / deploy: 2026-10-31 09:45 UTC, deploy `a998287` (PR #235). Primeiro refresh já deu 30 pares (núcleo BTC/ETH/BNB + ARB, GTC, AGT entraram no lugar dos 4 cortados). Posições abertas no deploy: 1000CAT (SHORT), HUMA (LONG).
