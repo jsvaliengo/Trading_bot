@@ -226,4 +226,4 @@ do forward test **não reinicia**.
 - Agora: `TRADING_BOT_DONCHIAN_TRAIL_R_ENABLED` default `false` (ARM/STEP mantidos para
   religar por env). Saídas voltam a ser só o stop 2×ATR na exchange e a saída no canal.
   Pisos já armados (`trail_floors` no state) deixam de ser avaliados.
-- Quando vale / deploy: a preencher no deploy.
+- Quando vale / deploy: 2026-11-07 12:59 UTC, deploy `511f94a` (PR #237). Posições abertas no deploy: 9 SHORT (GTC, XRP, WLD, DOGE, RLC, HYPE, STRK, ENA, TAO), nenhum piso armado; seguem só com stop 2×ATR e saída no canal de 20.
