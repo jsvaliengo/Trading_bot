@@ -340,7 +340,8 @@ class TradingConfig:
     # tick do monitor: a partir de ARM R arma um piso = maior múltiplo de STEP R abaixo do
     # pico de R; o piso nunca desce; R abaixo do piso fecha a mercado. O stop 2×ATR na
     # exchange segue valendo. Desvio do pré-registro: docs/FORWARD_TEST_DONCHIAN_4H.md.
-    DONCHIAN_TRAIL_R_ENABLED: bool = _env_bool("TRADING_BOT_DONCHIAN_TRAIL_R_ENABLED", True)
+    # Desligado em 2026-11-07: cortava vencedores em ~0,55R contra stops de ~1R.
+    DONCHIAN_TRAIL_R_ENABLED: bool = _env_bool("TRADING_BOT_DONCHIAN_TRAIL_R_ENABLED", False)
     DONCHIAN_TRAIL_R_ARM: float = _env_float("TRADING_BOT_DONCHIAN_TRAIL_R_ARM", 0.60)
     DONCHIAN_TRAIL_R_STEP: float = _env_float("TRADING_BOT_DONCHIAN_TRAIL_R_STEP", 0.05)
     # Reinício do forward test (ISO 8601 UTC, ex. "2026-10-31T12:00:00+00:00"): trades

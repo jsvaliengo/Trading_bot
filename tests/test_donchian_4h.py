@@ -414,6 +414,7 @@ def test_monitor_never_applies_tp_or_trailing_to_donchian_positions(monkeypatch,
     monkeypatch.setattr(config, "STRATEGY", strategy)
     monkeypatch.setattr(config, "USE_TRAILING_STOP", True)
     monkeypatch.setattr(config, "TAKE_PROFIT_PERCENT", 1.5)
+    monkeypatch.setattr(config, "DONCHIAN_TRAIL_R_ENABLED", True)   # prova a ligação monitor→runner
     bot = _monitor_bot(_donchian_long(), mark=110.0)     # +10%: TP global e trailing fechariam
     bot.monitor_positions()
     bot._close_position_with_notification.assert_not_called()
@@ -741,10 +742,13 @@ def test_trailing_r_arms_steps_up_never_down_and_closes_below_floor(monkeypatch,
 
 
 def test_trailing_r_disabled_or_without_stop_does_nothing(monkeypatch):
+    assert config.DONCHIAN_TRAIL_R_ENABLED is False       # default OFF desde 2026-11-07
     monkeypatch.setattr(config, "DONCHIAN_TRAIL_R_ENABLED", False)
     bot, _, tick = _trail_bot()
     tick(5.0)
+    tick(0.1)                                    # subiu e caiu: sem piso, sem fechamento
     assert bot.trail_floors == {}
+    bot._close_position_with_notification.assert_not_called()
     monkeypatch.setattr(config, "DONCHIAN_TRAIL_R_ENABLED", True)
     bot, _, tick = _trail_bot(stop=None)         # posição SEM STOP (stop recusado): sem R, sem trailing
     tick(5.0)

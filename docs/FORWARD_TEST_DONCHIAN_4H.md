@@ -212,3 +212,18 @@ Decisão do usuário, em meio ao forward test reiniciado acima. Nenhuma outra re
 - BNBUSDT sai do `DISABLED_PAIRS` padrão (estava off desde 2026-06-18 por stop-outs do
   pullback na mainnet — não se aplica ao Donchian).
 - Quando vale / deploy: 2026-10-31 09:45 UTC, deploy `a998287` (PR #235). Primeiro refresh já deu 30 pares (núcleo BTC/ETH/BNB + ARB, GTC, AGT entraram no lugar dos 4 cortados). Posições abertas no deploy: 1000CAT (SHORT), HUMA (LONG).
+
+### Reversão: trailing por R desligado (2026-11-07)
+
+Decisão do usuário ("tira o trailing de 0.60R"). Nenhuma outra regra mudou; a contagem
+do forward test **não reinicia**.
+
+- 17 trades fechados desde o reinício de 2026-10-30 23:28 UTC: stops 11 × −$9,04
+  (média −$0,82, ~1R), trailing R 5 × +$2,15 (média +$0,43, ~0,55R), canal 1 × −$0,44;
+  total −$7,33.
+- O trailing inverteu a assimetria do trend following: o vencedor médio ficou em ~0,55R
+  contra perdedor médio de ~1R, exatamente o que o aviso da seção de 2026-10-31 previa.
+- Agora: `TRADING_BOT_DONCHIAN_TRAIL_R_ENABLED` default `false` (ARM/STEP mantidos para
+  religar por env). Saídas voltam a ser só o stop 2×ATR na exchange e a saída no canal.
+  Pisos já armados (`trail_floors` no state) deixam de ser avaliados.
+- Quando vale / deploy: a preencher no deploy.
