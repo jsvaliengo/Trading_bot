@@ -83,21 +83,26 @@ def collect_history(bot) -> Dict[str, Any]:
 
 def collect_forward_test(bot, summary: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Progresso do forward test (trades Donchian fechados desde o início) com a
-    MESMA equity/pico do drawdown do bot. Vazio sem TradeStore."""
+    MESMA equity/pico do drawdown do bot. Fora do Donchian, os mesmos números sobre
+    TODOS os trades fechados do TradeStore, sem a janela do forward test (card
+    "Desde o início" e Performance e risco). Vazio sem TradeStore."""
     store = getattr(bot, "trade_store", None)
     if store is None or not hasattr(store, "closed_trades"):
         return {}
+    donchian = str(getattr(config, "STRATEGY", "") or "").lower() == ft.STRATEGY
     try:
-        rows = store.closed_trades(ft.STRATEGY)
+        rows = store.closed_trades(ft.STRATEGY if donchian else None)
     except Exception:
         return {}
+    restart = _forward_test_restart() if donchian else None
+    start_iso = ft.START_ISO if donchian or not rows else str(rows[0].get("exit_at"))
     summary = summary or {}
     peak = _safe_float(getattr(bot, "peak_equity", 0.0) or 0.0)
     equity = summary.get("last_balance")
     base = None
     if equity is not None:
         # equity no início do teste = equity agora − não-realizado − realizado Donchian
-        start = ft.parse_utc(_forward_test_restart() or ft.START_ISO)
+        start = ft.parse_utc(restart or start_iso)
         net = sum(_safe_float(r.get("pnl_net")) for r in rows
                   if start is None or (ft.parse_utc(r.get("exit_at")) or start) >= start)
         base = _safe_float(equity) - _safe_float(summary.get("unrealized_pnl")) - net
@@ -107,7 +112,8 @@ def collect_forward_test(bot, summary: Optional[Dict[str, Any]] = None) -> Dict[
         base_equity=base,
         equity_now=_safe_float(equity) if equity is not None else None,
         peak_equity=peak or None,
-        restart_iso=_forward_test_restart(),
+        start_iso=start_iso,
+        restart_iso=restart,
         dd_limit_pct=_safe_float(getattr(config, "DONCHIAN_MAX_DRAWDOWN_PERCENT", ft.DD_LIMIT_PCT), ft.DD_LIMIT_PCT),
     )
 

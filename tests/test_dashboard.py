@@ -431,3 +431,56 @@ def test_collect_martingale_none_without_runner_and_present_with_it():
     assert calls == [([{"symbol": "ADAUSDT"}], 100.0)]
     bot.martingale = SimpleNamespace(ladder=lambda positions, equity: 1 / 0)
     assert dashboard_data.collect_martingale(bot, [], {}) is None
+
+
+# ---------- collect_forward_test: card "Desde o início" por estratégia ----------
+
+
+def _fake_store(rows):
+    calls = []
+
+    def closed_trades(strategy_type=None, limit=2000):
+        calls.append(strategy_type)
+        return [r for r in rows if strategy_type is None or r["strategy_type"] == strategy_type]
+
+    return SimpleNamespace(closed_trades=closed_trades, calls=calls)
+
+
+_ROWS = [
+    # anterior ao início do forward test Donchian (24/10): fora do Donchian conta mesmo assim
+    {"strategy_type": "martingale_hedge", "symbol": "ADAUSDT", "exit_at": "2026-06-01T10:00:00+00:00",
+     "pnl_net": 1.5, "fees": 0.10, "funding": -0.02},
+    {"strategy_type": "martingale_hedge", "symbol": "ADAUSDT", "exit_at": "2026-11-08T10:00:00+00:00",
+     "pnl_net": 2.0, "fees": 0.20, "funding": 0.01},
+    {"strategy_type": "martingale_hedge", "symbol": "ADAUSDT", "exit_at": "2026-11-08T11:00:00+00:00",
+     "pnl_net": 2.5, "fees": 0.30, "funding": 0.0},
+    {"strategy_type": "donchian_4h", "symbol": "ETHUSDT", "exit_at": "2026-11-01T00:00:00+00:00",
+     "pnl_net": -4.0, "fees": 0.50, "funding": 0.05},
+]
+
+
+def test_collect_forward_test_martingale_soma_todos_os_trades_do_store(monkeypatch):
+    monkeypatch.setattr(global_config, "STRATEGY", "martingale_hedge", raising=False)
+    monkeypatch.setattr(global_config, "FORWARD_TEST_RESTART_AT", "", raising=False)
+    store = _fake_store(_ROWS)
+    bot = SimpleNamespace(trade_store=store, peak_equity=110.0)
+    out = dashboard_data.collect_forward_test(bot, {"last_balance": 110.0, "unrealized_pnl": 0.0})
+    assert store.calls == [None]
+    assert out["trades"] == 4
+    assert out["net_usd"] == pytest.approx(2.0)
+    assert out["fees_usd"] == pytest.approx(1.10)
+    assert out["funding_usd"] == pytest.approx(0.04)
+    assert out["start"] == "2026-06-01T10:00:00+00:00"
+    assert out["restart"] is None
+
+
+def test_collect_forward_test_donchian_mantem_filtro_de_estrategia_e_janela(monkeypatch):
+    monkeypatch.setattr(global_config, "STRATEGY", "donchian_4h", raising=False)
+    monkeypatch.setattr(global_config, "FORWARD_TEST_RESTART_AT", "", raising=False)
+    store = _fake_store(_ROWS)
+    bot = SimpleNamespace(trade_store=store, peak_equity=110.0)
+    out = dashboard_data.collect_forward_test(bot, {"last_balance": 110.0, "unrealized_pnl": 0.0})
+    assert store.calls == ["donchian_4h"]
+    assert out["trades"] == 1
+    assert out["net_usd"] == pytest.approx(-4.0)
+    assert out["start"] == "2026-10-24T23:43:07+00:00"
