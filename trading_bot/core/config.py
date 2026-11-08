@@ -1585,9 +1585,10 @@ class TradingConfig:
                 "Use 'exchange' ou 'mainnet'."
             )
 
-        if self.STRATEGY not in {"pullback", "donchian_4h"}:
+        if self.STRATEGY not in {"pullback", "donchian_4h", "martingale_hedge"}:
             errors.append(
-                f"⚠️  ALERTA: STRATEGY inválida ({self.STRATEGY!r}). Use 'pullback' ou 'donchian_4h'."
+                f"⚠️  ALERTA: STRATEGY inválida ({self.STRATEGY!r}). "
+                "Use 'pullback', 'donchian_4h' ou 'martingale_hedge'."
             )
 
         if not self.API_KEY or not self.API_SECRET:
