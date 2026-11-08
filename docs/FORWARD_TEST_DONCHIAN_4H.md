@@ -227,3 +227,14 @@ do forward test **não reinicia**.
   religar por env). Saídas voltam a ser só o stop 2×ATR na exchange e a saída no canal.
   Pisos já armados (`trail_floors` no state) deixam de ser avaliados.
 - Quando vale / deploy: 2026-11-07 12:59 UTC, deploy `511f94a` (PR #237). Posições abertas no deploy: 9 SHORT (GTC, XRP, WLD, DOGE, RLC, HYPE, STRK, ENA, TAO), nenhum piso armado; seguem só com stop 2×ATR e saída no canal de 20.
+
+### Encerramento: troca para martingale hedge (2026-11-08 00:56 UTC)
+
+- O que: por decisão do usuário, o forward test foi encerrado com **17 trades** fechados desde o
+  reinício de 2026-10-30 23:28 UTC (11 stops −$9,04, 5 trailing R +$2,15, 1 canal de 20 −$0,44,
+  total −$7,33; equity $287,56, DD 4,3% do pico). Não atingiu a meta de 100 trades, então não há
+  comparação válida com o backtest.
+- Como: as 9 posições abertas (todas SHORT) foram fechadas a mercado via `/api/control/close_all`;
+  banco e estado movidos para `runtime/reset_donchian_20261108_005609/` na VM (backup, não apagados);
+  `TRADING_BOT_STRATEGY=martingale_hedge` no `.env`. Bot subiu às 01:01 UTC após o hotfix da
+  validação de config (PR #240, `05aacd8`). Ver `docs/MARTINGALE_HEDGE.md`.
