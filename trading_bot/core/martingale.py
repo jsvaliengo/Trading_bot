@@ -14,6 +14,7 @@ pullback (análise, IA, TP/SL/trailing por ordem, kill switches, rotação de pa
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
@@ -27,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 STRATEGY_TYPE = "martingale_hedge"
 SIDES = ("LONG", "SHORT")
+STALE_READ_GRACE_SECONDS = 30.0   # até aqui após um fill, leitura da exchange com qty menor é stale
 
 
 # ───────────────────────── matemática da escada (puras, testadas) ─────────────────────────
@@ -108,12 +110,23 @@ def _pct_away(px: Optional[float], mark: Optional[float]) -> Optional[float]:
     return (px - mark) / mark * 100.0 if (px and mark) else None
 
 
+LEG_STATE = ("level", "last_fill", "avg", "qty", "last_add_ts")   # persistido no bot_state
+
+
 @dataclass
 class Leg:
     symbol: str
     side: str
     level: int = 0            # fills já feitos (0 = sem posição)
     last_fill: float = 0.0
+    # Média/qty locais (incidente 08/11/26): a leitura da exchange no tick seguinte ao fill
+    # ainda pode estar stale; só a substitui quando já reflete a qty local.
+    avg: float = 0.0
+    qty: float = 0.0
+    last_add_ts: float = 0.0  # epoch do último fill: intervalo mínimo entre adições
+
+    def reset(self) -> None:
+        self.level, self.last_fill, self.avg, self.qty = 0, 0.0, 0.0, 0.0
 
 
 @dataclass
@@ -136,6 +149,7 @@ class MartingaleRunner:
         self.capital: float = 0.0
         self.peak: float = 0.0
         self.pairs: Dict[str, PairPlan] = {}
+        self.saved_legs: Dict[str, Dict[str, Dict[str, Any]]] = {}   # do bot_state, aplicado em start()
         self.stops = 0
 
     def snapshot(self) -> Dict[str, Any]:
@@ -143,7 +157,7 @@ class MartingaleRunner:
         return {
             "enabled": self.enabled, "base_notional": self.base, "capital": self.capital,
             "peak_equity": self.peak, "portfolio_stops": self.stops,
-            "pairs": {s: {side: {"level": leg.level, "last_fill": leg.last_fill} for side, leg in p.legs.items()}
+            "pairs": {s: {side: {k: getattr(leg, k) for k in LEG_STATE} for side, leg in p.legs.items()}
                       for s, p in self.pairs.items()},
             "params": {
                 "step_percent": c.MARTINGALE_STEP_PERCENT, "multiplier": c.MARTINGALE_MULTIPLIER,
@@ -238,7 +252,10 @@ class MartingaleRunner:
                                f"${min_notional:.2f} (capital ${self.capital:.2f})")
                 continue
             ex.set_leverage(sym, c.MARTINGALE_LEVERAGE)
-            self.pairs[sym] = PairPlan(sym, info, {side: Leg(sym, side) for side in SIDES})
+            saved = self.saved_legs.get(sym) or {}
+            self.pairs[sym] = PairPlan(sym, info, {
+                side: Leg(sym, side, **{k: v for k, v in (saved.get(side) or {}).items() if k in LEG_STATE})
+                for side in SIDES})
         if not self.pairs:
             self._refuse(f"nenhum par cabe na ordem base ${self.base:.2f} com capital ${self.capital:.2f}")
             return False
@@ -283,22 +300,25 @@ class MartingaleRunner:
     def _leg_tick(self, plan: PairPlan, leg: Leg, pos: Optional[Dict[str, Any]], price: float) -> None:
         c = config
         if pos is None:
-            leg.level, leg.last_fill = 0, 0.0
+            leg.reset()
             if not self.bot.paused:
                 self._open(plan, leg, price, k=0)
             return
-        avg, qty = float(pos["entry_price"]), float(pos["quantity"])
-        if leg.level == 0:          # restart: posição existe, estado da perna perdido
-            leg.level = infer_level(avg * qty, self.base, c.MARTINGALE_MULTIPLIER, c.MARTINGALE_MAX_LEVELS,
+        ex_avg, ex_qty = float(pos["entry_price"]), float(pos["quantity"])
+        if leg.level == 0:          # restart sem estado: a média da exchange é o último fill conhecido
+            leg.level = infer_level(ex_avg * ex_qty, self.base, c.MARTINGALE_MULTIPLIER, c.MARTINGALE_MAX_LEVELS,
                                     c.MARTINGALE_DOUBLE_FIRST)
-            leg.last_fill = price
+            leg.last_fill, leg.avg, leg.qty = ex_avg, ex_avg, ex_qty
             logger.info(f"🔁 Martingale: {leg.side} {plan.symbol} recuperada da exchange (nível {leg.level}, "
-                        f"média {avg}, qty {qty})")
-        if tp_hit(price, leg.side, tp_price(avg, leg.side, c.MARTINGALE_TP_PERCENT)):
+                        f"média {ex_avg}, qty {ex_qty})")
+        elif ex_qty >= leg.qty - 1e-9 or time.time() - leg.last_add_ts >= STALE_READ_GRACE_SECONDS:
+            leg.avg, leg.qty = ex_avg, ex_qty   # exchange já reflete o fill (ou passou a janela): reconcilia
+        if tp_hit(price, leg.side, tp_price(leg.avg, leg.side, c.MARTINGALE_TP_PERCENT)):
             if self.bot.close_position(pos, f"Martingale TP nível {leg.level}"):
-                leg.level, leg.last_fill = 0, 0.0
+                leg.reset()
             return
         if (not self.bot.paused and leg.level < c.MARTINGALE_MAX_LEVELS
+                and time.time() - leg.last_add_ts >= c.MARTINGALE_MIN_ADD_INTERVAL_SECONDS
                 and add_triggered(price, leg.side, next_trigger(leg.last_fill, leg.side, c.MARTINGALE_STEP_PERCENT))):
             self._open(plan, leg, price, k=leg.level)
 
@@ -311,7 +331,7 @@ class MartingaleRunner:
         failed = [p for p in positions if not self.bot.close_position(p, "Stop de portfólio")]
         for plan in self.pairs.values():
             for leg in plan.legs.values():
-                leg.level, leg.last_fill = 0, 0.0
+                leg.reset()
         self.bot.paused = True
         self.peak = equity       # próximo ciclo (se um humano retomar) mede do zero
         self.bot.telegram.send_message(
@@ -324,8 +344,8 @@ class MartingaleRunner:
 
     # ---- execução ----
     def _open(self, plan: PairPlan, leg: Leg, price: float, *, k: int) -> bool:
-        """Fill do nível k (0 = base) a mercado. Atualiza o estado da perna; a média e a
-        quantidade vivem na exchange (hedge mode agrega os fills da mesma perna)."""
+        """Fill do nível k (0 = base) a mercado. Atualiza o estado da perna (média/qty locais
+        a partir do próprio fill; a exchange reconcilia quando refletir a qty)."""
         bot, ex, c = self.bot, self.bot.exchange, config
         sym, side = plan.symbol, leg.side
         notional = level_notional(self.base, c.MARTINGALE_MULTIPLIER, k, c.MARTINGALE_DOUBLE_FIRST)
@@ -340,7 +360,13 @@ class MartingaleRunner:
             logger.error(f"❌ Martingale: ordem {what} {side} {sym} falhou")
             return False
         fill = _fill_price(order, price, f"Martingale {what} {side} {sym}")
-        leg.level, leg.last_fill = k + 1, fill
+        if k == 0:
+            leg.reset()
+        leg.avg, leg.qty = add_fill(leg.avg, leg.qty, fill, float(order.get("executedQty") or 0) or qty)
+        # Degrau medido do pior entre fill e mark: um fill acima do mercado (book raso do testnet,
+        # 08/11/26) deixaria o próximo gatilho já satisfeito no tick seguinte.
+        leg.last_fill = min(fill, price) if side == "LONG" else max(fill, price)
+        leg.level, leg.last_add_ts = k + 1, time.time()
         if k == 0:
             bot.ledger.record_trade_opened(
                 symbol=sym, signal=f"MARTINGALE_{side}", side=side, quantity=qty,
@@ -353,5 +379,5 @@ class MartingaleRunner:
             bot.telegram.send_trade_alert(symbol=sym, action=f"OPEN_{side}", price=fill, quantity=qty,
                                           strategy_name=STRATEGY_TYPE)
         logger.info(f"✅ Martingale: {side} {sym} nível {leg.level}/{c.MARTINGALE_MAX_LEVELS} @ {fill}; "
-                    f"próxima adição em {next_trigger(fill, side, c.MARTINGALE_STEP_PERCENT):.6g}")
+                    f"próxima adição em {next_trigger(leg.last_fill, side, c.MARTINGALE_STEP_PERCENT):.6g}")
         return True

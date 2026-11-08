@@ -52,9 +52,16 @@ def test_portfolio_stop_hit_at_20_percent():
 
 
 # ───────────── runner com fakes ─────────────
+@pytest.fixture(autouse=True)
+def _no_add_interval(monkeypatch):
+    # os testes de escada dão vários ticks seguidos; o freio de intervalo tem teste próprio
+    monkeypatch.setattr(config, "MARTINGALE_MIN_ADD_INTERVAL_SECONDS", 0)
+
+
 class _Ex:
-    def __init__(self, price=100.0, hedge=True, balance=300.0, min_notional=5.0):
+    def __init__(self, price=100.0, hedge=True, balance=300.0, min_notional=5.0, stale=False, fill_price=None):
         self.price, self.hedge, self.balance, self.min_notional = price, hedge, balance, min_notional
+        self.stale, self.fill_price = stale, fill_price   # stale: posição não reflete o fill; fill_price: avgPrice forçado
         self.positions = []
         self.orders = []
         self.set_leverage = MagicMock(return_value=True)
@@ -77,14 +84,16 @@ class _Ex:
 
     def place_market_order(self, **kw):
         self.orders.append(kw)
+        fill = self.fill_price or self.price
         # hedge mode agrega fills da mesma perna: simula a média da exchange
         for p in self.positions:
             if p["symbol"] == kw["symbol"] and p["side"] == kw["position_side"]:
-                p["entry_price"], p["quantity"] = mg.add_fill(p["entry_price"], p["quantity"], self.price, kw["quantity"])
-                return {"avgPrice": str(self.price)}
-        self.positions.append({"symbol": kw["symbol"], "side": kw["position_side"], "entry_price": self.price,
+                if not self.stale:
+                    p["entry_price"], p["quantity"] = mg.add_fill(p["entry_price"], p["quantity"], fill, kw["quantity"])
+                return {"avgPrice": str(fill)}
+        self.positions.append({"symbol": kw["symbol"], "side": kw["position_side"], "entry_price": fill,
                                "quantity": kw["quantity"], "unrealized_pnl": 0.0, "mark_price": self.price})
-        return {"avgPrice": str(self.price)}
+        return {"avgPrice": str(fill)}
 
 
 def _bot(ex, pairs=("ADAUSDT",)):
@@ -232,6 +241,84 @@ def test_restart_recovers_leg_level_from_exchange_notional():
     r.tick()
     assert r.pairs["ADAUSDT"].legs["LONG"].level == 2 and r.pairs["ADAUSDT"].legs["SHORT"].level == 1
     assert ex.orders == []
+    # último fill = média da exchange, não o preço atual (100): degrau não desloca a cada restart
+    assert (r.pairs["ADAUSDT"].legs["LONG"].last_fill, r.pairs["ADAUSDT"].legs["SHORT"].last_fill) == (101.0, 99.0)
+
+
+# ───────────── incidente 2026-11-08: cascata de adições (nível 3→9 em 18 s) ─────────────
+def test_stale_exchange_read_and_fill_above_mark_do_not_cascade(monkeypatch):
+    monkeypatch.setattr(config, "MARTINGALE_MAX_LEVELS", 9)
+    now = [1_000.0]
+    monkeypatch.setattr(mg.time, "time", lambda: now[0])
+    ex = _Ex(min_notional=1.0, stale=True)
+    bot = _bot(ex)
+    r = mg.MartingaleRunner(bot)
+    r.start()
+    r.tick()                                   # base @ 100 nas duas pernas
+    leg = r.pairs["ADAUSDT"].legs["LONG"]
+    base_qty = leg.qty
+    ex.price, ex.fill_price = 98.2, 100.0      # ticker −1,8%; fill reportado em 100 (igual ao log: @ 0.1762 com mark 0.1731)
+    r.tick()
+    assert leg.level == 2
+    assert leg.last_fill == 98.2               # degrau ancorado no pior entre fill e mark, não no fill acima do mercado
+    assert leg.qty > base_qty and leg.avg == pytest.approx(100.0)
+    for _ in range(5):                         # exchange segue devolvendo avg/qty antigos: NÃO adiciona de novo
+        r.tick()
+    assert leg.level == 2 and len([o for o in ex.orders if o["position_side"] == "LONG"]) == 2
+    assert ex.positions[0]["quantity"] == base_qty   # exchange stale (qty < local) não sobrescreve o estado local
+    ex.positions[0]["quantity"], ex.positions[0]["entry_price"] = leg.qty, 99.0
+    r.tick()                                   # exchange reflete o fill (qty ≥ local): reconcilia
+    assert (leg.avg, leg.qty) == (99.0, ex.positions[0]["quantity"])
+    ex.positions[0]["quantity"], now[0] = base_qty, now[0] + 31   # passada a janela, a exchange volta a ser a verdade
+    r.tick()
+    assert leg.qty == base_qty and leg.level == 2
+
+
+def test_min_interval_between_adds_on_same_leg(monkeypatch):
+    monkeypatch.setattr(config, "MARTINGALE_MIN_ADD_INTERVAL_SECONDS", 60)
+    now = [1_000.0]
+    monkeypatch.setattr(mg.time, "time", lambda: now[0])
+    ex = _Ex(min_notional=1.0)
+    bot = _bot(ex)
+    r = mg.MartingaleRunner(bot)
+    r.start()
+    r.tick()                                   # base em t=1000
+    leg = r.pairs["ADAUSDT"].legs["LONG"]
+    ex.price = 97.0                            # −3%: gatilho satisfeito, mas há 10 s da base
+    now[0] += 10
+    r.tick()
+    assert leg.level == 1
+    now[0] += 50                               # 60 s: adiciona UMA vez por tick
+    r.tick()
+    assert leg.level == 2
+    r.tick()
+    assert leg.level == 2
+    ex.price, now[0] = 95.0, now[0] + 60          # próximo degrau (−2% de 97) e intervalo vencido
+    r.tick()
+    assert leg.level == 3
+
+
+def test_leg_state_survives_restart_via_state():
+    from trading_bot.core.bot_state_serde import BotStatePersistence
+
+    ex = _Ex(min_notional=1.0)
+    bot = _bot(ex)
+    r = mg.MartingaleRunner(bot)
+    r.start()
+    r.tick()
+    ex.price = 98.5
+    r.tick()                                   # LONG nível 2, último fill 98,5
+    bot.martingale, bot.kill_switch = r, None
+    legs = BotStatePersistence(bot).build_payload()["martingale_legs"]
+    assert legs["ADAUSDT"]["LONG"]["level"] == 2 and legs["ADAUSDT"]["LONG"]["last_fill"] == 98.5
+    bot2 = _bot(ex)
+    r2 = mg.MartingaleRunner(bot2)
+    r2.saved_legs = legs                       # bot.load_state() guarda state['martingale_legs'] aqui
+    r2.start()
+    r2.tick()
+    leg = r2.pairs["ADAUSDT"].legs["LONG"]
+    assert (leg.level, leg.last_fill) == (2, 98.5)                        # restaurado do state, não inferido
+    assert len([o for o in ex.orders if o["position_side"] == "LONG"]) == 2   # sem reabrir/adicionar (SHORT bateu TP e reabriu)
 
 
 # ───────────── integração no bot ─────────────
