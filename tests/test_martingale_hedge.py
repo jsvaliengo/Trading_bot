@@ -268,3 +268,27 @@ def test_kill_switch_is_off_under_martingale(monkeypatch):
     ks._check_loss_streak = ks._check_drawdown_alert = ks._check_win_rate_floor = MagicMock()
     ks.check_all(bot=SimpleNamespace(paused=False))
     assert not ks._check_loss_streak.called and not ks._check_drawdown_alert.called
+
+
+def test_validate_accepts_martingale_strategy(monkeypatch):
+    # Regressão: validate() rejeitava 'martingale_hedge' e o bot abortava no boot da VM (08/11/26).
+    monkeypatch.setattr(config, "STRATEGY", "martingale_hedge")
+    assert not [e for e in _validation_errors() if "STRATEGY inválida" in e]
+    monkeypatch.setattr(config, "STRATEGY", "foo")
+    assert [e for e in _validation_errors() if "STRATEGY inválida" in e]
+
+
+def _validation_errors():
+    import logging
+    msgs = []
+    class _H(logging.Handler):
+        def emit(self, rec):
+            msgs.append(rec.getMessage())
+    h = _H()
+    root = logging.getLogger()
+    root.addHandler(h)
+    try:
+        config.validate()
+    finally:
+        root.removeHandler(h)
+    return msgs
