@@ -77,8 +77,8 @@
         </div>
     </section>
 
-    <!-- 2. Progresso do forward test -->
-    <section class="card" aria-labelledby="ft-h">
+    <!-- 2. Progresso do forward test (oculto fora do Donchian) -->
+    <section class="card" aria-labelledby="ft-h" id="ft-card">
         <header class="ch">
             <div><h2 id="ft-h">Forward test</h2><p class="cs">Regra: 150 trades e 6 meses; passa com expectativa líquida &gt; 0 e drawdown &lt; 20%. Universo mudou de 30 para todos os pares em 29/10 07:28.</p></div>
             <span class="verdict" id="verdict">—</span>
@@ -104,6 +104,12 @@
                 <div class="track-f" id="tr-dd-f">—</div>
             </div>
         </div>
+    </section>
+
+    <!-- 2b. Escada martingale (só com TRADING_BOT_STRATEGY=martingale_hedge) -->
+    <section class="card" aria-labelledby="mg-h" id="mg-card" hidden>
+        <header class="ch"><div><h2 id="mg-h">Escada martingale</h2><p class="cs" id="mg-params">—</p></div><span class="cs" id="mg-stop">—</span></header>
+        <div id="mg-list"></div>
     </section>
 
     <!-- 3. Posições -->

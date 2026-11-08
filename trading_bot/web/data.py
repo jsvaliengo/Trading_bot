@@ -58,6 +58,7 @@ def collect_live(bot) -> Dict[str, Any]:
         "summary": summary,
         "positions": positions,
         "forward_test": collect_forward_test(bot, summary),
+        "martingale": collect_martingale(bot, positions, summary),
         "engine": engine,
         "health": collect_health(bot, summary),
         "server_time": datetime.utcnow().isoformat() + "Z",
@@ -113,6 +114,18 @@ def collect_forward_test(bot, summary: Optional[Dict[str, Any]] = None) -> Dict[
 
 def _forward_test_restart() -> Optional[str]:
     return str(getattr(config, "FORWARD_TEST_RESTART_AT", "") or "").strip() or ft.RESTART_ISO
+
+
+def collect_martingale(bot, positions: List[Dict[str, Any]], summary: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Escada do martingale hedge (params, pico, stop de portfólio, pernas). None fora
+    da estratégia; a matemática fica em MartingaleRunner.ladder()."""
+    runner = getattr(bot, "martingale", None)
+    if runner is None or not hasattr(runner, "ladder"):
+        return None
+    try:
+        return runner.ladder(positions, _safe_float(summary.get("last_balance")) or None)
+    except Exception:
+        return None
 
 
 def collect_engine(bot) -> Dict[str, Any]:

@@ -292,3 +292,33 @@ def _validation_errors():
     finally:
         root.removeHandler(h)
     return msgs
+
+
+# ───────────── escada pro dashboard ─────────────
+def test_ladder_exposes_next_add_tp_and_portfolio_stop(monkeypatch):
+    monkeypatch.setattr(config, "MARTINGALE_MAX_LEVELS", 3)
+    ex = _Ex(price=100.0, balance=300.0, min_notional=1.0)
+    bot = _bot(ex)
+    r = mg.MartingaleRunner(bot)
+    assert r.start()
+    r.tick()                                   # abre LONG e SHORT @ 100
+    ex.price = 99.0
+    positions = [{"symbol": p["symbol"], "side": p["side"], "entry_price": p["entry_price"], "quantity": p["quantity"],
+                  "mark_price": 99.0, "unrealized_pnl_usd": -0.05 if p["side"] == "LONG" else 0.05} for p in ex.positions]
+    out = r.ladder(positions, equity=300.0)
+    assert out["portfolio_stop_equity"] == pytest.approx(240.0)          # pico 300 × 0,8
+    assert out["portfolio_stop_room_pct"] == pytest.approx(20.0)
+    assert out["params"]["max_levels"] == 3
+    long, short = {leg["side"]: leg for leg in out["legs"]}["LONG"], {leg["side"]: leg for leg in out["legs"]}["SHORT"]
+    assert (long["level"], long["max_levels"], long["avg_price"], long["mark_price"]) == (1, 3, 100.0, 99.0)
+    assert long["next_add_price"] == pytest.approx(98.5) and long["next_add_pct"] == pytest.approx(-0.5 / 99 * 100)
+    assert long["tp_price"] == pytest.approx(101.0) and long["tp_pct"] == pytest.approx(2.0 / 99 * 100)
+    assert long["unrealized_pnl_usd"] == -0.05 and long["notional"] == pytest.approx(long["quantity"] * 99.0)
+    assert short["next_add_price"] == pytest.approx(101.5) and short["tp_price"] == pytest.approx(99.0)
+    # teto da escada: sem próxima adição; perna sem posição: só o nível
+    r.pairs["ADAUSDT"].legs["LONG"].level = 3
+    out = r.ladder(positions, equity=None)
+    assert out["portfolio_stop_room_pct"] is None
+    assert {leg["side"]: leg["next_add_price"] for leg in out["legs"]}["LONG"] is None
+    empty = r.ladder([], equity=300.0)
+    assert all(leg["avg_price"] is None and leg["level"] == lvl for leg, lvl in zip(empty["legs"], (3, 1)))

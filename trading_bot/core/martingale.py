@@ -89,6 +89,11 @@ def portfolio_stop_hit(equity: float, peak: float, stop_pct: float) -> bool:
     return peak > 0 and equity <= peak * (1 - stop_pct / 100.0)
 
 
+def _pct_away(px: Optional[float], mark: Optional[float]) -> Optional[float]:
+    """Distância % do mark até `px` (negativa = abaixo do preço atual)."""
+    return (px - mark) / mark * 100.0 if (px and mark) else None
+
+
 @dataclass
 class Leg:
     symbol: str
@@ -132,6 +137,39 @@ class MartingaleRunner:
                 "portfolio_stop_percent": c.MARTINGALE_PORTFOLIO_STOP_PERCENT, "leverage": c.MARTINGALE_LEVERAGE,
             },
         }
+
+    def ladder(self, positions: List[Dict[str, Any]], equity: Optional[float] = None) -> Dict[str, Any]:
+        """snapshot() + escada por perna pro dashboard: nível, média, próxima adição e TP
+        (com % até o mark), stop de portfólio em $ e folga em %. `positions` no formato do
+        dashboard (symbol, side, entry_price, quantity, mark_price, unrealized_pnl_usd)."""
+        c = config
+        out = self.snapshot()
+        stop_eq = self.peak * (1 - c.MARTINGALE_PORTFOLIO_STOP_PERCENT / 100.0)
+        out["portfolio_stop_equity"] = stop_eq
+        out["portfolio_stop_room_pct"] = (equity - stop_eq) / equity * 100.0 if equity else None
+        by_key = {f"{p.get('symbol')}_{p.get('side')}": p for p in positions}
+        legs = []
+        for sym, plan in self.pairs.items():
+            for side in SIDES:
+                leg, pos = plan.legs[side], by_key.get(f"{sym}_{side}")
+                row: Dict[str, Any] = {"symbol": sym, "side": side, "level": leg.level, "max_levels": c.MARTINGALE_MAX_LEVELS,
+                                       "avg_price": None, "quantity": None, "notional": None, "mark_price": None,
+                                       "unrealized_pnl_usd": None, "next_add_price": None, "next_add_pct": None,
+                                       "tp_price": None, "tp_pct": None}
+                if pos is not None:
+                    avg, qty = float(pos.get("entry_price") or 0), float(pos.get("quantity") or 0)
+                    mark = float(pos.get("mark_price") or 0) or None
+                    level = leg.level or infer_level(avg * qty, self.base, c.MARTINGALE_MULTIPLIER, c.MARTINGALE_MAX_LEVELS)
+                    tp = tp_price(avg, side, c.MARTINGALE_TP_PERCENT) if avg else None
+                    nxt = (next_trigger(leg.last_fill or avg, side, c.MARTINGALE_STEP_PERCENT)
+                           if avg and level < c.MARTINGALE_MAX_LEVELS else None)
+                    row.update(level=level, avg_price=avg or None, quantity=qty or None,
+                               notional=qty * (mark or avg) if qty else None, mark_price=mark,
+                               unrealized_pnl_usd=pos.get("unrealized_pnl_usd"),
+                               next_add_price=nxt, next_add_pct=_pct_away(nxt, mark), tp_price=tp, tp_pct=_pct_away(tp, mark))
+                legs.append(row)
+        out["legs"] = legs
+        return out
 
     # ---- startup ----
     def start(self) -> bool:
