@@ -366,6 +366,31 @@
         $('eng-skip-list').innerHTML = Object.entries(skips).map(([k, v]) => `<li>${esc(k)} <b>×${v}</b></li>`).join('') + (c.deferred ? `<li>barra adiada ${c.deferred}× (${esc(c.defer_reason)})</li>` : '');
     }
 
+    // ───────── Escada martingale ─────────
+    function renderMartingale(m) {
+        $('ft-card').hidden = !!m; $('mg-card').hidden = !m;
+        if (!m) return;
+        const p = m.params || {}, n = (v, d = 2) => String(Number(v).toFixed(d)).replace(/\.?0+$/, '').replace('.', ',');
+        $('mg-params').textContent = `X ${n(p.step_percent)}% · m ${n(p.multiplier)} · TP ${n(p.tp_percent)}% · N ${p.max_levels} · base ${fmt.usd(m.base_notional)} · capital ${fmt.usd(m.capital)} · pico ${fmt.usd(m.peak_equity)} · ${p.leverage}×` + (m.portfolio_stops ? ` · ${m.portfolio_stops} stop(s) de portfólio` : '');
+        const stop = $('mg-stop'); stop.textContent = `stop de portfólio em ${fmt.usd(m.portfolio_stop_equity)}` + (isNum(m.portfolio_stop_room_pct) ? ` — faltam ${fmt.pct(m.portfolio_stop_room_pct, 2, false)}` : '');
+        stop.className = 'cs ' + (isNum(m.portfolio_stop_room_pct) && m.portfolio_stop_room_pct < 5 ? 'warn' : '');
+        const away = (px, pct) => isNum(px) ? `<b>${fmt.price(px)}</b>${isNum(pct) ? ` <small>(${fmt.pct(pct)})</small>` : ''}` : '<b>—</b>';
+        $('mg-list').innerHTML = (m.legs || []).map(l => `<div class="prow">
+            <div class="prow-top">
+                <span class="psym">${esc(l.symbol)} <span class="side ${l.side === 'LONG' ? 'l' : 's'}">${esc(l.side)}</span></span>
+                <span class="pr-pnl ${cls(l.unrealized_pnl_usd)}">${fmt.usd(l.unrealized_pnl_usd, { signed: true })}</span>
+                <span class="pr-r">${l.level}/${l.max_levels}<small>nível</small></span>
+                <span class="pr-meta">${isNum(l.quantity) ? `${fmt.price(l.quantity)} un · ${fmt.usd(l.notional)}` : 'sem posição'}</span>
+                <span class="pr-meta">média <b>${fmt.price(l.avg_price)}</b></span>
+            </div>
+            <div class="ruler-l">
+                <span>próx. adição @ ${l.level >= l.max_levels ? '<b>teto da escada</b>' : away(l.next_add_price, l.next_add_pct)}</span>
+                <span>TP @ ${away(l.tp_price, l.tp_pct)}</span>
+                <span>preço <b>${fmt.price(l.mark_price)}</b></span>
+            </div>
+        </div>`).join('') || '<p class="empty">Nenhum par na escada (estratégia não iniciou ou nenhum par cabe na ordem base).</p>';
+    }
+
     // ───────── Saúde ─────────
     function renderHealth(h, s) {
         const items = [];
@@ -519,6 +544,7 @@
         renderForwardTest(ft);
         renderPerf(ft);
         renderPositions(pos);
+        renderMartingale(l.martingale);
         renderEngine(e, pos);
         renderHealth(h, s);
         renderRHist(ft.r_histogram);

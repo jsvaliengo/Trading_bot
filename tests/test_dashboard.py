@@ -420,3 +420,14 @@ def test_collect_recent_trades_reverses_order_and_limits():
     # Mais recentes primeiro
     assert trades[0]["symbol"] == "SOLUSDT"
     assert trades[1]["symbol"] == "ETHUSDT"
+
+
+def test_collect_martingale_none_without_runner_and_present_with_it():
+    bot = _make_bot()
+    assert dashboard_data.collect_martingale(bot, [], {"last_balance": 100.0}) is None
+    calls = []
+    bot.martingale = SimpleNamespace(ladder=lambda positions, equity: calls.append((positions, equity)) or {"legs": []})
+    assert dashboard_data.collect_martingale(bot, [{"symbol": "ADAUSDT"}], {"last_balance": 100.0}) == {"legs": []}
+    assert calls == [([{"symbol": "ADAUSDT"}], 100.0)]
+    bot.martingale = SimpleNamespace(ladder=lambda positions, equity: 1 / 0)
+    assert dashboard_data.collect_martingale(bot, [], {}) is None
