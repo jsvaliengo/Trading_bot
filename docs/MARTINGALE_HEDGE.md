@@ -59,6 +59,7 @@ Com o bot **pausado** (manual ou pelo stop): TPs ainda fecham pernas; nada abre 
 | `MAX_LEVELS` | 7 | N |
 | `PORTFOLIO_STOP_PERCENT` | 20 | stop de portfólio (limitado a 5–25) |
 | `LEVERAGE` | 10 | alavancagem por par (margem segue a da conta) |
+| `MIN_ADD_INTERVAL_SECONDS` | 60 | intervalo mínimo entre adições na mesma perna (freio da cascata de 08/11/26) |
 | `FIRST_ORDER_USDT` | 0 (off) | > 0 troca a fórmula por capital por **sizing fixo**: B = valor × `LEVERAGE` (margem) — ver perfil planilha |
 | `FIRST_ORDER_IS_NOTIONAL` | false | lê `FIRST_ORDER_USDT` como valor da ordem (notional), não como margem |
 | `DOUBLE_FIRST` | false | CoinTech2u "Double First Order": só a 1ª ordem vale 2B (2B, 2B, 4B, 8B, …) |
@@ -74,9 +75,19 @@ lucro diária, stop loss global, regime swap, scoring/rotação de pares. Mesmo 
 
 - O registro de abertura no SQLite guarda preço/qty da **base**; o P&L do fechamento usa a média e a quantidade
   reais da exchange (corretos). Adições não geram linha própria.
-- Estado da perna (nível, último fill) vive em memória; após restart o nível é inferido do notional na exchange
-  e o próximo gatilho parte do preço atual.
+- Estado da perna (nível, último fill, média/qty locais) é persistido no `bot_state`; sem state o nível é
+  inferido do notional na exchange e o último fill = média da exchange.
 - Não há fechamento intrabar: o gatilho é avaliado no intervalo do monitor, a mercado (slippage real > simulado).
+
+## Incidente 2026-11-08: cascata de adições (nível 3→9 em 18 s)
+
+Às 18:55 BRT a perna LONG ADAUSDT adicionou um nível a cada tick (~2,5 s) até o teto: notional $1.562 com ADA
+caindo 1,9% em vez dos ~12% da escada. Cada fill foi reportado em 0,1762 (a média da posição) com o ticker em
+0,1731, então o gatilho seguinte (0,1762 × 0,985 = 0,17356) já nascia satisfeito e o tick seguinte adicionava
+de novo. Fix: o degrau é medido do **pior** entre fill e mark do momento da ordem; média/qty da perna são
+mantidas localmente a partir do próprio fill e a leitura da exchange só as substitui quando já reflete a qty (ou 30 s após o fill);
+intervalo mínimo entre adições (`MIN_ADD_INTERVAL_SECONDS`, 60 s); no restart o último fill = média da exchange
+(não o preço atual) e nível/último fill/média são persistidos no `bot_state`.
 
 ## Perfil planilha CoinTech2u — banca $300
 

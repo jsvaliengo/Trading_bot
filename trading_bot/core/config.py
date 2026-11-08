@@ -359,6 +359,8 @@ class TradingConfig:
     MARTINGALE_MAX_LEVELS: int = _env_int("TRADING_BOT_MARTINGALE_MAX_LEVELS", 7)
     MARTINGALE_PORTFOLIO_STOP_PERCENT: float = _env_float("TRADING_BOT_MARTINGALE_PORTFOLIO_STOP_PERCENT", 20.0)
     MARTINGALE_LEVERAGE: int = _env_int("TRADING_BOT_MARTINGALE_LEVERAGE", 10)
+    # Freio independente contra cascata de adições (08/11/26: nível 3→9 em 18 s na mesma perna).
+    MARTINGALE_MIN_ADD_INTERVAL_SECONDS: int = _env_int("TRADING_BOT_MARTINGALE_MIN_ADD_INTERVAL_SECONDS", 60)
     # Perfil planilha CoinTech2u (docs/MARTINGALE_HEDGE.md, "Perfil planilha"). FIRST_ORDER_USDT > 0
     # troca a fórmula por capital por sizing fixo: 1ª ordem = margem × LEVERAGE (ou o próprio valor
     # como notional se FIRST_ORDER_IS_NOTIONAL). DOUBLE_FIRST dobra só a 1ª ordem (2B, 2B, 4B, …).

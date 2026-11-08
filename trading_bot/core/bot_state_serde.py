@@ -131,4 +131,9 @@ class BotStatePersistence:
             'martingale_peak_equity': (
                 float(bot.martingale.peak or 0.0) if getattr(bot, 'martingale', None) is not None else None
             ),
+            # nível/último fill/média por perna: sem isto o restart inferia o nível e usava o preço
+            # atual como último fill (deslocava o degrau a cada deploy).
+            'martingale_legs': (
+                bot.martingale.snapshot()["pairs"] if getattr(bot, 'martingale', None) is not None else None
+            ),
         }

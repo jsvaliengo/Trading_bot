@@ -796,6 +796,8 @@ class TradingBot:
                 self.peak_equity = float(state['donchian_peak_equity'])
             if getattr(self, 'martingale', None) is not None and state.get('martingale_peak_equity'):
                 self.martingale.peak = float(state['martingale_peak_equity'])
+            if getattr(self, 'martingale', None) is not None and state.get('martingale_legs'):
+                self.martingale.saved_legs = dict(state['martingale_legs'])
             saved_max_drawdown = state.get('max_drawdown_from_peak_percent')
             if saved_max_drawdown is not None:
                 try:
