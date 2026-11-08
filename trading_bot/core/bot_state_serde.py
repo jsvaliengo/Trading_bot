@@ -128,4 +128,7 @@ class BotStatePersistence:
             'donchian_peak_equity': (
                 float(bot.peak_equity or 0.0) if getattr(bot, 'donchian', None) is not None else None
             ),
+            'martingale_peak_equity': (
+                float(bot.martingale.peak or 0.0) if getattr(bot, 'martingale', None) is not None else None
+            ),
         }
