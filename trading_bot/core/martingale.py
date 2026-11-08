@@ -30,21 +30,30 @@ SIDES = ("LONG", "SHORT")
 
 
 # ───────────────────────── matemática da escada (puras, testadas) ─────────────────────────
-def ladder_sum(m: float, n: int) -> float:
-    """S = Σ_{k=0}^{n−1} m^k: notional da escada completa em múltiplos de B."""
-    return float(sum(m ** k for k in range(max(int(n), 0))))
+def ladder_sum(m: float, n: int, double_first: bool = False) -> float:
+    """S = Σ_{k=0}^{n−1} m^k: notional da escada completa em múltiplos de B.
+    `double_first` (CoinTech2u "Double First Order"): a 1ª ordem vale 2B, as demais seguem."""
+    n = max(int(n), 0)
+    return float(sum(m ** k for k in range(n))) + (1.0 if double_first and n > 0 else 0.0)
 
 
-def base_notional(*, capital: float, leverage: float, n_pairs: int, m: float, n: int) -> float:
+def base_notional(*, capital: float, leverage: float, n_pairs: int, m: float, n: int,
+                  double_first: bool = False) -> float:
     """B = capital × alavancagem × 0,5 / (n_pares × 2 × S): todas as escadas cheias ao
     mesmo tempo usam 50% do capital como margem (sizing do pré-registro)."""
     if capital <= 0 or n_pairs <= 0 or n <= 0:
         return 0.0
-    return capital * leverage * 0.5 / (n_pairs * 2 * ladder_sum(m, n))
+    return capital * leverage * 0.5 / (n_pairs * 2 * ladder_sum(m, n, double_first))
 
 
-def level_notional(base: float, m: float, k: int) -> float:
-    return base * m ** k
+def fixed_base_notional(first_order_usdt: float, leverage: float, is_notional: bool) -> float:
+    """Perfil planilha: B fixo a partir da "1ª ordem" em USDT (margem × alavancagem, ou o
+    próprio valor quando a planilha é lida como notional)."""
+    return float(first_order_usdt) * (1.0 if is_notional else float(leverage))
+
+
+def level_notional(base: float, m: float, k: int, double_first: bool = False) -> float:
+    return base * (2.0 if double_first and k == 0 else m ** k)
 
 
 def add_fill(avg: float, qty: float, price: float, add_qty: float) -> Tuple[float, float]:
@@ -74,19 +83,24 @@ def tp_hit(price: float, side: str, target: float) -> bool:
     return price >= target if side == "LONG" else price <= target
 
 
-def infer_level(notional: float, base: float, m: float, n: int) -> int:
+def infer_level(notional: float, base: float, m: float, n: int, double_first: bool = False) -> int:
     """Fills já feitos numa perna encontrada na exchange sem estado (restart): menor
     k com B×S_k ≥ 90% do notional (tolera arredondamento de step/minNotional)."""
     if base <= 0:
         return 1
     for k in range(1, max(int(n), 1) + 1):
-        if base * ladder_sum(m, k) >= 0.9 * notional:
+        if base * ladder_sum(m, k, double_first) >= 0.9 * notional:
             return k
     return int(n)
 
 
-def portfolio_stop_hit(equity: float, peak: float, stop_pct: float) -> bool:
-    return peak > 0 and equity <= peak * (1 - stop_pct / 100.0)
+def portfolio_stop_floor(peak: float, stop_pct: float, stop_usdt: float = 0.0) -> float:
+    """Equity que dispara o stop: pico − STOP_LOSS_USDT quando setado (planilha), senão pico × (1 − %)."""
+    return peak - stop_usdt if stop_usdt > 0 else peak * (1 - stop_pct / 100.0)
+
+
+def portfolio_stop_hit(equity: float, peak: float, stop_pct: float, stop_usdt: float = 0.0) -> bool:
+    return peak > 0 and equity <= portfolio_stop_floor(peak, stop_pct, stop_usdt)
 
 
 def _pct_away(px: Optional[float], mark: Optional[float]) -> Optional[float]:
@@ -135,6 +149,8 @@ class MartingaleRunner:
                 "step_percent": c.MARTINGALE_STEP_PERCENT, "multiplier": c.MARTINGALE_MULTIPLIER,
                 "tp_percent": c.MARTINGALE_TP_PERCENT, "max_levels": c.MARTINGALE_MAX_LEVELS,
                 "portfolio_stop_percent": c.MARTINGALE_PORTFOLIO_STOP_PERCENT, "leverage": c.MARTINGALE_LEVERAGE,
+                "first_order_usdt": c.MARTINGALE_FIRST_ORDER_USDT, "double_first": c.MARTINGALE_DOUBLE_FIRST,
+                "stop_loss_usdt": c.MARTINGALE_STOP_LOSS_USDT,
             },
         }
 
@@ -144,7 +160,7 @@ class MartingaleRunner:
         dashboard (symbol, side, entry_price, quantity, mark_price, unrealized_pnl_usd)."""
         c = config
         out = self.snapshot()
-        stop_eq = self.peak * (1 - c.MARTINGALE_PORTFOLIO_STOP_PERCENT / 100.0)
+        stop_eq = portfolio_stop_floor(self.peak, c.MARTINGALE_PORTFOLIO_STOP_PERCENT, c.MARTINGALE_STOP_LOSS_USDT)
         out["portfolio_stop_equity"] = stop_eq
         out["portfolio_stop_room_pct"] = (equity - stop_eq) / equity * 100.0 if equity else None
         by_key = {f"{p.get('symbol')}_{p.get('side')}": p for p in positions}
@@ -159,7 +175,8 @@ class MartingaleRunner:
                 if pos is not None:
                     avg, qty = float(pos.get("entry_price") or 0), float(pos.get("quantity") or 0)
                     mark = float(pos.get("mark_price") or 0) or None
-                    level = leg.level or infer_level(avg * qty, self.base, c.MARTINGALE_MULTIPLIER, c.MARTINGALE_MAX_LEVELS)
+                    level = leg.level or infer_level(avg * qty, self.base, c.MARTINGALE_MULTIPLIER, c.MARTINGALE_MAX_LEVELS,
+                                                     c.MARTINGALE_DOUBLE_FIRST)
                     tp = tp_price(avg, side, c.MARTINGALE_TP_PERCENT) if avg else None
                     nxt = (next_trigger(leg.last_fill or avg, side, c.MARTINGALE_STEP_PERCENT)
                            if avg and level < c.MARTINGALE_MAX_LEVELS else None)
@@ -192,12 +209,31 @@ class MartingaleRunner:
         if self.peak <= 0:
             self.peak = float(self.bot.drawdown_equity(self.capital))
         symbols = list(c.MARTINGALE_PAIRS or [])
-        self.base = base_notional(capital=self.capital, leverage=c.MARTINGALE_LEVERAGE, n_pairs=len(symbols),
-                                  m=c.MARTINGALE_MULTIPLIER, n=c.MARTINGALE_MAX_LEVELS)
+        fixed = c.MARTINGALE_FIRST_ORDER_USDT > 0
+        if fixed:
+            self.base = fixed_base_notional(c.MARTINGALE_FIRST_ORDER_USDT, c.MARTINGALE_LEVERAGE,
+                                            c.MARTINGALE_FIRST_ORDER_IS_NOTIONAL)
+            logger.info(f"🎰 Martingale: sizing fixo (planilha) — 1ª ordem ${c.MARTINGALE_FIRST_ORDER_USDT:g} "
+                        f"{'notional' if c.MARTINGALE_FIRST_ORDER_IS_NOTIONAL else f'de margem × {c.MARTINGALE_LEVERAGE}x'}"
+                        f" = B ${self.base:.2f}{' (1ª ordem dobrada)' if c.MARTINGALE_DOUBLE_FIRST else ''}")
+        else:
+            self.base = base_notional(capital=self.capital, leverage=c.MARTINGALE_LEVERAGE, n_pairs=len(symbols),
+                                      m=c.MARTINGALE_MULTIPLIER, n=c.MARTINGALE_MAX_LEVELS,
+                                      double_first=c.MARTINGALE_DOUBLE_FIRST)
+        if c.MARTINGALE_STOP_LOSS_USDT > 0.25 * self.capital:
+            logger.warning(f"⚠️ Martingale: STOP_LOSS_USDT ${c.MARTINGALE_STOP_LOSS_USDT:g} é "
+                           f"{c.MARTINGALE_STOP_LOSS_USDT / max(self.capital, 1e-9) * 100:.0f}% da banca "
+                           f"${self.capital:.2f} (acima dos 25% do clamp do stop em %)")
         for sym in symbols:
             info = ex.get_symbol_info(sym) or {}
             min_notional = float(info.get("minNotional", 0) or 0)
-            if self.base < min_notional:
+            first_fill = level_notional(self.base, c.MARTINGALE_MULTIPLIER, 0, c.MARTINGALE_DOUBLE_FIRST)
+            if fixed and first_fill < min_notional:
+                # planilha: não pula o par, sobe a base até a 1ª ordem cobrir o minNotional
+                self.base = min_notional / (2.0 if c.MARTINGALE_DOUBLE_FIRST else 1.0)
+                logger.warning(f"⚠️ Martingale: {sym} 1ª ordem ${first_fill:.2f} < minNotional ${min_notional:.2f} — "
+                               f"base subida para ${self.base:.2f} (vale para todos os pares)")
+            elif first_fill < min_notional:
                 logger.warning(f"⏭️ Martingale: {sym} pulado — ordem base ${self.base:.2f} < minNotional "
                                f"${min_notional:.2f} (capital ${self.capital:.2f})")
                 continue
@@ -229,7 +265,7 @@ class MartingaleRunner:
             logger.warning(f"⚠️ Martingale: exchange indisponível ({exc}) — tick adiado")
             return
         self.peak = max(self.peak, equity)
-        if portfolio_stop_hit(equity, self.peak, c.MARTINGALE_PORTFOLIO_STOP_PERCENT):
+        if portfolio_stop_hit(equity, self.peak, c.MARTINGALE_PORTFOLIO_STOP_PERCENT, c.MARTINGALE_STOP_LOSS_USDT):
             self._portfolio_stop(positions, equity)
             return
         by_key = {f"{p['symbol']}_{p['side']}": p for p in positions}
@@ -253,7 +289,8 @@ class MartingaleRunner:
             return
         avg, qty = float(pos["entry_price"]), float(pos["quantity"])
         if leg.level == 0:          # restart: posição existe, estado da perna perdido
-            leg.level = infer_level(avg * qty, self.base, c.MARTINGALE_MULTIPLIER, c.MARTINGALE_MAX_LEVELS)
+            leg.level = infer_level(avg * qty, self.base, c.MARTINGALE_MULTIPLIER, c.MARTINGALE_MAX_LEVELS,
+                                    c.MARTINGALE_DOUBLE_FIRST)
             leg.last_fill = price
             logger.info(f"🔁 Martingale: {leg.side} {plan.symbol} recuperada da exchange (nível {leg.level}, "
                         f"média {avg}, qty {qty})")
@@ -268,8 +305,9 @@ class MartingaleRunner:
     def _portfolio_stop(self, positions: List[Dict[str, Any]], equity: float) -> None:
         c = config
         self.stops += 1
-        logger.error(f"🛑 Martingale: STOP DE PORTFÓLIO — equity ${equity:.2f} ≤ {100 - c.MARTINGALE_PORTFOLIO_STOP_PERCENT:g}% "
-                     f"do pico ${self.peak:.2f}. Fechando {len(positions)} posição(ões) e pausando o bot.")
+        floor = portfolio_stop_floor(self.peak, c.MARTINGALE_PORTFOLIO_STOP_PERCENT, c.MARTINGALE_STOP_LOSS_USDT)
+        logger.error(f"🛑 Martingale: STOP DE PORTFÓLIO — equity ${equity:.2f} ≤ piso ${floor:.2f} "
+                     f"(pico ${self.peak:.2f}). Fechando {len(positions)} posição(ões) e pausando o bot.")
         failed = [p for p in positions if not self.bot.close_position(p, "Stop de portfólio")]
         for plan in self.pairs.values():
             for leg in plan.legs.values():
@@ -277,8 +315,8 @@ class MartingaleRunner:
         self.bot.paused = True
         self.peak = equity       # próximo ciclo (se um humano retomar) mede do zero
         self.bot.telegram.send_message(
-            f"🛑 <b>MARTINGALE — STOP DE PORTFÓLIO</b>\nEquity ${equity:.2f} caiu {c.MARTINGALE_PORTFOLIO_STOP_PERCENT:g}% "
-            f"do pico. {len(positions) - len(failed)} posição(ões) fechadas a mercado"
+            f"🛑 <b>MARTINGALE — STOP DE PORTFÓLIO</b>\nEquity ${equity:.2f} caiu ${self.peak - equity:.2f} "
+            f"do pico ${self.peak:.2f}. {len(positions) - len(failed)} posição(ões) fechadas a mercado"
             + (f", {len(failed)} FALHARAM ({', '.join(p['symbol'] + ' ' + p['side'] for p in failed)}) — verifique na exchange"
                if failed else "")
             + ".\nBot PAUSADO: retome com /resume só depois de decidir se continua."
@@ -290,7 +328,7 @@ class MartingaleRunner:
         quantidade vivem na exchange (hedge mode agrega os fills da mesma perna)."""
         bot, ex, c = self.bot, self.bot.exchange, config
         sym, side = plan.symbol, leg.side
-        notional = level_notional(self.base, c.MARTINGALE_MULTIPLIER, k)
+        notional = level_notional(self.base, c.MARTINGALE_MULTIPLIER, k, c.MARTINGALE_DOUBLE_FIRST)
         qty = _round_qty_for_min_notional(notional / price, price, plan.info)
         if qty <= 0:
             return False

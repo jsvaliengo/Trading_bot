@@ -322,3 +322,64 @@ def test_ladder_exposes_next_add_tp_and_portfolio_stop(monkeypatch):
     assert {leg["side"]: leg["next_add_price"] for leg in out["legs"]}["LONG"] is None
     empty = r.ladder([], equity=300.0)
     assert all(leg["avg_price"] is None and leg["level"] == lvl for leg, lvl in zip(empty["legs"], (3, 1)))
+
+
+# ───────────── perfil planilha CoinTech2u (sizing fixo, double first, stop em USDT) ─────────────
+def test_double_first_doubles_only_the_first_order():
+    assert mg.ladder_sum(2.0, 9, double_first=True) == 512.0          # 2 + (2^9 − 2)
+    assert mg.ladder_sum(2.0, 0, double_first=True) == 0.0
+    assert [mg.level_notional(3.0, 2.0, k, double_first=True) for k in range(4)] == [6.0, 6.0, 12.0, 24.0]
+    assert mg.base_notional(capital=300, leverage=20, n_pairs=2, m=2.0, n=9, double_first=True) == pytest.approx(
+        300 * 20 * 0.5 / (2 * 2 * 512))
+    assert mg.infer_level(12.0, 3.0, 2.0, 9, double_first=True) == 2   # 2B + 2B
+
+
+def test_fixed_base_notional_margin_vs_notional():
+    assert mg.fixed_base_notional(3.0, 20, is_notional=False) == 60.0
+    assert mg.fixed_base_notional(3.0, 20, is_notional=True) == 3.0
+
+
+def test_stop_loss_usdt_prevails_over_percent_without_clamp():
+    assert mg.portfolio_stop_floor(300.0, 20.0) == pytest.approx(240.0)
+    assert mg.portfolio_stop_floor(300.0, 20.0, stop_usdt=180.0) == pytest.approx(120.0)
+    assert mg.portfolio_stop_hit(120.0, 300.0, 20.0, 180.0) and not mg.portfolio_stop_hit(120.01, 300.0, 20.0, 180.0)
+    assert not mg.portfolio_stop_hit(240.0, 300.0, 20.0, 180.0)    # −20% não dispara quando o $ manda
+
+
+def test_start_uses_fixed_first_order_and_warns_on_big_usdt_stop(monkeypatch, caplog):
+    monkeypatch.setattr(config, "MARTINGALE_FIRST_ORDER_USDT", 3.0)
+    monkeypatch.setattr(config, "MARTINGALE_LEVERAGE", 20)
+    monkeypatch.setattr(config, "MARTINGALE_DOUBLE_FIRST", True)
+    monkeypatch.setattr(config, "MARTINGALE_STOP_LOSS_USDT", 180.0)
+    ex = _Ex(price=100.0, balance=300.0, min_notional=5.0)
+    bot = _bot(ex, pairs=("ADAUSDT", "TRXUSDT"))
+    r = mg.MartingaleRunner(bot)
+    assert r.start() and r.base == 60.0                                  # $3 margem × 20x, não a fórmula
+    assert "60% da banca" in caplog.text
+    r.tick()
+    assert [o["quantity"] for o in ex.orders] == [pytest.approx(1.2)] * 4   # 1ª ordem dobrada: $120 @ 100
+    ex.price = 98.5
+    r.tick()
+    add = [o for o in ex.orders if o["position_side"] == "LONG" and o["symbol"] == "ADAUSDT"][-1]
+    assert add["quantity"] == pytest.approx(round(120 / 98.5, 2))        # nível 1 = 2B, igual à 1ª
+    assert r.ladder([], equity=300.0)["portfolio_stop_equity"] == pytest.approx(120.0)
+    ex.balance = 120.0                                                   # pico 300 − $180
+    r.tick()
+    assert bot.paused and r.stops == 1 and ex.positions == []
+
+
+def test_fixed_mode_bumps_base_to_min_notional_instead_of_skipping(monkeypatch, caplog):
+    monkeypatch.setattr(config, "MARTINGALE_FIRST_ORDER_USDT", 3.0)
+    monkeypatch.setattr(config, "MARTINGALE_FIRST_ORDER_IS_NOTIONAL", True)
+    monkeypatch.setattr(config, "MARTINGALE_DOUBLE_FIRST", False)
+    ex = _Ex(min_notional=5.0)
+    bot = _bot(ex)
+    r = mg.MartingaleRunner(bot)
+    assert r.start() and r.base == 5.0 and "ADAUSDT" in r.pairs
+    assert "base subida para $5.00" in caplog.text
+    monkeypatch.setattr(config, "MARTINGALE_DOUBLE_FIRST", True)
+    r2 = mg.MartingaleRunner(_bot(_Ex(min_notional=5.0)))
+    assert r2.start() and r2.base == 3.0                                 # 1ª ordem dobrada = $6 ≥ $5: sem bump
+    monkeypatch.setattr(config, "MARTINGALE_FIRST_ORDER_USDT", 2.0)
+    r3 = mg.MartingaleRunner(_bot(_Ex(min_notional=5.0)))
+    assert r3.start() and r3.base == 2.5                                 # $4 dobrado < $5: base = 5/2
