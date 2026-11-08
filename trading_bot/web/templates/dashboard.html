@@ -106,16 +106,16 @@
         </div>
     </section>
 
-    <!-- 2b. Escada martingale (só com TRADING_BOT_STRATEGY=martingale_hedge) -->
-    <section class="card" aria-labelledby="mg-h" id="mg-card" hidden>
-        <header class="ch"><div><h2 id="mg-h">Escada martingale</h2><p class="cs" id="mg-params">—</p></div><span class="cs" id="mg-stop">—</span></header>
-        <div id="mg-list"></div>
-    </section>
-
     <!-- 3. Posições -->
     <section class="card" aria-labelledby="pos-h">
         <header class="ch"><h2 id="pos-h">Posições abertas <span class="badge" id="positions-count">0</span></h2><span class="cs" id="pos-sum">—</span></header>
         <div id="positions-list"><p class="empty">Nenhuma posição aberta. O motor entra só no fechamento de barra 4h com rompimento de 40 barras.</p></div>
+    </section>
+
+    <!-- 3b. Escada martingale (só com TRADING_BOT_STRATEGY=martingale_hedge) -->
+    <section class="card" aria-labelledby="mg-h" id="mg-card" hidden>
+        <header class="ch"><div><h2 id="mg-h">Escada martingale</h2><p class="cs" id="mg-params">—</p></div><span class="cs" id="mg-stop">—</span></header>
+        <div id="mg-list"></div>
     </section>
 
     <section class="two">
