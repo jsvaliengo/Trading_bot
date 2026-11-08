@@ -166,6 +166,9 @@ class KillSwitchMonitor:
                 bot=bot, threshold=float(getattr(self.config, "DONCHIAN_MAX_DRAWDOWN_PERCENT", 20.0))
             )
             return
+        # Martingale hedge: o stop de portfólio do runner é a única parada (fecha tudo e pausa).
+        if getattr(self.config, "STRATEGY", "pullback") == "martingale_hedge":
+            return
         if not bool(getattr(self.config, "KILL_SWITCH_ENABLED", True)):
             return
 

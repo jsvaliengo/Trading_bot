@@ -347,6 +347,18 @@ class TradingConfig:
     # Reinício do forward test (ISO 8601 UTC, ex. "2026-10-31T12:00:00+00:00"): trades
     # fechados antes ficam como histórico e não contam no critério. Vazio = sem reinício.
     FORWARD_TEST_RESTART_AT: str = _env_str("TRADING_BOT_FORWARD_TEST_RESTART_AT", "")
+    # Martingale/DCA com hedge estilo CoinTech2u (TRADING_BOT_STRATEGY=martingale_hedge).
+    # Pesquisa: FAIL em 0/360 células (scripts/backtest_v2/MARTINGALE_RELATORIO.md). Só
+    # testnet; ver docs/MARTINGALE_HEDGE.md. O stop de portfólio é obrigatório: a env
+    # é limitada a [5%, 25%] no __post_init__.
+    MARTINGALE_PAIRS: List[str] = None  # env TRADING_BOT_MARTINGALE_PAIRS, default ADAUSDT
+    MARTINGALE_MAX_PAIRS: int = 3
+    MARTINGALE_STEP_PERCENT: float = _env_float("TRADING_BOT_MARTINGALE_STEP_PERCENT", 1.5)
+    MARTINGALE_MULTIPLIER: float = _env_float("TRADING_BOT_MARTINGALE_MULTIPLIER", 2.0)
+    MARTINGALE_TP_PERCENT: float = _env_float("TRADING_BOT_MARTINGALE_TP_PERCENT", 1.0)
+    MARTINGALE_MAX_LEVELS: int = _env_int("TRADING_BOT_MARTINGALE_MAX_LEVELS", 7)
+    MARTINGALE_PORTFOLIO_STOP_PERCENT: float = _env_float("TRADING_BOT_MARTINGALE_PORTFOLIO_STOP_PERCENT", 20.0)
+    MARTINGALE_LEVERAGE: int = _env_int("TRADING_BOT_MARTINGALE_LEVERAGE", 10)
     MIN_VOLATILITY_PERCENT: float = 1.5       # Volatilidade mínima 1.5%
     MAX_MIN_NOTIONAL: float = 10.0            # Mínimo notional máximo $10 (exclui BTC $100, ETH $20)
     # RVOL = volume da última hora fechada ÷ média horária recente. Piso baixo
@@ -1086,6 +1098,13 @@ class TradingConfig:
             self.DONCHIAN_UNIVERSE_CORE = self.normalize_pair_list(
                 [p.strip() for p in _raw_core.split(",") if p.strip()]
             ) if _raw_core else []
+
+        if self.MARTINGALE_PAIRS is None:
+            _raw_mg = os.getenv("TRADING_BOT_MARTINGALE_PAIRS", "ADAUSDT").strip()
+            self.MARTINGALE_PAIRS = self.normalize_pair_list(
+                [p.strip() for p in _raw_mg.split(",") if p.strip()]
+            )[: self.MARTINGALE_MAX_PAIRS] if _raw_mg else []
+        self.MARTINGALE_PORTFOLIO_STOP_PERCENT = min(25.0, max(5.0, float(self.MARTINGALE_PORTFOLIO_STOP_PERCENT)))
 
         # Pares desabilitados por padrão (safety). Ver bot.py: disabled_pairs é
         # UNIÃO config ∪ state, então este default não é desfeito por state antigo.

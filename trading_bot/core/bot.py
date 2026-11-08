@@ -39,6 +39,7 @@ from .trade_ledger import TradeLedger
 from .trade_store import trading_day, trading_day_start
 from .trade_store import TradeStore
 from .donchian import STRATEGY_TYPE as DONCHIAN, DonchianRunner
+from .martingale import STRATEGY_TYPE as MARTINGALE, MartingaleRunner
 from ..ai.consultive_engine import ConsultiveEngine
 from ..observability.log_redaction import install_on_root_handlers
 from ..execution import ExecutionEngine
@@ -297,6 +298,10 @@ class TradingBot:
         # TRADING_BOT_STRATEGY=donchian_4h: runner do forward test; None = pullback.
         self.donchian: Optional[DonchianRunner] = (
             DonchianRunner(self) if config.STRATEGY == DONCHIAN else None
+        )
+        # TRADING_BOT_STRATEGY=martingale_hedge: martingale/DCA hedge (docs/MARTINGALE_HEDGE.md).
+        self.martingale: Optional[MartingaleRunner] = (
+            MartingaleRunner(self) if config.STRATEGY == MARTINGALE else None
         )
         self.positions = {}
         self.trade_history = []
@@ -789,6 +794,8 @@ class TradingBot:
             # Só o pico salvo SOB Donchian (o do pullback não entra no forward test).
             if getattr(self, 'donchian', None) is not None and state.get('donchian_peak_equity'):
                 self.peak_equity = float(state['donchian_peak_equity'])
+            if getattr(self, 'martingale', None) is not None and state.get('martingale_peak_equity'):
+                self.martingale.peak = float(state['martingale_peak_equity'])
             saved_max_drawdown = state.get('max_drawdown_from_peak_percent')
             if saved_max_drawdown is not None:
                 try:
@@ -2153,8 +2160,8 @@ class TradingBot:
         logger.info(f"   • Por trade: {config.MAX_POSITION_PERCENT * 100:.0f}% = ${trade_value:.2f} (ou mínimo da moeda)")
         logger.info(f"   • Alavancagem: {config.LEVERAGE}x")
 
-        # Donchian tem universo próprio (DonchianRunner.refresh_universe): sem scoring.
-        selects_pairs = self.donchian is None
+        # Donchian/martingale têm universo próprio: sem scoring.
+        selects_pairs = self.strategy_runner is None
         if selects_pairs and (config.USE_BINANCE_STRATEGY or config.AUTO_SELECT_PAIRS):
             self._refresh_binance_coin_universe(trigger_reason="setup")
         
@@ -2435,7 +2442,7 @@ class TradingBot:
             return True
         
         # Donchian: fechar tudo no lucro cortaria a cauda direita (fora do pré-registro).
-        if getattr(self, "donchian", None) is None and self.daily_realized_pnl >= config.DAILY_PROFIT_TARGET:
+        if getattr(self, "strategy_runner", None) is None and self.daily_realized_pnl >= config.DAILY_PROFIT_TARGET:
             self.daily_target_reached = True
             logger.info(f"🎯 META DE LUCRO ATINGIDA! P&L: ${self.daily_realized_pnl:.2f}")
             
@@ -4124,8 +4131,8 @@ class TradingBot:
             self._track_excursion(position_key, side, current_price)
             # Donchian: stop na exchange + saída no canal (DonchianRunner) + trailing
             # por R a cada tick. Sem TP, trailing % nem SL local aqui.
-            if known_meta.get('strategy_type') == DONCHIAN:
-                if self.donchian is not None:
+            if known_meta.get('strategy_type') in (DONCHIAN, MARTINGALE):
+                if known_meta.get('strategy_type') == DONCHIAN and self.donchian is not None:
                     self.donchian.trail_tick(pos, known_meta)
                 continue
             custom_take_profit = known_meta.get('custom_take_profit')
@@ -4655,6 +4662,11 @@ class TradingBot:
     def _close_position_with_notification(self, pos: dict, reason: str) -> bool:
         """Delegador — lógica real em ExecutionEngine (preserva API interna)."""
         return self.execution_engine.close_position_with_notification(pos, reason)
+
+    @property
+    def strategy_runner(self):
+        """Runner que substitui o pullback (Donchian ou martingale); None = pullback."""
+        return self.donchian or self.martingale
 
     def close_position(self, pos: dict, reason: str) -> bool:
         """Fecha a mercado, registra no TradeStore/Telegram, tira do rastreamento e
@@ -5582,6 +5594,8 @@ class TradingBot:
         analysis_cycle = 0  # contador exibido no log ao iniciar cada ciclo de análise
         if self.donchian is not None:
             self.donchian.start()
+        elif self.martingale is not None:
+            self.martingale.start()
         else:
             logger.info("🧭 Estratégia: pullback (3m/5m + IA + trailing)")
 
@@ -5740,6 +5754,11 @@ class TradingBot:
                             self.donchian.tick()
                         except Exception:
                             logger.exception("⚠️ Donchian tick falhou")
+                    if self.martingale is not None:
+                        try:
+                            self.martingale.tick()
+                        except Exception:
+                            logger.exception("⚠️ Martingale tick falhou")
 
                     # Snapshot de métricas Prometheus (gauges read-only)
                     metrics.update_bot_state(self)
@@ -5759,7 +5778,7 @@ class TradingBot:
                         pass
 
                     # Donchian: a parada pré-registrada é o drawdown de 20% (kill switch).
-                    if self.donchian is None and self.check_global_stop_loss():
+                    if self.strategy_runner is None and self.check_global_stop_loss():
                         self.execute_global_stop_loss()
                         break
 
@@ -5782,7 +5801,7 @@ class TradingBot:
                         self.update_commission_rates()
                         self._loop_scheduler.mark_ran("commission_update", now)
 
-                    if self.donchian is None and now >= self.next_pair_update_time:
+                    if self.strategy_runner is None and now >= self.next_pair_update_time:
                         if config.USE_BINANCE_STRATEGY:
                             self.update_binance_strategy_coins()
                         else:
@@ -5794,7 +5813,7 @@ class TradingBot:
                         self._loop_scheduler.mark_ran("deposit_check", now)
 
                     if (
-                        self.donchian is None
+                        self.strategy_runner is None
                         and config.USE_BINANCE_STRATEGY
                         and self._loop_scheduler.due("strategy_check", now)
                     ):
@@ -5814,7 +5833,7 @@ class TradingBot:
                     )
 
                 # CICLO LENTO: ANÁLISE DE ENTRADAS (pullback; Donchian roda no monitor)
-                if self.paused or self.donchian is not None:
+                if self.paused or self.strategy_runner is not None:
                     # Cancela ciclo em andamento quando pausa
                     if analysis_cycle_active:
                         analysis_cycle_active = False

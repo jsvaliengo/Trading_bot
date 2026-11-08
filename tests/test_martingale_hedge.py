@@ -1,0 +1,270 @@
+"""Martingale/DCA hedge (docs/MARTINGALE_HEDGE.md): escada, gatilhos, teto de níveis,
+stop de portfólio, recusa sem hedge mode, pular par abaixo do minNotional e integração."""
+from __future__ import annotations
+
+import threading
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+
+import pytest
+
+from trading_bot.core import martingale as mg
+from trading_bot.core.bot import TradingBot
+from trading_bot.core.config import config
+from trading_bot.services.kill_switch import KillSwitchMonitor
+
+
+# ───────────── matemática da escada ─────────────
+def test_ladder_sum_and_base_notional_match_prereg():
+    assert mg.ladder_sum(2.0, 7) == 127.0
+    # $300 × 10 × 0,5 / (3 pares × 2 × 127) = $1,97 (tabela do relatório, universo 3)
+    assert mg.base_notional(capital=300, leverage=10, n_pairs=3, m=2.0, n=7) == pytest.approx(1.9685, abs=1e-3)
+    assert mg.base_notional(capital=0, leverage=10, n_pairs=3, m=2.0, n=7) == 0.0
+    assert mg.level_notional(2.0, 2.0, 3) == 16.0
+
+
+def test_add_fill_recomputes_average():
+    avg, qty = mg.add_fill(100.0, 1.0, 98.0, 2.0)
+    assert (avg, qty) == (pytest.approx(98.6667, abs=1e-4), 3.0)
+    assert mg.add_fill(100.0, 0.0, 98.0, 0.0) == (100.0, 0.0)
+
+
+@pytest.mark.parametrize("side,trigger,tp", [("LONG", 98.5, 101.0), ("SHORT", 101.5, 99.0)])
+def test_next_trigger_and_tp_are_mirrored(side, trigger, tp):
+    assert mg.next_trigger(100.0, side, 1.5) == pytest.approx(trigger)
+    assert mg.tp_price(100.0, side, 1.0) == pytest.approx(tp)
+    assert mg.add_triggered(trigger, side, trigger) and not mg.add_triggered(100.0, side, trigger)
+    assert mg.tp_hit(tp, side, tp) and not mg.tp_hit(100.0, side, tp)
+
+
+def test_infer_level_from_exchange_notional():
+    assert mg.infer_level(2.0, 2.0, 2.0, 7) == 1          # só a base
+    assert mg.infer_level(14.0, 2.0, 2.0, 7) == 3         # B(1+2+4)
+    assert mg.infer_level(13.0, 2.0, 2.0, 7) == 3         # arredondamento de step
+    assert mg.infer_level(1000.0, 2.0, 2.0, 7) == 7       # acima da escada: teto
+    assert mg.infer_level(5.0, 0.0, 2.0, 7) == 1
+
+
+def test_portfolio_stop_hit_at_20_percent():
+    assert mg.portfolio_stop_hit(80.0, 100.0, 20.0)
+    assert not mg.portfolio_stop_hit(80.01, 100.0, 20.0)
+    assert not mg.portfolio_stop_hit(50.0, 0.0, 20.0)
+
+
+# ───────────── runner com fakes ─────────────
+class _Ex:
+    def __init__(self, price=100.0, hedge=True, balance=300.0, min_notional=5.0):
+        self.price, self.hedge, self.balance, self.min_notional = price, hedge, balance, min_notional
+        self.positions = []
+        self.orders = []
+        self.set_leverage = MagicMock(return_value=True)
+        self.cancel_open_orders = MagicMock(return_value=True)
+
+    def set_hedge_mode(self):
+        return self.hedge
+
+    def get_account_balance(self, force_refresh=False):
+        return self.balance
+
+    def get_open_positions(self, force_refresh=False):
+        return [dict(p) for p in self.positions]
+
+    def get_symbol_info(self, _s):
+        return {"minNotional": self.min_notional, "quantityPrecision": 2, "pricePrecision": 4}
+
+    def get_symbol_ticker(self, _s):
+        return {"price": str(self.price)}
+
+    def place_market_order(self, **kw):
+        self.orders.append(kw)
+        # hedge mode agrega fills da mesma perna: simula a média da exchange
+        for p in self.positions:
+            if p["symbol"] == kw["symbol"] and p["side"] == kw["position_side"]:
+                p["entry_price"], p["quantity"] = mg.add_fill(p["entry_price"], p["quantity"], self.price, kw["quantity"])
+                return {"avgPrice": str(self.price)}
+        self.positions.append({"symbol": kw["symbol"], "side": kw["position_side"], "entry_price": self.price,
+                               "quantity": kw["quantity"], "unrealized_pnl": 0.0, "mark_price": self.price})
+        return {"avgPrice": str(self.price)}
+
+
+def _bot(ex, pairs=("ADAUSDT",)):
+    config.MARTINGALE_PAIRS = list(pairs)
+    bot = TradingBot.__new__(TradingBot)
+    bot._init_runtime_state()
+    bot._positions_lock = threading.Lock()
+    bot.exchange = ex
+    bot.known_positions = {}
+    bot.drawdown_equity = lambda wallet: wallet
+    bot.ledger = SimpleNamespace(record_trade_opened=MagicMock())
+    bot.telegram = SimpleNamespace(send_trade_alert=MagicMock(), send_message=MagicMock())
+    bot.trade_store = None
+    closed = []
+
+    def close(pos, reason):
+        closed.append((pos["symbol"], pos["side"], reason))
+        ex.positions = [p for p in ex.positions if (p["symbol"], p["side"]) != (pos["symbol"], pos["side"])]
+        return True
+
+    bot.close_position = close
+    bot.closed = closed
+    return bot
+
+
+def test_start_sizes_base_and_opens_both_legs_on_first_tick():
+    ex = _Ex(balance=300.0, min_notional=1.0)
+    bot = _bot(ex)
+    r = mg.MartingaleRunner(bot)
+    assert r.start() and r.enabled
+    assert r.base == pytest.approx(300 * 10 * 0.5 / (1 * 2 * 127))     # $5,91 com 1 par
+    ex.set_leverage.assert_called_once_with("ADAUSDT", config.MARTINGALE_LEVERAGE)
+    r.tick()
+    assert [(o["side"], o["position_side"]) for o in ex.orders] == [("BUY", "LONG"), ("SELL", "SHORT")]
+    assert {k: m["strategy_type"] for k, m in bot.known_positions.items()} == {
+        "ADAUSDT_LONG": "martingale_hedge", "ADAUSDT_SHORT": "martingale_hedge"}
+    assert bot.ledger.record_trade_opened.call_count == 2
+    r.tick()                                   # idempotente: posições existem
+    assert len(ex.orders) == 2
+
+
+def test_adds_level_on_step_against_last_fill_and_caps_at_n(monkeypatch):
+    monkeypatch.setattr(config, "MARTINGALE_MAX_LEVELS", 3)
+    ex = _Ex(min_notional=1.0)
+    bot = _bot(ex)
+    r = mg.MartingaleRunner(bot)
+    r.start()
+    r.tick()                                   # base em 100
+    long_leg = r.pairs["ADAUSDT"].legs["LONG"]
+    ex.price = 98.6                            # −1,4%: ainda não
+    r.tick()
+    assert long_leg.level == 1
+    ex.price = 98.5                            # −1,5% do último fill: nível 1
+    r.tick()
+    assert long_leg.level == 2 and long_leg.last_fill == 98.5
+    add = [o for o in ex.orders if o["position_side"] == "LONG"][-1]
+    assert add["side"] == "BUY" and add["quantity"] == pytest.approx(round(r.base * 2 / 98.5, 2))
+    ex.price = 97.0                            # −1,52% de 98,5: nível 2 (último permitido com N=3)
+    r.tick()
+    assert long_leg.level == 3
+    ex.price = 90.0                            # N atingido: espera o TP
+    r.tick()
+    assert long_leg.level == 3 and len([o for o in ex.orders if o["position_side"] == "LONG"]) == 3
+    # só a base vai para o SQLite como abertura (a perna SHORT bateu o TP na queda e reabriu)
+    assert sum(c.kwargs["side"] == "LONG" for c in bot.ledger.record_trade_opened.call_args_list) == 1
+
+
+@pytest.mark.parametrize("side,price", [("LONG", 101.0), ("SHORT", 99.0)])
+def test_tp_closes_leg_at_average_plus_tp_and_reopens_next_tick(side, price):
+    ex = _Ex(min_notional=1.0)
+    bot = _bot(ex)
+    r = mg.MartingaleRunner(bot)
+    r.start()
+    r.tick()
+    ex.price = price
+    r.tick()
+    assert bot.closed == [("ADAUSDT", side, "Martingale TP nível 1")]
+    assert r.pairs["ADAUSDT"].legs[side].level == 0
+    r.tick()                                   # reabre a base da perna fechada
+    assert len(ex.positions) == 2 and len(ex.orders) == 3
+
+
+def test_paused_bot_still_takes_profit_but_opens_nothing():
+    ex = _Ex(min_notional=1.0)
+    bot = _bot(ex)
+    r = mg.MartingaleRunner(bot)
+    r.start()
+    r.tick()
+    bot.paused = True
+    ex.price = 98.5                            # SHORT bate o TP (fecha); LONG não adiciona
+    r.tick()
+    ex.price = 101.0                           # LONG bate o TP
+    r.tick()
+    r.tick()
+    assert [c[1] for c in bot.closed] == ["SHORT", "LONG"]
+    assert len(ex.orders) == 2                 # sem adição nem reabertura
+
+
+def test_portfolio_stop_closes_everything_pauses_and_does_not_restart():
+    ex = _Ex(min_notional=1.0)
+    bot = _bot(ex)
+    r = mg.MartingaleRunner(bot)
+    r.start()
+    r.tick()
+    assert r.peak == 300.0
+    ex.balance = 240.0                         # −20% do pico
+    r.tick()
+    assert sorted(bot.closed) == [("ADAUSDT", "LONG", "Stop de portfólio"), ("ADAUSDT", "SHORT", "Stop de portfólio")]
+    assert bot.paused and r.stops == 1 and ex.positions == []
+    assert "STOP DE PORTFÓLIO" in bot.telegram.send_message.call_args.args[0]
+    r.tick()
+    assert len(ex.orders) == 2                 # pausado: não reabre sozinho
+
+
+def test_portfolio_stop_floor_is_enforced_by_config():
+    assert 5.0 <= config.MARTINGALE_PORTFOLIO_STOP_PERCENT <= 25.0
+
+
+def test_refuses_to_start_without_hedge_mode():
+    ex = _Ex(hedge=False)
+    bot = _bot(ex)
+    r = mg.MartingaleRunner(bot)
+    assert r.start() is False and not r.enabled and bot.paused
+    assert "Hedge mode" in bot.telegram.send_message.call_args.args[0]
+    r.tick()
+    assert ex.orders == []
+
+
+def test_skips_pair_when_base_is_below_min_notional(caplog):
+    ex = _Ex(balance=50.0, min_notional=5.0)   # B = 50×10×0,5/(2×127) ≈ $0,98
+    bot = _bot(ex)
+    r = mg.MartingaleRunner(bot)
+    assert r.start() is False and bot.paused
+    assert "minNotional" in caplog.text and "nenhum par cabe" in caplog.text
+
+
+def test_restart_recovers_leg_level_from_exchange_notional():
+    ex = _Ex(min_notional=1.0)
+    bot = _bot(ex)
+    r = mg.MartingaleRunner(bot)
+    r.start()
+    # médias longe do TP (LONG 101 → TP 102,01; SHORT 99 → TP 98,01) para só medir a recuperação
+    ex.positions = [{"symbol": "ADAUSDT", "side": "LONG", "entry_price": 101.0, "quantity": round(r.base * 3 / 101, 2)},
+                    {"symbol": "ADAUSDT", "side": "SHORT", "entry_price": 99.0, "quantity": round(r.base / 99, 2)}]
+    r.tick()
+    assert r.pairs["ADAUSDT"].legs["LONG"].level == 2 and r.pairs["ADAUSDT"].legs["SHORT"].level == 1
+    assert ex.orders == []
+
+
+# ───────────── integração no bot ─────────────
+def test_bot_builds_runner_only_for_martingale_strategy(monkeypatch):
+    for strategy, has in (("pullback", False), ("donchian_4h", False), ("martingale_hedge", True)):
+        monkeypatch.setattr(config, "STRATEGY", strategy)
+        bot = _bot(_Ex())
+        assert isinstance(bot.martingale, mg.MartingaleRunner) is has
+        assert (bot.strategy_runner is not None) is (strategy != "pullback")
+
+
+def test_monitor_never_applies_tp_or_trailing_to_martingale_positions(monkeypatch):
+    monkeypatch.setattr(config, "STRATEGY", "martingale_hedge")
+    monkeypatch.setattr(config, "USE_TRAILING_STOP", True)
+    monkeypatch.setattr(config, "TAKE_PROFIT_PERCENT", 1.5)
+    bot = TradingBot.__new__(TradingBot)
+    bot._init_runtime_state()
+    bot._positions_lock = threading.Lock()
+    pos = {"symbol": "ADAUSDT", "side": "LONG", "entry_price": 100.0, "quantity": 1.0,
+           "unrealized_pnl": 10.0, "mark_price": 110.0}
+    bot.exchange = SimpleNamespace(get_open_positions=lambda *a, **kw: [dict(pos)])
+    bot._close_position_with_notification = MagicMock(return_value=True)
+    bot._process_binance_closed_position = MagicMock()
+    bot.telegram = SimpleNamespace(send_message=MagicMock(), send_trade_alert=MagicMock())
+    bot.known_positions = {"ADAUSDT_LONG": {**pos, "strategy_name": "martingale_hedge",
+                                            "strategy_type": "martingale_hedge"}}
+    bot.monitor_positions()
+    bot._close_position_with_notification.assert_not_called()
+
+
+def test_kill_switch_is_off_under_martingale(monkeypatch):
+    monkeypatch.setattr(config, "STRATEGY", "martingale_hedge")
+    ks = KillSwitchMonitor(config_obj=config, telegram=SimpleNamespace(send_message=MagicMock()))
+    ks._check_loss_streak = ks._check_drawdown_alert = ks._check_win_rate_floor = MagicMock()
+    ks.check_all(bot=SimpleNamespace(paused=False))
+    assert not ks._check_loss_streak.called and not ks._check_drawdown_alert.called
