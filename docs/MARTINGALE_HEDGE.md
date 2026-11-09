@@ -65,6 +65,30 @@ Com o bot **pausado** (manual ou pelo stop): TPs ainda fecham pernas; nada abre 
 | `DOUBLE_FIRST` | false | CoinTech2u "Double First Order": só a 1ª ordem vale 2B (2B, 2B, 4B, 8B, …) |
 | `STOP_LOSS_USDT` | 0 (off) | > 0 prevalece sobre o %: fecha tudo quando equity ≤ pico − valor; **sem clamp** (log de aviso se > 25% da banca) |
 
+## Score dinâmico dos pares — regras
+
+Classificação por regras (sem IA) das 36 moedas da planilha (verdes ∪ vermelhas), mostrada no card
+"Planilha CoinTech2u" do dashboard (`martingale.sheet.scores` em `/api/live`). **Só leitura**: não troca
+par, não pausa nada. Klines da fonte de sinal (mainnet), candles fechados, recalculado em thread de fundo
+a cada `TRADING_BOT_MARTINGALE_SCORE_REFRESH_MINUTES` (720). Falha de rede mantém o último resultado;
+sem resultado anterior a moeda fica cinza (`unknown`). Código: `services/martingale_pair_score.py`.
+
+| critério | como | verde | vermelho | env `TRADING_BOT_MARTINGALE_SCORE_*` |
+|---|---|---|---|---|
+| `vol_pct` | média de (high−low)/close dos últimos 14 candles diários, em % | < 5,0 | > 8,0 | `VOL_GREEN`, `VOL_RED` |
+| `adx` | ADX(14) no 4h, último valor | < 25 | > 35 | `ADX_GREEN`, `ADX_RED` |
+| `max_move_pct` | maior variação close-to-close numa só direção (pico-a-vale) nos últimos 30 dias | < alcance da escada (`STEP_PERCENT × MAX_LEVELS`; `MOVE_GREEN` > 0 fixa outro valor) | > 20 | `MOVE_GREEN`, `MOVE_RED` |
+| `volume_usd` | média do quoteVolume diário 14d | — | < 40M | `MIN_VOLUME_USD` |
+
+Cor final: **vermelho** se qualquer critério vermelho; **verde** se todos verdes; senão **amarelo**. `reasons`
+lista em pt-BR os critérios fora do verde (ex.: `vol 5,2% (>4,0%)`). As vermelhas fixas da planilha (NOT,
+1000PEPE, SNX, SUI, 1000SHIB, DOGE, APE, SOL) também são avaliadas, com o marcador "planilha: evitar".
+Par ativo vermelho gera um aviso em linha no card.
+
+Limiares calibrados em 09/11/26 contra a mainnet: com vol 4/7 só BNB saía verde; 5/8 porque a faixa diária
+normal de alts é 4–6 % (≈3 degraus de 1,5 %/dia, o que o martingale quer). No mês da queda (ADA −30 % em
+30 d) 34/36 ficaram vermelhas por `adx`/`max_move_pct` — leitura correta, não defeito do score.
+
 ## O que fica desligado sob esta estratégia
 
 TP/SL/trailing por ordem, IA, kill switches (sequência negativa, win rate, drawdown do pullback), meta de

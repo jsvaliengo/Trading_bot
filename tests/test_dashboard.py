@@ -687,6 +687,32 @@ def test_collect_martingale_sheet_row_for_equity(equity, expected):
     assert "ADA" in sheet["green"] and "AVAX" in sheet["green"] and "DOGE" in sheet["red"]
 
 
+def test_api_live_exposes_sheet_scores_from_cache(monkeypatch):
+    from trading_bot.web.app import create_app
+
+    score = {"color": "red", "vol_pct": 5.2, "adx": 38.0, "max_move_pct": 9.0, "volume_usd": 90e6,
+             "reasons": ["adx 38 (>35)"], "updated_at": "2026-11-09T12:00:00+00:00"}
+    monkeypatch.setattr(dashboard_data, "_score_cache",
+                        SimpleNamespace(get=lambda: {"scores": {"ADAUSDT": score}, "updated_at": "2026-11-09T12:00:00+00:00"}))
+    bot = _make_bot()
+    bot.martingale = SimpleNamespace(ladder=lambda positions, eq: {"legs": [], "pairs": {"ADAUSDT": {}}})
+    app, _ = create_app(bot)
+    sheet = app.test_client().get("/api/live", headers=_basic_auth("admin", "secret")).get_json()["martingale"]["sheet"]
+    assert sheet["scores"] == {"ADAUSDT": score} and sheet["scores_updated_at"] == "2026-11-09T12:00:00+00:00"
+    assert "ADA" in sheet["green"]
+
+
+def test_pair_scores_builds_cache_once_from_bot_exchange(monkeypatch):
+    monkeypatch.setattr(dashboard_data, "_score_cache", None)
+    bot = _make_bot()
+    bot.exchange = SimpleNamespace()  # sem get_klines_raw: nenhuma thread, scores vazios
+    assert dashboard_data._pair_scores(bot) == {"scores": {}, "updated_at": None}
+    cache = dashboard_data._score_cache
+    assert len(cache.symbols) == 36 and "1000PEPEUSDT" in cache.symbols and cache.symbols[0] == "ADAUSDT"
+    dashboard_data._pair_scores(bot)
+    assert dashboard_data._score_cache is cache
+
+
 def test_index_has_cointech2u_sheet_card_and_hidden_cards():
     from trading_bot.web.app import create_app
     app, _ = create_app(_make_bot())
