@@ -593,3 +593,50 @@ def test_pnl_report_days_preset_anchors_on_bot_trading_day(_brt):
     out = build_report(_pnl_bot(), None, None, days="30")
     assert out["to"] == out["today"] and out["from"] == (__import__("datetime").date.fromisoformat(out["today"]) - __import__("datetime").timedelta(days=29)).isoformat()
     assert build_report(_pnl_bot(), None, None, days="lixo")["from"] == (__import__("datetime").date.fromisoformat(out["today"]) - __import__("datetime").timedelta(days=6)).isoformat()
+
+
+# ---------- cotação USD/BRL (trading_bot/web/fx.py) ----------
+
+
+def _fx_response(bid="5.508", ts="1794234043"):
+    return SimpleNamespace(json=lambda: {"USDBRL": {"bid": bid, "timestamp": ts}})
+
+
+def test_fx_fetches_and_caches(monkeypatch):
+    from trading_bot.web import fx
+
+    calls = []
+    monkeypatch.setattr(fx.requests, "get", lambda url, timeout: calls.append(timeout) or _fx_response())
+    out = fx.usd_brl()
+    assert out == {"usd_brl": 5.508, "source": "awesomeapi", "fetched_at": "2026-11-09T14:20:43+00:00"}
+    assert fx.usd_brl() is out and calls == [fx.TIMEOUT]  # 2ª chamada dentro do TTL não vai à rede
+
+
+def test_fx_failure_returns_none_then_last_known(monkeypatch):
+    from trading_bot.web import fx
+
+    assert fx.usd_brl()["usd_brl"] is None  # conftest: HTTP falha e nada em cache
+    monkeypatch.setitem(fx._cache, "next_at", 0.0)
+    monkeypatch.setattr(fx.requests, "get", lambda url, timeout: _fx_response("5.6"))
+    assert fx.usd_brl()["usd_brl"] == 5.6
+    monkeypatch.setitem(fx._cache, "next_at", 0.0)
+
+    def boom(url, timeout):
+        raise TimeoutError("lento")
+
+    monkeypatch.setattr(fx.requests, "get", boom)
+    assert fx.usd_brl()["usd_brl"] == 5.6  # falha mantém o último valor conhecido
+
+
+def test_live_and_pnl_report_expose_fx(_brt, monkeypatch):
+    from trading_bot.web import fx
+    from trading_bot.web.app import create_app
+
+    monkeypatch.setattr(fx.requests, "get", lambda url, timeout: _fx_response("5.5"))
+    bot = _make_bot()
+    bot.trade_store = _pnl_bot().trade_store
+    app, _ = create_app(bot)
+    client = app.test_client()
+    for path in ("/api/live", "/api/pnl_report"):
+        body = client.get(path, headers=_basic_auth("admin", "secret")).get_json()
+        assert body["fx"]["usd_brl"] == 5.5 and body["fx"]["fetched_at"], path

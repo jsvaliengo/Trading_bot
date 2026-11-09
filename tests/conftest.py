@@ -26,3 +26,17 @@ def _process_tz_utc():
     set_process_tz("UTC")
     yield
     set_process_tz(old)
+
+
+@pytest.fixture(autouse=True)
+def _fx_offline(monkeypatch):
+    """Cotação USD/BRL do dashboard nunca sai pra rede nos testes: HTTP falha e o
+    cache começa vazio (testes de câmbio mockam requests.get por cima)."""
+    from trading_bot.web import fx
+
+    def offline(*a, **k):
+        raise ConnectionError("offline nos testes")
+
+    monkeypatch.setattr(fx.requests, "get", offline)
+    monkeypatch.setitem(fx._cache, "next_at", 0.0)
+    monkeypatch.setitem(fx._cache, "data", {"usd_brl": None, "source": "awesomeapi", "fetched_at": None})
