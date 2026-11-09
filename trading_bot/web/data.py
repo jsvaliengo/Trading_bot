@@ -21,6 +21,7 @@ from ..core.donchian import r_multiple_now
 from ..core.equity import effective_equity, simulated_balance
 from ..core.trade_store import trading_day_start
 from . import forward_test as ft
+from .fx import usd_brl
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -64,6 +65,7 @@ def collect_live(bot) -> Dict[str, Any]:
         "server_time": datetime.utcnow().isoformat() + "Z",
         # fuso em que o dashboard mostra horários (o mesmo do dia de trading)
         "tz_offset_hours": float(getattr(config, "DAILY_PNL_TZ_OFFSET_HOURS", 0.0) or 0.0),
+        "fx": usd_brl(),
     }
 
 

@@ -17,6 +17,7 @@ from ..core.config import config
 from ..core.equity import simulated_balance
 from ..core.trade_store import trading_day
 from .forward_test import parse_utc
+from .fx import usd_brl
 
 REFERENCE_SYMBOLS = ("BTCUSDT", "BNBUSDT")
 INCOME_TYPES = ("REALIZED_PNL", "COMMISSION", "FUNDING_FEE", "TRANSFER")
@@ -118,6 +119,7 @@ def build_report(bot, day_from: Optional[str], day_to: Optional[str], days: Any 
         "income": income, "income_totals": income_totals, "income_ok": income_ok,
         "reference": _reference(exchange, day_from, day_to),
         "assets": _assets(exchange),
+        "fx": usd_brl(),
     }
 
 
