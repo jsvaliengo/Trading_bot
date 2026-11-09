@@ -94,6 +94,11 @@
     const baseTooltip = (p) => ({ backgroundColor: p.el, titleColor: p.dim, bodyColor: cssv('--text'), borderColor: cssv('--border-strong'), borderWidth: 1, padding: 8, displayColors: false, titleFont: { family: 'IBM Plex Sans', size: 11 }, bodyFont: { family: 'IBM Plex Mono', size: 11 } });
     // canvas dentro de <details> fechado nasce com 0px: ao abrir, o Chart.js precisa remedir
     $$('details').forEach(d => d.addEventListener('toggle', () => { if (d.open) Object.values(charts).forEach(c => c.resize()); }));
+    // aberto/fechado de cada card recolhível sobrevive ao reload (padrão: como está no HTML)
+    $$('details.card[id]').forEach(d => {
+        try { const v = localStorage.getItem('tradingbot-open:' + d.id); if (v !== null) d.open = v === '1'; } catch (e) { /* storage bloqueado */ }
+        d.addEventListener('toggle', () => { try { localStorage.setItem('tradingbot-open:' + d.id, d.open ? '1' : '0'); } catch (e) { /* idem */ } });
+    });
 
     // ───────── Topo + status ─────────
     const BAR_MS = 4 * 3600e3;
