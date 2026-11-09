@@ -1,0 +1,15 @@
+# Caddyfile FINAL do dashboard (acesso público ligado).
+# Instalado em /etc/caddy/Caddyfile pelo scripts/caddy/enable_public.sh.
+# Só use depois que a tela de login (PR #256) estiver deployada na VM.
+trader.adityve.com.br {
+	encode zstd gzip
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy no-referrer
+		-Server
+	}
+	# Socket.IO (websocket) passa pelo reverse_proxy padrão.
+	reverse_proxy 127.0.0.1:8080
+}
