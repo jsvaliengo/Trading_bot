@@ -17,6 +17,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+import requests
 
 from trading_bot.core.config import config as global_config
 from trading_bot.web import data as dashboard_data
@@ -598,8 +599,33 @@ def test_pnl_report_days_preset_anchors_on_bot_trading_day(_brt):
 # ---------- cotação USD/BRL (trading_bot/web/fx.py) ----------
 
 
-def _fx_response(bid="5.508", ts="1794234043"):
-    return SimpleNamespace(json=lambda: {"USDBRL": {"bid": bid, "timestamp": ts}})
+def _fx_response(bid="5.508", ts="1794234043", status=200):
+    """Resposta da 1ª fonte (er-api); status != 200 levanta em raise_for_status como o requests."""
+    body = {"rates": {"BRL": bid}, "time_last_update_unix": ts} if status == 200 else {"status": status, "code": "QuotaExceeded"}
+    return _resp(body, status)
+
+
+def _resp(body, status=200):
+    def raise_for_status():
+        if status != 200:
+            raise requests.HTTPError(f"{status} Error")
+
+    return SimpleNamespace(status_code=status, json=lambda: body, raise_for_status=raise_for_status)
+
+
+def _mock_get(monkeypatch, by_url, calls=None):
+    """requests.get que responde por URL (valor pode ser Exception) e registra (url, timeout)."""
+    from trading_bot.web import fx
+
+    def get(url, timeout):
+        if calls is not None:
+            calls.append((url, timeout))
+        out = by_url[url]
+        if isinstance(out, Exception):
+            raise out
+        return out
+
+    monkeypatch.setattr(fx.requests, "get", get)
 
 
 def test_fx_fetches_and_caches(monkeypatch):
@@ -608,8 +634,27 @@ def test_fx_fetches_and_caches(monkeypatch):
     calls = []
     monkeypatch.setattr(fx.requests, "get", lambda url, timeout: calls.append(timeout) or _fx_response())
     out = fx.usd_brl()
-    assert out == {"usd_brl": 5.508, "source": "awesomeapi", "fetched_at": "2026-11-09T14:20:43+00:00"}
+    assert out == {"usd_brl": 5.508, "source": "er-api", "fetched_at": "2026-11-09T14:20:43+00:00"}
     assert fx.usd_brl() is out and calls == [fx.TIMEOUT]  # 2ª chamada dentro do TTL não vai à rede
+
+
+def test_fx_sources_fallback_in_order(monkeypatch):
+    """1ª fonte 429 (caso real da VM: awesomeapi QuotaExceeded) → usa a 2ª e guarda source."""
+    from trading_bot.web import fx
+
+    er, fr, aw = (u for _, u, _ in fx.SOURCES)
+    calls = []
+    _mock_get(monkeypatch, {er: _fx_response(status=429), fr: _resp({"rates": {"BRL": 5.5167}, "date": "2026-11-09"})}, calls)
+    assert fx.usd_brl() == {"usd_brl": 5.5167, "source": "frankfurter", "fetched_at": "2026-11-09"}
+    assert [u for u, _ in calls] == [er, fr] and all(t == fx.TIMEOUT for _, t in calls)
+
+    monkeypatch.setitem(fx._cache, "next_at", 0.0)
+    _mock_get(monkeypatch, {er: _resp({"rates": {"BRL": 5.5046}, "time_last_update_unix": 1794182551})})
+    assert fx.usd_brl() == {"usd_brl": 5.5046, "source": "er-api", "fetched_at": "2026-11-09T00:02:31+00:00"}  # 1ª OK: não chama as outras
+
+    monkeypatch.setitem(fx._cache, "next_at", 0.0)  # chave ausente (JSON de erro) e exceção também pulam pra próxima
+    _mock_get(monkeypatch, {er: _resp({"result": "error"}), fr: TimeoutError("lento"), aw: _resp({"USDBRL": {"bid": "5.6", "timestamp": "1794234043"}})})
+    assert fx.usd_brl() == {"usd_brl": 5.6, "source": "awesomeapi", "fetched_at": "2026-11-09T14:20:43+00:00"}
 
 
 def test_fx_failure_returns_none_then_last_known(monkeypatch):
@@ -621,11 +666,11 @@ def test_fx_failure_returns_none_then_last_known(monkeypatch):
     assert fx.usd_brl()["usd_brl"] == 5.6
     monkeypatch.setitem(fx._cache, "next_at", 0.0)
 
-    def boom(url, timeout):
-        raise TimeoutError("lento")
-
-    monkeypatch.setattr(fx.requests, "get", boom)
-    assert fx.usd_brl()["usd_brl"] == 5.6  # falha mantém o último valor conhecido
+    calls = []
+    monkeypatch.setattr(fx.requests, "get", lambda url, timeout: calls.append(url) or _fx_response(status=429))
+    assert fx.usd_brl()["usd_brl"] == 5.6  # todas falham: mantém o último valor conhecido
+    assert calls == [u for _, u, _ in fx.SOURCES]  # tentou as 3 fontes, em ordem
+    assert fx.usd_brl()["usd_brl"] == 5.6 and len(calls) == 3  # retry negativo: 60s sem ir à rede
 
 
 def test_live_and_pnl_report_expose_fx(_brt, monkeypatch):
