@@ -19,6 +19,8 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from ..execution.engine import _fill_price, _round_qty_for_min_notional
+from ..services.martingale_pair_score import (COINTECH2U_GREEN, COINTECH2U_RED, COINTECH2U_SHEET, PairScoreCache,
+                                              rank_pairs, sheet_row_index)
 from .config import config
 
 if TYPE_CHECKING:
@@ -134,6 +136,7 @@ class PairPlan:
     symbol: str
     info: Dict[str, Any]
     legs: Dict[str, Leg] = field(default_factory=dict)
+    since: float = 0.0        # epoch em que ocupou a vaga (cooldown de troca); 0 = par inicial
 
 
 # ───────────────────────── runner ao vivo ─────────────────────────
@@ -150,6 +153,8 @@ class MartingaleRunner:
         self.peak: float = 0.0
         self.pairs: Dict[str, PairPlan] = {}
         self.saved_legs: Dict[str, Dict[str, Dict[str, Any]]] = {}   # do bot_state, aplicado em start()
+        self.saved_pairs: List[str] = []                              # idem: conjunto atual de pares
+        self.score_cache: Optional[PairScoreCache] = None             # dono do score (dashboard lê daqui)
         self.stops = 0
 
     def snapshot(self) -> Dict[str, Any]:
@@ -158,7 +163,7 @@ class MartingaleRunner:
             "enabled": self.enabled, "base_notional": self.base, "capital": self.capital,
             "peak_equity": self.peak, "portfolio_stops": self.stops,
             "pairs": {s: {side: {k: getattr(leg, k) for k in LEG_STATE} for side, leg in p.legs.items()}
-                      for s, p in self.pairs.items()},
+                      for s, p in list(self.pairs.items())},   # list(): o dashboard lê noutra thread
             "params": {
                 "step_percent": c.MARTINGALE_STEP_PERCENT, "multiplier": c.MARTINGALE_MULTIPLIER,
                 "tp_percent": c.MARTINGALE_TP_PERCENT, "max_levels": c.MARTINGALE_MAX_LEVELS,
@@ -179,7 +184,7 @@ class MartingaleRunner:
         out["portfolio_stop_room_pct"] = (equity - stop_eq) / equity * 100.0 if equity else None
         by_key = {f"{p.get('symbol')}_{p.get('side')}": p for p in positions}
         legs = []
-        for sym, plan in self.pairs.items():
+        for sym, plan in list(self.pairs.items()):
             for side in SIDES:
                 leg, pos = plan.legs[side], by_key.get(f"{sym}_{side}")
                 row: Dict[str, Any] = {"symbol": sym, "side": side, "level": leg.level, "max_levels": c.MARTINGALE_MAX_LEVELS,
@@ -222,7 +227,8 @@ class MartingaleRunner:
         self.capital = float(ex.get_account_balance())
         if self.peak <= 0:
             self.peak = float(self.bot.drawdown_equity(self.capital))
-        symbols = list(c.MARTINGALE_PAIRS or [])
+        # state > env: o conjunto escolhido pelo ranking sobrevive ao restart; AUTO_PAIRS=false prende a env
+        symbols = list(self.saved_pairs) if c.MARTINGALE_AUTO_PAIRS and self.saved_pairs else list(c.MARTINGALE_PAIRS or [])
         fixed = c.MARTINGALE_FIRST_ORDER_USDT > 0
         if fixed:
             self.base = fixed_base_notional(c.MARTINGALE_FIRST_ORDER_USDT, c.MARTINGALE_LEVERAGE,
@@ -251,18 +257,25 @@ class MartingaleRunner:
                 logger.warning(f"⏭️ Martingale: {sym} pulado — ordem base ${self.base:.2f} < minNotional "
                                f"${min_notional:.2f} (capital ${self.capital:.2f})")
                 continue
-            ex.set_leverage(sym, c.MARTINGALE_LEVERAGE)
-            saved = self.saved_legs.get(sym) or {}
-            self.pairs[sym] = PairPlan(sym, info, {
-                side: Leg(sym, side, **{k: v for k, v in (saved.get(side) or {}).items() if k in LEG_STATE})
-                for side in SIDES})
+            self._add_pair(sym, info, since=0.0)
         if not self.pairs:
             self._refuse(f"nenhum par cabe na ordem base ${self.base:.2f} com capital ${self.capital:.2f}")
             return False
+        if c.MARTINGALE_AUTO_PAIRS:
+            self.score_cache = PairScoreCache(ex, [b + "USDT" for b in COINTECH2U_GREEN + COINTECH2U_RED],
+                                              c.MARTINGALE_SCORE_REFRESH_MINUTES)
         self.enabled = True
         logger.info(f"🎰 Martingale: capital ${self.capital:.2f}, ordem base ${self.base:.2f}, "
                     f"pares {list(self.pairs)}, pico ${self.peak:.2f}")
         return True
+
+    def _add_pair(self, sym: str, info: Dict[str, Any], *, since: float) -> None:
+        """Alavancagem + plano das duas pernas (hedge mode já é da conta, setado em start())."""
+        self.bot.exchange.set_leverage(sym, config.MARTINGALE_LEVERAGE)
+        saved = self.saved_legs.get(sym) or {}
+        self.pairs[sym] = PairPlan(sym, info, {
+            side: Leg(sym, side, **{k: v for k, v in (saved.get(side) or {}).items() if k in LEG_STATE})
+            for side in SIDES}, since=since)
 
     def _refuse(self, why: str) -> None:
         self.enabled = False
@@ -286,7 +299,9 @@ class MartingaleRunner:
             self._portfolio_stop(positions, equity)
             return
         by_key = {f"{p['symbol']}_{p['side']}": p for p in positions}
-        for sym, plan in self.pairs.items():
+        if c.MARTINGALE_AUTO_PAIRS and not bot.paused:
+            self._rebalance(by_key, equity)   # antes do loop: a base do par novo abre neste tick
+        for sym, plan in list(self.pairs.items()):
             try:
                 price = float(ex.get_symbol_ticker(sym).get("price") or 0)
             except Exception as exc:
@@ -321,6 +336,62 @@ class MartingaleRunner:
                 and time.time() - leg.last_add_ts >= c.MARTINGALE_MIN_ADD_INTERVAL_SECONDS
                 and add_triggered(price, leg.side, next_trigger(leg.last_fill, leg.side, c.MARTINGALE_STEP_PERCENT))):
             self._open(plan, leg, price, k=leg.level)
+
+    # ---- seleção automática de pares (docs/MARTINGALE_HEDGE.md, "Seleção automática") ----
+    def _rebalance(self, by_key: Dict[str, Dict[str, Any]], equity: float) -> None:
+        """Só pares com AMBAS as pernas zeradas mudam: vermelho → melhor candidato verde/amarelo;
+        nº de vagas = moedas da faixa da planilha. Sem score, nada muda."""
+        c = config
+        scores = self.score_cache.get()["scores"] if self.score_cache else {}
+        if not scores:
+            return
+        row = sheet_row_index(equity)
+        slots = COINTECH2U_SHEET[row][8] if row is not None else len(self.pairs)
+        busy = {k.rsplit("_", 1)[0] for k in by_key}                      # símbolo com posição na exchange
+        order = rank_pairs({b + "USDT": scores.get(b + "USDT", {"color": "unknown"}) for b in COINTECH2U_GREEN})
+        pos = {s: i for i, s in enumerate(order)}
+        color = lambda s: scores.get(s, {}).get("color", "unknown")  # noqa: E731
+        candidates = (s for s in order if color(s) in ("green", "yellow") and s not in self.pairs and s not in busy)
+        now = time.time()
+        # zerada = exchange sem posição E perna local já resetada (leitura vazia transitória não troca par)
+        flat = sorted((s for s, p in self.pairs.items() if s not in busy and all(leg.level == 0 for leg in p.legs.values())),
+                      key=lambda s: -pos.get(s, len(order)))  # pior 1º
+        for sym in flat:
+            if len(self.pairs) <= slots:
+                break
+            del self.pairs[sym]
+            self._announce(f"soltando vaga de {sym} (faixa da planilha pede {slots} moeda(s))")
+        for sym in flat:
+            if sym not in self.pairs or color(sym) != "red" or now - self.pairs[sym].since < c.MARTINGALE_PAIR_SWAP_COOLDOWN_MINUTES * 60:
+                continue
+            new = self._take(candidates, now)
+            if new is None:
+                break
+            del self.pairs[sym]
+            self._announce(f"trocando slot {sym} → {new} ({sym[:-4]} vermelho: {'; '.join(scores[sym].get('reasons') or [])}; "
+                           f"{new[:-4]} {'verde' if color(new) == 'green' else 'amarelo'}, {pos[new] + 1}º no ranking)")
+        while len(self.pairs) < slots:
+            new = self._take(candidates, now)
+            if new is None:
+                break
+            self._announce(f"ocupando vaga livre com {new} ({pos[new] + 1}º no ranking; faixa pede {slots} moeda(s))")
+
+    def _take(self, candidates, now: float) -> Optional[str]:
+        """Próximo candidato cuja 1ª ordem cobre o minNotional; já entra em self.pairs."""
+        c = config
+        first_fill = level_notional(self.base, c.MARTINGALE_MULTIPLIER, 0, c.MARTINGALE_DOUBLE_FIRST)
+        for sym in candidates:
+            info = self.bot.exchange.get_symbol_info(sym) or {}
+            if first_fill < float(info.get("minNotional", 0) or 0):
+                logger.info(f"⏭️ Martingale: candidato {sym} pulado — 1ª ordem ${first_fill:.2f} < minNotional {info.get('minNotional')}")
+                continue
+            self._add_pair(sym, info, since=now)
+            return sym
+        return None
+
+    def _announce(self, msg: str) -> None:
+        logger.info(f"🎰 Martingale: {msg}")
+        self.bot.telegram.send_message(f"🎰 <b>Martingale</b>: {msg}")
 
     def _portfolio_stop(self, positions: List[Dict[str, Any]], equity: float) -> None:
         c = config

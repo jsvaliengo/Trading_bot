@@ -26,7 +26,7 @@ desligado** (a env é limitada a 5–25%).
 
 ```
 TRADING_BOT_STRATEGY=martingale_hedge
-TRADING_BOT_MARTINGALE_PAIRS=ADAUSDT          # até 3 pares, separados por vírgula
+TRADING_BOT_MARTINGALE_PAIRS=ADAUSDT          # conjunto inicial/fallback (ver "Seleção automática de pares")
 ```
 
 Requisito: conta em **Hedge Mode** (dual-side). O bot já o ativa no setup; se a Binance recusar (há posição
@@ -94,10 +94,36 @@ Limiares calibrados em 09/11/26 contra a mainnet: com vol 4/7 só BNB saía verd
 normal de alts é 4–6 % (≈3 degraus de 1,5 %/dia, o que o martingale quer). No mês da queda (ADA −30 % em
 30 d) 34/36 ficaram vermelhas por `adx`/`max_move_pct` — leitura correta, não defeito do score.
 
+## Seleção automática de pares pelo ranking
+
+`TRADING_BOT_MARTINGALE_AUTO_PAIRS=true` (default). O runner é o dono do `PairScoreCache` (thread de fundo,
+mesmo sem dashboard aberto; o dashboard lê dele) e, a cada tick, antes de mexer nas pernas, roda
+`MartingaleRunner._rebalance` (`core/martingale.py`):
+
+1. **Escada em andamento nunca é trocada.** Um par só muda de vaga quando **ambas** as pernas estão zeradas:
+   exchange sem posição no símbolo **e** perna local já resetada (uma leitura vazia transitória da exchange não troca).
+2. **Vagas** = coluna `moedas` da faixa atual da planilha pela equity (`sheet_row_index`; $300–500 → 2). Abaixo da 1ª
+   faixa mantém o número atual. Faixa menor solta as vagas excedentes (só pares zerados, pior colocado primeiro);
+   faixa maior ocupa as vagas livres com os melhores candidatos.
+3. **Candidatos** = `COINTECH2U_GREEN` (28 moedas; as vermelhas fixas da planilha nunca entram) com cor verde ou
+   amarela, na ordem de `rank_pairs`, pulando quem já ocupa vaga, quem tem posição aberta na exchange (órfã) e
+   quem tem `minNotional` acima da 1ª ordem (`level_notional(base, …, 0)`).
+4. **Troca**: par zerado **vermelho** → melhor candidato; par verde/amarelo fica (evita churn); sem score
+   (`unknown`/cache vazio) nada muda. Antes da 1ª ordem o par novo recebe `set_leverage` (hedge mode é da conta).
+5. **Cooldown**: a vaga recém-ocupada não troca de novo por `TRADING_BOT_MARTINGALE_PAIR_SWAP_COOLDOWN_MINUTES`
+   (360); pares iniciais/restaurados não têm cooldown.
+6. **Persistência**: `martingale_pairs` no `bot_state`; no boot prevalece sobre `MARTINGALE_PAIRS` (a env vira
+   o conjunto inicial/fallback). Com `AUTO_PAIRS=false` a env é fixa e o state é ignorado.
+7. Cada troca gera log INFO `🎰 Martingale: trocando slot ADAUSDT → BNBUSDT (ADA vermelho: …; BNB verde, 1º no
+   ranking)` e a mesma mensagem no Telegram. O dashboard mostra os pares ativos contornados na planilha.
+
+Limites: o `B` por capital (sem `FIRST_ORDER_USDT`) é calculado com o nº de pares do boot e não é refeito ao
+mudar o conjunto; o cooldown não é persistido (restart zera). Desligar: `TRADING_BOT_MARTINGALE_AUTO_PAIRS=false`.
+
 ## O que fica desligado sob esta estratégia
 
 TP/SL/trailing por ordem, IA, kill switches (sequência negativa, win rate, drawdown do pullback), meta de
-lucro diária, stop loss global, regime swap, scoring/rotação de pares. Mesmo gate do Donchian em `bot.py`
+lucro diária, stop loss global, regime swap, scoring/rotação de pares do pullback (a seleção pelo ranking acima é própria). Mesmo gate do Donchian em `bot.py`
 (`strategy_runner is not None`).
 
 ## Limites conhecidos

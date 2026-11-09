@@ -382,6 +382,10 @@ class TradingConfig:
     # 40M = piso de volume usado na VM pro pullback (MIN_VOLUME_24H_USD lá); o default do código é 150M.
     MARTINGALE_SCORE_MIN_VOLUME_USD: float = _env_float("TRADING_BOT_MARTINGALE_SCORE_MIN_VOLUME_USD", 40_000_000)
     MARTINGALE_SCORE_REFRESH_MINUTES: int = _env_int("TRADING_BOT_MARTINGALE_SCORE_REFRESH_MINUTES", 720)
+    # Seleção automática de pares pelo ranking do score (docs/MARTINGALE_HEDGE.md, "Seleção automática").
+    # Só troca par com AMBAS as pernas zeradas; AUTO_PAIRS=false prende MARTINGALE_PAIRS.
+    MARTINGALE_AUTO_PAIRS: bool = _env_bool("TRADING_BOT_MARTINGALE_AUTO_PAIRS", True)
+    MARTINGALE_PAIR_SWAP_COOLDOWN_MINUTES: int = _env_int("TRADING_BOT_MARTINGALE_PAIR_SWAP_COOLDOWN_MINUTES", 360)
     MIN_VOLATILITY_PERCENT: float = 1.5       # Volatilidade mínima 1.5%
     MAX_MIN_NOTIONAL: float = 10.0            # Mínimo notional máximo $10 (exclui BTC $100, ETH $20)
     # RVOL = volume da última hora fechada ÷ média horária recente. Piso baixo

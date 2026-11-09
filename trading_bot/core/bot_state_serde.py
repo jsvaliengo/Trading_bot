@@ -136,4 +136,8 @@ class BotStatePersistence:
             'martingale_legs': (
                 bot.martingale.snapshot()["pairs"] if getattr(bot, 'martingale', None) is not None else None
             ),
+            # conjunto atual de pares (seleção automática pelo ranking): prevalece sobre a env no boot
+            'martingale_pairs': (
+                list(bot.martingale.pairs) if getattr(bot, 'martingale', None) is not None else None
+            ),
         }
