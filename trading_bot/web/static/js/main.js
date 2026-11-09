@@ -412,19 +412,8 @@
         $('sheet-table').querySelector('tbody').innerHTML = rows.map((r, i) => `<tr class="${i === cur ? 'cur' : ''}">
             <td>${esc(r[0])}</td><td class="sans">${esc(r[2])}</td><td class="r">${r[3]}</td><td class="r">${r[4]}</td><td class="r">${r[5]}</td><td class="r">${Number(r[6]).toLocaleString('pt-BR')}</td><td class="sans">${r[7] ? 'ON' : 'OFF'}</td><td class="r">${r[8]}</td></tr>`).join('');
         const bases = new Set((botPairs || []).map(p => String(p).replace(/USDT$/, '')));
-        // Score por regras (verde/amarelo/vermelho/cinza=sem dado) com os números no tooltip.
-        const scores = sh.scores || {}, cls = { green: 'l', yellow: 'w', red: 's' };
-        const num = (v, nd = 1) => isNum(v) ? Number(v).toFixed(nd).replace('.', ',') : '—';
-        const tip = (c, sc) => sc && sc.color !== 'unknown'
-            ? `${c}: vol ${num(sc.vol_pct)}% · adx ${num(sc.adx, 0)} · mov. 30d ${num(sc.max_move_pct)}% · vol. ${num((sc.volume_usd || 0) / 1e6, 0)}M` + ((sc.reasons || []).length ? ` — ${sc.reasons.join('; ')}` : ' — tudo verde')
-            : `${c}: sem dado ainda`;
-        const pill = (c) => { const sc = scores[c + 'USDT']; return `<span class="side ${cls[(sc || {}).color] || 'u'}${bases.has(c) ? ' on' : ''}" title="${esc(tip(c, sc))}">${esc(c)}</span>`; };
-        const at = sh.scores_updated_at ? Date.parse(sh.scores_updated_at) : NaN;
-        $('sheet-coins').innerHTML = 'Moedas da planilha: ' + (sh.green || []).map(pill).join('') + ' <span>planilha: evitar (voláteis/memecoins):</span> ' + (sh.red || []).map(pill).join('')
-            + ` <small>· score ${isNum(at) ? 'atualizado há ' + fmt.ago((Date.now() - at) / 1000) : 'ainda sem dado'}</small>`;
-        const bad = [...bases].filter(c => (scores[c + 'USDT'] || {}).color === 'red');
-        $('sheet-warn').hidden = !bad.length;
-        $('sheet-warn').textContent = bad.map(c => `⚠ ${c} está vermelho: ${(scores[c + 'USDT'].reasons || []).join('; ')}`).join(' · ');
+        const pill = (c, k) => `<span class="side ${k}${bases.has(c) ? ' on' : ''}">${esc(c)}</span>`;
+        $('sheet-coins').innerHTML = 'Moedas da planilha: ' + (sh.green || []).map(c => pill(c, 'l')).join('') + ' <span>evitar (voláteis/memecoins):</span> ' + (sh.red || []).map(c => pill(c, 's')).join('');
     }
 
     // ───────── Saúde ─────────

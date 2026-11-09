@@ -20,7 +20,6 @@ from ..core.config import config
 from ..core.donchian import r_multiple_now
 from ..core.equity import effective_equity, simulated_balance
 from ..core.trade_store import trading_day_start
-from ..services.martingale_pair_score import PairScoreCache
 from . import forward_test as ft
 from .fx import usd_brl
 
@@ -173,23 +172,9 @@ def collect_martingale(bot, positions: List[Dict[str, Any]], summary: Dict[str, 
         out = runner.ladder(positions, equity)
     except Exception:
         return None
-    scores = _pair_scores(bot)
     out["sheet"] = {"rows": COINTECH2U_SHEET, "current": sheet_row_index(equity),
-                    "green": COINTECH2U_GREEN, "red": COINTECH2U_RED,
-                    "scores": scores["scores"], "scores_updated_at": scores["updated_at"]}
+                    "green": COINTECH2U_GREEN, "red": COINTECH2U_RED}
     return out
-
-
-_score_cache: Optional[PairScoreCache] = None
-
-
-def _pair_scores(bot) -> Dict[str, Any]:
-    """Score verde/amarelo/vermelho das 36 moedas da planilha (thread de fundo, 12h)."""
-    global _score_cache
-    if _score_cache is None:
-        _score_cache = PairScoreCache(getattr(bot, "exchange", None), [c + "USDT" for c in COINTECH2U_GREEN + COINTECH2U_RED],
-                                      config.MARTINGALE_SCORE_REFRESH_MINUTES)
-    return _score_cache.get()
 
 
 def collect_engine(bot) -> Dict[str, Any]:
