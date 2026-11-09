@@ -175,6 +175,22 @@ def test_index_requires_auth_returns_html():
     assert b'action="/logout"' in r.data
 
 
+def test_pages_default_to_dark_theme_and_apply_saved_light_inline():
+    """Escuro é o padrão independente do sistema; o claro salvo é aplicado por script inline no <head> (sem flash)."""
+    from trading_bot.web.app import create_app
+    app, _ = create_app(_make_bot())
+    client = app.test_client()
+    login_page = client.get("/login").data
+    _login(client)
+    for page in (login_page, client.get("/").data):
+        assert b'<meta name="color-scheme" content="dark">' in page
+        assert b"prefers-color-scheme" not in page
+        head = page.split(b"</head>")[0]
+        assert b"localStorage.getItem('tradingbot-theme')" in head and b'if(t==="light")' in head
+    css = open("trading_bot/web/static/css/style.css", encoding="utf-8").read()
+    assert "prefers-color-scheme" not in css and 'color-scheme: dark' in css.split("[data-theme=")[0]
+
+
 # ---------- Login por sessão ----------
 
 

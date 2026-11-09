@@ -67,11 +67,8 @@
 
     // ───────── Tema ─────────
     const THEME_KEY = 'tradingbot-theme';
-    function currentTheme() {
-        const forced = document.documentElement.getAttribute('data-theme');
-        if (forced) return forced;
-        return matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
-    }
+    // Escuro é o padrão; o script inline no <head> já aplicou a escolha salva antes do CSS (sem flash).
+    function currentTheme() { return document.documentElement.getAttribute('data-theme') || 'dark'; }
     function rerenderCharts() {
         Object.keys(charts).forEach(k => { try { charts[k].destroy(); } catch (e) { /* já destruído */ } delete charts[k]; });
         if (state.live) renderLive(state.live);
@@ -79,15 +76,12 @@
         if (state.pnl) renderPnl(state.pnl);
     }
     function initTheme() {
-        const saved = localStorage.getItem(THEME_KEY);
-        if (saved) document.documentElement.setAttribute('data-theme', saved);
         $('theme-toggle').addEventListener('click', () => {
             const next = currentTheme() === 'dark' ? 'light' : 'dark';
             document.documentElement.setAttribute('data-theme', next);
-            localStorage.setItem(THEME_KEY, next);
+            try { localStorage.setItem(THEME_KEY, next); } catch (e) { /* storage bloqueado: vale só nesta página */ }
             rerenderCharts();
         });
-        matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => { if (!localStorage.getItem(THEME_KEY)) rerenderCharts(); });
     }
 
     // ───────── Chart helpers ─────────
