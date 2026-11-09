@@ -1,5 +1,5 @@
 /* Dashboard v3 — painel do forward test Donchian 4h.
-   Dark primeiro; claro via prefers-color-scheme ou toggle (data-theme).
+   Escuro é o padrão (independente do sistema); claro só via toggle (data-theme="light", salvo em localStorage).
    Tokens lidos pelo main.js: --accent --good --bad --warn --text-dim --text-muted
    --border --border-strong --bg-elevated --bg-card --grid (não renomear).
    Hierarquia: status (números grandes) → forward test → posições → seções <details>. */
@@ -14,19 +14,6 @@
     --warn:#fab219; --warn-soft:rgba(250,178,25,.14);
     --bad:#e0524f; --bad-soft:rgba(224,82,79,.16);
     --focus:#8fbcff;
-}
-@media (prefers-color-scheme: light) {
-    :root:not([data-theme="dark"]) {
-        color-scheme: light;
-        --bg-app:#f3f5f8; --bg-card:#ffffff; --bg-elevated:#eef1f6;
-        --border:rgba(16,24,40,.10); --border-strong:rgba(16,24,40,.20); --grid:rgba(16,24,40,.07);
-        --text:#111827; --text-dim:#4b5565; --text-muted:#7b869a;
-        --accent:#2a78d6; --accent-soft:rgba(42,120,214,.12);
-        --good:#1f8a3c; --good-soft:rgba(31,138,60,.12);
-        --warn:#a86a00; --warn-soft:rgba(168,106,0,.12);
-        --bad:#c93b38; --bad-soft:rgba(201,59,56,.12);
-        --focus:#1d5fb8;
-    }
 }
 :root[data-theme="light"] {
     color-scheme: light;
@@ -98,7 +85,6 @@ button { font:inherit; color:inherit; }
 .btn-icon { width:32px; padding:7px; }
 .ico-sun { display:none; } .ico-moon { display:inline; }
 :root[data-theme="light"] .ico-sun { display:inline; } :root[data-theme="light"] .ico-moon { display:none; }
-@media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) .ico-sun { display:inline; } :root:not([data-theme="dark"]) .ico-moon { display:none; } }
 
 /* Layout */
 .wrap { max-width:1360px; margin:0 auto; padding:16px 22px 48px; display:flex; flex-direction:column; gap:14px; }
