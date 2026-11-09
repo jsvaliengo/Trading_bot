@@ -138,8 +138,20 @@ OPENAI_API_KEY=
 ```
 TRADING_BOT_DASHBOARD_ENABLED=true
 TRADING_BOT_DASHBOARD_PORT=5050
-TRADING_BOT_DASHBOARD_USERNAME= / _PASSWORD=
+TRADING_BOT_DASHBOARD_USERNAME= / _PASSWORD=     # credenciais da tela de login (e do Basic Auth em /api/*)
+TRADING_BOT_DASHBOARD_SECRET_KEY=                # assina o cookie de sessão; vazio = aleatória a cada boot (sessões caem no restart)
+TRADING_BOT_DASHBOARD_SESSION_DAYS=30            # validade do "manter conectado"
+TRADING_BOT_DASHBOARD_HTTPS=false                # true atrás de TLS (Caddy): cookie Secure
+TRADING_BOT_DASHBOARD_TRUST_PROXY=false          # true atrás de proxy: rate limit do login usa X-Forwarded-For
 ```
+
+Acesso: `GET /` sem sessão redireciona para `/login` (tela própria, no lugar do popup de
+Basic Auth do navegador). O login cria um cookie assinado (HttpOnly, SameSite=Lax); "Sair" no
+topo encerra a sessão. Rotas `/api/*` continuam aceitando Basic Auth para scripts/curl
+(`curl -u user:senha http://127.0.0.1:5050/api/live`); sem sessão nem Basic respondem 401 JSON.
+Login tem rate limit de 5 falhas / 15 min por IP. Na VM, gere uma chave fixa com
+`python -c "import secrets;print(secrets.token_hex(32))"` em `TRADING_BOT_DASHBOARD_SECRET_KEY`
+para a sessão sobreviver a deploys.
 
 **Observabilidade**
 ```

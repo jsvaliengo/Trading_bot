@@ -77,6 +77,18 @@ def _basic_auth(user: str, pw: str) -> dict:
     return {"Authorization": f"Basic {token}"}
 
 
+def _csrf(client) -> str:
+    with client.session_transaction() as s:
+        return s.get("csrf", "")
+
+
+def _login(client, user="admin", pw="secret", next_="/", **extra):
+    """GET /login (pega o CSRF da sessão) e POST com as credenciais."""
+    client.get("/login")
+    data = {"username": user, "password": pw, "csrf": _csrf(client), "next": next_, "remember": "1"}
+    return client.post("/login", data=data, **extra)
+
+
 # ---------- create_app ----------
 
 
@@ -152,11 +164,137 @@ def test_index_requires_auth_returns_html():
     app, _ = create_app(_make_bot())
     client = app.test_client()
     r = client.get("/")
-    assert r.status_code == 401
-    r = client.get("/", headers=_basic_auth("admin", "secret"))
+    assert r.status_code == 302 and r.headers["Location"] == "/login?next=/"
+    # Basic Auth não vale fora de /api/*: a página continua mandando pro login.
+    assert client.get("/", headers=_basic_auth("admin", "secret")).status_code == 302
+    assert _login(client).status_code == 302
+    r = client.get("/")
     assert r.status_code == 200
     assert b"Forward test" in r.data
     assert b"socket.io" in r.data.lower() or b"socket.io" in r.data
+    assert b'action="/logout"' in r.data
+
+
+# ---------- Login por sessão ----------
+
+
+def test_login_page_renders_form():
+    from trading_bot.web.app import create_app
+    app, _ = create_app(_make_bot())
+    r = app.test_client().get("/login?next=/x")
+    assert r.status_code == 200
+    assert b'autocomplete="username"' in r.data and b'autocomplete="current-password"' in r.data
+    assert b'name="next" value="/x"' in r.data
+
+
+def test_login_wrong_password_shows_error_and_logs(caplog):
+    from trading_bot.web.app import create_app
+    app, _ = create_app(_make_bot())
+    client = app.test_client()
+    with caplog.at_level("WARNING"):
+        r = _login(client, pw="wrong")
+    assert r.status_code == 200 and "Usuário ou senha inválidos" in r.get_data(as_text=True)
+    assert client.get("/").status_code == 302
+    msgs = [rec.getMessage() for rec in caplog.records if rec.levelname == "WARNING"]
+    assert any("Login do dashboard falhou" in m and "'admin'" in m for m in msgs)
+    assert not any("wrong" in m for m in msgs)
+
+
+def test_login_success_redirects_to_next_and_grants_access():
+    from trading_bot.web.app import create_app
+    app, _ = create_app(_make_bot())
+    client = app.test_client()
+    r = _login(client, next_="/?tab=pnl")
+    assert r.status_code == 302 and r.headers["Location"] == "/?tab=pnl"
+    assert client.get("/").status_code == 200
+    assert client.get("/api/live").status_code == 200
+    assert client.post("/api/control/pause").status_code == 200
+    cookie = client.get_cookie("session")
+    assert cookie is not None and cookie.http_only and cookie.same_site == "Lax" and not cookie.secure
+    assert cookie.expires is not None  # "lembrar-me": cookie persistente (30 dias)
+
+
+def test_login_ignores_absolute_next():
+    from trading_bot.web.app import create_app
+    app, _ = create_app(_make_bot())
+    for bad in ("https://evil.example/", "//evil.example/x", "/\\evil.example", "javascript:alert(1)"):
+        client = app.test_client()
+        r = _login(client, next_=bad)
+        assert r.status_code == 302 and r.headers["Location"] == "/", bad
+
+
+def test_login_requires_csrf_token():
+    from trading_bot.web.app import create_app
+    app, _ = create_app(_make_bot())
+    client = app.test_client()
+    r = client.post("/login", data={"username": "admin", "password": "secret", "csrf": "forged"})
+    assert r.status_code == 400
+    assert client.get("/").status_code == 302
+
+
+def test_api_without_auth_is_401_json_and_basic_still_works():
+    from trading_bot.web.app import create_app
+    app, _ = create_app(_make_bot())
+    client = app.test_client()
+    r = client.get("/api/live")
+    assert r.status_code == 401 and r.get_json()["ok"] is False
+    assert client.post("/api/control/pause").status_code == 401
+    assert client.get("/api/live", headers=_basic_auth("admin", "secret")).status_code == 200
+
+
+def test_logout_clears_session():
+    from trading_bot.web.app import create_app
+    app, _ = create_app(_make_bot())
+    client = app.test_client()
+    _login(client)
+    assert client.get("/").status_code == 200
+    # Sem CSRF o logout é ignorado (SameSite=Lax + token).
+    client.post("/logout", data={})
+    assert client.get("/").status_code == 200
+    r = client.post("/logout", data={"csrf": _csrf(client)})
+    assert r.status_code == 302 and r.headers["Location"] == "/login"
+    assert client.get("/").status_code == 302
+
+
+def test_login_rate_limit_blocks_sixth_attempt():
+    from trading_bot.web.app import create_app
+    app, _ = create_app(_make_bot())
+    client = app.test_client()
+    for _ in range(5):
+        assert _login(client, pw="wrong").status_code == 200
+    r = _login(client, pw="secret")  # até a senha certa é barrada
+    assert r.status_code == 429 and "Muitas tentativas" in r.get_data(as_text=True)
+    assert client.get("/").status_code == 302
+
+
+def test_login_rate_limit_uses_forwarded_for_only_with_trust_proxy(monkeypatch):
+    from trading_bot.web.app import create_app
+    app, _ = create_app(_make_bot())
+    client = app.test_client()
+    for _ in range(5):
+        _login(client, pw="wrong", headers={"X-Forwarded-For": "10.0.0.1"})
+    # Sem TRUST_PROXY o header é ignorado: o IP real (test client) já está bloqueado.
+    assert client.post("/login", data={"username": "admin", "password": "secret", "csrf": _csrf(client)}, headers={"X-Forwarded-For": "10.0.0.2"}).status_code == 429
+
+    monkeypatch.setattr(global_config, "DASHBOARD_TRUST_PROXY", True, raising=False)
+    app2, _ = create_app(_make_bot())
+    client2 = app2.test_client()
+    for _ in range(5):
+        _login(client2, pw="wrong", headers={"X-Forwarded-For": "10.0.0.1"})
+    assert client2.post("/login", data={"username": "admin", "password": "wrong", "csrf": _csrf(client2)}, headers={"X-Forwarded-For": "10.0.0.1"}).status_code == 429
+    assert client2.post("/login", data={"username": "admin", "password": "wrong", "csrf": _csrf(client2)}, headers={"X-Forwarded-For": "10.0.0.2"}).status_code == 200
+
+
+def test_socket_rejects_connection_without_session():
+    from trading_bot.web.app import create_app
+    app, socketio = create_app(_make_bot())
+    anon = socketio.test_client(app)
+    assert anon.is_connected() is False
+    flask_client = app.test_client()
+    _login(flask_client)
+    logged = socketio.test_client(app, flask_test_client=flask_client)
+    assert logged.is_connected() is True
+    assert any(e["name"] == "snapshot" for e in logged.get_received())
 
 
 # ---------- Controls ----------
@@ -756,7 +894,9 @@ def test_pair_scores_builds_cache_once_from_bot_exchange(monkeypatch):
 def test_index_has_cointech2u_sheet_card_and_hidden_cards():
     from trading_bot.web.app import create_app
     app, _ = create_app(_make_bot())
-    html = app.test_client().get("/", headers=_basic_auth("admin", "secret")).data.decode()
+    client = app.test_client()
+    _login(client)
+    html = client.get("/").data.decode()
     assert 'id="sheet-card" hidden' in html and "Planilha — Binance Estratégia Padrão" in html and "CoinTech2u" not in html
     assert 'id="eng-card"' in html and 'id="trades-card"' in html
 

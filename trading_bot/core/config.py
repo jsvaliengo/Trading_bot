@@ -820,6 +820,11 @@ class TradingConfig:
     # Chave secreta para sessões/SocketIO. Auto-gerada na inicialização se vazia
     # (cada restart invalida sessões — para sessões persistentes, defina via env).
     DASHBOARD_SECRET_KEY: str = _env_str("TRADING_BOT_DASHBOARD_SECRET_KEY", "")
+    # Login por sessão (cookie assinado). HTTPS=true marca o cookie Secure (só atrás
+    # de TLS, ex.: Caddy); TRUST_PROXY=true usa X-Forwarded-For no rate limit do login.
+    DASHBOARD_HTTPS: bool = _env_bool("TRADING_BOT_DASHBOARD_HTTPS", False)
+    DASHBOARD_TRUST_PROXY: bool = _env_bool("TRADING_BOT_DASHBOARD_TRUST_PROXY", False)
+    DASHBOARD_SESSION_DAYS: int = _env_int("TRADING_BOT_DASHBOARD_SESSION_DAYS", 30)
     # Intervalo (segundos) do polling fallback no client quando WebSocket cai.
     DASHBOARD_POLL_INTERVAL_SECONDS: int = _env_int("TRADING_BOT_DASHBOARD_POLL_INTERVAL_SECONDS", 5)
 
