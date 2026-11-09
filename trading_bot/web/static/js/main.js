@@ -356,6 +356,7 @@
     function renderEngine(e, positions) {
         const has = e && e.params;
         $('eng-params').textContent = has ? `entrada ${e.params.entry_bars} barras · saída ${e.params.exit_bars} · stop ${e.params.stop_atr_mult}×ATR(${e.params.atr_bars}) · risco ${String(e.params.risk_percent).replace('.', ',')}% por trade · máx. ${e.params.max_positions} posições, ${e.params.max_gross_mult}× equity bruto` : 'estratégia Donchian não ativa neste processo';
+        $('eng-card').hidden = !has;
         if (!has) { $('eng-sub').textContent = '—'; $('eng-list').innerHTML = ''; return; }
         const c = e.counters || {};
         const skips = e.skips || {}; const nSkip = sum(Object.values(skips));
@@ -376,7 +377,9 @@
     // ───────── Escada martingale ─────────
     function renderMartingale(m) {
         $('ft-card').hidden = !!m; $('mg-card').hidden = !m;
+        $('trades-card').hidden = !!m; $('sheet-card').hidden = !m;
         if (!m) return;
+        renderSheet(m.sheet, Object.keys(m.pairs || {}));
         const p = m.params || {}, n = (v, d = 2) => String(Number(v).toFixed(d)).replace(/\.?0+$/, '').replace('.', ',');
         $('mg-params').textContent = `X ${n(p.step_percent)}% · m ${n(p.multiplier)} · TP ${n(p.tp_percent)}% · N ${p.max_levels} · base ${fmt.usd(m.base_notional)} · capital ${fmt.usd(m.capital)} · pico ${fmt.usd(m.peak_equity)} · ${p.leverage}×` + (m.portfolio_stops ? ` · ${m.portfolio_stops} stop(s) de portfólio` : '');
         const stop = $('mg-stop'); stop.textContent = `stop de portfólio em ${fmt.usd(m.portfolio_stop_equity)}` + (isNum(m.portfolio_stop_room_pct) ? ` — faltam ${fmt.pct(m.portfolio_stop_room_pct, 2, false)}` : '');
@@ -396,6 +399,21 @@
                 <span>preço <b>${fmt.price(l.mark_price)}</b></span>
             </div>
         </div>`).join('') || '<p class="empty">Nenhum par na escada (estratégia não iniciou ou nenhum par cabe na ordem base).</p>';
+    }
+
+    // Planilha CoinTech2u: linha da equity atual destacada, moedas da planilha com as do bot marcadas.
+    function renderSheet(sh, botPairs) {
+        if (!sh) return;
+        const eq = state.live && state.live.summary && state.live.summary.last_balance;
+        const cur = sh.current, rows = sh.rows || [], nxt = rows[cur == null ? 0 : cur + 1];
+        // linha: [rótulo, banca mín., estratégia, 1ª long, 1ª short, alavancagem, stop, double first, moedas]
+        $('sheet-sub').textContent = `Banca ${fmt.usd(eq)} → ` + (cur == null ? 'abaixo da 1ª faixa (90 USDT)' : `faixa ${rows[cur][1]} USDT · ${rows[cur][8]} moeda(s)`)
+            + (nxt ? ` · próxima faixa $${nxt[1]} (${nxt[8]} moedas)` : '');
+        $('sheet-table').querySelector('tbody').innerHTML = rows.map((r, i) => `<tr class="${i === cur ? 'cur' : ''}">
+            <td>${esc(r[0])}</td><td class="sans">${esc(r[2])}</td><td class="r">${r[3]}</td><td class="r">${r[4]}</td><td class="r">${r[5]}</td><td class="r">${Number(r[6]).toLocaleString('pt-BR')}</td><td class="sans">${r[7] ? 'ON' : 'OFF'}</td><td class="r">${r[8]}</td></tr>`).join('');
+        const bases = new Set((botPairs || []).map(p => String(p).replace(/USDT$/, '')));
+        const pill = (c, k) => `<span class="side ${k}${bases.has(c) ? ' on' : ''}">${esc(c)}</span>`;
+        $('sheet-coins').innerHTML = 'Moedas da planilha: ' + (sh.green || []).map(c => pill(c, 'l')).join('') + ' <span>evitar (voláteis/memecoins):</span> ' + (sh.red || []).map(c => pill(c, 's')).join('');
     }
 
     // ───────── Saúde ─────────

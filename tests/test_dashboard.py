@@ -428,7 +428,8 @@ def test_collect_martingale_none_without_runner_and_present_with_it():
     assert dashboard_data.collect_martingale(bot, [], {"last_balance": 100.0}) is None
     calls = []
     bot.martingale = SimpleNamespace(ladder=lambda positions, equity: calls.append((positions, equity)) or {"legs": []})
-    assert dashboard_data.collect_martingale(bot, [{"symbol": "ADAUSDT"}], {"last_balance": 100.0}) == {"legs": []}
+    out = dashboard_data.collect_martingale(bot, [{"symbol": "ADAUSDT"}], {"last_balance": 100.0})
+    assert out["legs"] == [] and out["sheet"]["current"] == 0
     assert calls == [([{"symbol": "ADAUSDT"}], 100.0)]
     bot.martingale = SimpleNamespace(ladder=lambda positions, equity: 1 / 0)
     assert dashboard_data.collect_martingale(bot, [], {}) is None
@@ -671,6 +672,26 @@ def test_fx_failure_returns_none_then_last_known(monkeypatch):
     assert fx.usd_brl()["usd_brl"] == 5.6  # todas falham: mantém o último valor conhecido
     assert calls == [u for _, u, _ in fx.SOURCES]  # tentou as 3 fontes, em ordem
     assert fx.usd_brl()["usd_brl"] == 5.6 and len(calls) == 3  # retry negativo: 60s sem ir à rede
+
+
+@pytest.mark.parametrize("equity,expected", [(306.0, 1), (89.0, None), (6500.0, 8), (None, None)])
+def test_collect_martingale_sheet_row_for_equity(equity, expected):
+    bot = _make_bot()
+    bot.martingale = SimpleNamespace(ladder=lambda positions, eq: {"legs": [], "pairs": {"ADAUSDT": {}}})
+    out = dashboard_data.collect_martingale(bot, [], {"last_balance": equity})
+    sheet = out["sheet"]
+    assert sheet["current"] == expected
+    assert [r[1] for r in sheet["rows"]] == [90, 300, 500, 1000, 2000, 3000, 4000, 5000, 6000]
+    assert sheet["rows"][1][8] == 2 and sheet["rows"][8][6] == 1020
+    assert "ADA" in sheet["green"] and "DOGE" in sheet["red"]
+
+
+def test_index_has_cointech2u_sheet_card_and_hidden_cards():
+    from trading_bot.web.app import create_app
+    app, _ = create_app(_make_bot())
+    html = app.test_client().get("/", headers=_basic_auth("admin", "secret")).data.decode()
+    assert 'id="sheet-card" hidden' in html and "Planilha CoinTech2u" in html
+    assert 'id="eng-card"' in html and 'id="trades-card"' in html
 
 
 def test_live_and_pnl_report_expose_fx(_brt, monkeypatch):

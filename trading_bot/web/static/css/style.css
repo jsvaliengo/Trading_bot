@@ -233,6 +233,9 @@ details.card > :not(summary):first-of-type { margin-top:10px; }
 .table tbody tr:hover { background:var(--bg-elevated); }
 .table td small { color:var(--text-muted); font-family:'IBM Plex Sans',system-ui,sans-serif; }
 .table td.sans { font-family:'IBM Plex Sans',system-ui,sans-serif; }
+.sheet tr.cur td { background:var(--accent-soft); font-weight:600; } .sheet tr.cur td:first-child { box-shadow:inset 3px 0 0 var(--accent); }
+.sheet-coins { max-width:none; display:flex; flex-wrap:wrap; gap:4px; align-items:center; margin-top:10px; }
+.sheet-coins .side { font-size:11px; } .sheet-coins .side.on { outline:2px solid var(--accent); }
 .rbar { display:inline-block; width:48px; height:5px; border-radius:3px; background:var(--bg-elevated); position:relative; vertical-align:middle; margin-right:6px; }
 .rbar i { position:absolute; top:0; height:100%; border-radius:3px; }
 .rbar i.pos { background:var(--good); left:50%; } .rbar i.neg { background:var(--bad); right:50%; }
