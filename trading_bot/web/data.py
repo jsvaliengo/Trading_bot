@@ -136,9 +136,16 @@ COINTECH2U_SHEET = [
     ("3.000", 3000, "Millionaire Strategy 9", 10, 10, 20, 600, False, 9),
     ("4.000", 4000, "Millionaire Strategy 9", 12, 12, 20, 720, False, 10),
     ("5.000", 5000, "Millionaire Strategy 9", 15, 15, 20, 900, False, 11),
-    ("6.000", 6000, "Millionaire Strategy 9", 17, 17, 20, 1020, False, 11),
+    ("6.000", 6000, "Millionaire Strategy 9", 17, 17, 20, 1020, True, 11),
+    ("7.000", 7000, "Millionaire Strategy 9", 20, 20, 20, 1200, True, 11),
+    ("8.000", 8000, "Millionaire Strategy 9", 21, 21, 20, 1260, True, 12),
+    ("9.000", 9000, "Millionaire Strategy 9", 24, 24, 20, 1440, True, 12),
+    ("10.000", 10000, "Millionaire Strategy 9", 28, 28, 20, 1680, True, 12),
 ]
-COINTECH2U_GREEN = "ADA TRX ARB XRP APT FIL SUSHI ATOM CFX 1INCH MASK THETA OP COMP CHZ NEAR SAND CRV DOT".split()
+# Verdes incluem as moedas que a planilha só libera nas faixas maiores (UNI ≥3k, BNB ≥4k,
+# LTC…AAVE ≥6k, AVAX ≥7k).
+COINTECH2U_GREEN = ("ADA TRX ARB XRP APT FIL SUSHI ATOM CFX 1INCH MASK THETA OP COMP CHZ NEAR SAND CRV DOT "
+                    "UNI BNB LTC BCH LINK ETC ETH AAVE AVAX").split()
 COINTECH2U_RED = "NOT 1000PEPE SNX SUI 1000SHIB DOGE APE SOL".split()
 
 

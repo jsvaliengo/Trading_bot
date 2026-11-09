@@ -674,16 +674,17 @@ def test_fx_failure_returns_none_then_last_known(monkeypatch):
     assert fx.usd_brl()["usd_brl"] == 5.6 and len(calls) == 3  # retry negativo: 60s sem ir à rede
 
 
-@pytest.mark.parametrize("equity,expected", [(306.0, 1), (89.0, None), (6500.0, 8), (None, None)])
+@pytest.mark.parametrize("equity,expected", [(306.0, 1), (89.0, None), (6500.0, 8), (7200.0, 9), (10500.0, 12), (None, None)])
 def test_collect_martingale_sheet_row_for_equity(equity, expected):
     bot = _make_bot()
     bot.martingale = SimpleNamespace(ladder=lambda positions, eq: {"legs": [], "pairs": {"ADAUSDT": {}}})
     out = dashboard_data.collect_martingale(bot, [], {"last_balance": equity})
     sheet = out["sheet"]
     assert sheet["current"] == expected
-    assert [r[1] for r in sheet["rows"]] == [90, 300, 500, 1000, 2000, 3000, 4000, 5000, 6000]
-    assert sheet["rows"][1][8] == 2 and sheet["rows"][8][6] == 1020
-    assert "ADA" in sheet["green"] and "DOGE" in sheet["red"]
+    assert [r[1] for r in sheet["rows"]] == [90, 300, 500, 1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000]
+    assert sheet["rows"][1][8] == 2 and sheet["rows"][8][6:9] == (1020, True, 11)
+    assert sheet["rows"][12][3:9] == (28, 28, 20, 1680, True, 12)
+    assert "ADA" in sheet["green"] and "AVAX" in sheet["green"] and "DOGE" in sheet["red"]
 
 
 def test_index_has_cointech2u_sheet_card_and_hidden_cards():
