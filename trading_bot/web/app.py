@@ -114,6 +114,12 @@ def _register_routes(app: Flask, socketio: SocketIO) -> None:
     def summary():
         return jsonify(collect_summary(app.config["BOT"]))
 
+    @app.route("/api/pnl_report")
+    @require_basic_auth
+    def pnl_report():
+        from .pnl_report import build_report
+        return jsonify(build_report(app.config["BOT"], request.args.get("from"), request.args.get("to"), request.args.get("days")))
+
     @app.route("/api/control/pause", methods=["POST"])
     @require_basic_auth
     def pause():

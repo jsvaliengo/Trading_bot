@@ -118,6 +118,107 @@
         <div id="mg-list"></div>
     </section>
 
+    <!-- 3c. Ganhos e Perdas de Futuros (estilo app da Binance; dados do TradeStore + income da Binance) -->
+    <details class="card pnl" open id="pnl-card">
+        <summary><h2>Ganhos e Perdas de Futuros</h2><span class="cs" id="pnl-sub">—</span></summary>
+        <div class="chips" role="tablist" aria-label="Mercado">
+            <button class="chip on" role="tab" aria-selected="true">USDT-M</button>
+            <button class="chip" role="tab" disabled title="O bot só opera USDT-M">COIN-M</button>
+        </div>
+        <div class="pnl-today">
+            <span class="tl">Ganhos e Perdas de Hoje</span>
+            <b class="tv" id="pnl-today-usd">—</b>
+            <span class="pnl-pct" id="pnl-today-pct">—</span>
+        </div>
+        <div class="pnl-wins">
+            <div><span class="tl">Ganhos e Perdas de 7 Dias</span><b id="pnl-7d-usd">—</b><small id="pnl-7d-pct">—</small></div>
+            <div><span class="tl">Ganhos e Perdas de 30 Dias</span><b id="pnl-30d-usd">—</b><small id="pnl-30d-pct">—</small></div>
+            <div><span class="tl">Ganhos e Perdas Acumulados</span><b id="pnl-all-usd">—</b><small id="pnl-all-f">desde o 1º trade</small></div>
+        </div>
+        <div class="pnl-period">
+            <div class="chips" role="tablist" aria-label="Período" id="pnl-ranges">
+                <button class="chip on" role="tab" data-days="7" aria-selected="true">7 Dias</button>
+                <button class="chip" role="tab" data-days="30">1 Mês</button>
+                <button class="chip" role="tab" data-days="90">3 Meses</button>
+                <button class="chip" role="tab" data-days="365">1 Ano</button>
+                <button class="chip" role="tab" data-days="custom">Personalizar</button>
+            </div>
+            <form class="pnl-custom" id="pnl-custom" hidden>
+                <label>de <input type="date" id="pnl-from" required></label>
+                <label>até <input type="date" id="pnl-to" required></label>
+                <button class="btn btn-quiet btn-xs" type="submit">Aplicar</button>
+            </form>
+        </div>
+        <details class="pnl-lines" id="pnl-lines">
+            <summary>
+                <span>Lucro Total <b class="pos" id="pnl-profit">—</b></span>
+                <span>Total de Perdas <b class="neg" id="pnl-loss">—</b></span>
+                <span>Ganhos/Perdas Líquidos <b id="pnl-net">—</b></span>
+            </summary>
+            <dl class="kvl" id="pnl-more"></dl>
+        </details>
+        <div class="chips pnl-tabs" role="tablist" aria-label="Seção" id="pnl-tabs">
+            <button class="chip on" role="tab" data-tab="overview" aria-selected="true">Visão Geral</button>
+            <button class="chip" role="tab" data-tab="details">Detalhes</button>
+            <button class="chip" role="tab" data-tab="symbols">Análise do Símbolo</button>
+            <button class="chip" role="tab" data-tab="income">Financiamento e Transações</button>
+        </div>
+
+        <div class="pnl-tab" data-tab="overview">
+            <div class="ch">
+                <h3>Ganhos e Perdas Diários</h3>
+                <div class="chips" role="tablist" aria-label="Modo" id="pnl-daily-mode">
+                    <button class="chip" role="tab" data-mode="bars" title="Barras" aria-label="Barras">▥</button>
+                    <button class="chip on" role="tab" data-mode="calendar" title="Calendário" aria-label="Calendário" aria-selected="true">▦</button>
+                </div>
+            </div>
+            <div id="pnl-cal-wrap">
+                <div class="pnl-cal-nav"><button class="pg-btn" id="pnl-cal-prev" aria-label="Mês anterior">‹</button><b id="pnl-cal-month">—</b><button class="pg-btn" id="pnl-cal-next" aria-label="Próximo mês">›</button></div>
+                <div class="pnl-cal" id="pnl-cal" role="grid"></div>
+            </div>
+            <div class="cv cv-pnl" id="pnl-bars-wrap" hidden><canvas id="pnl-bars-chart" role="img" aria-label="P&amp;L por dia"></canvas></div>
+
+            <div class="ch"><h3>Ganhos e Perdas Acumulados</h3><b class="pnl-val" id="pnl-cum-val">—</b></div>
+            <div class="cv cv-pnl"><canvas id="pnl-cum-chart" role="img" aria-label="P&amp;L acumulado"></canvas></div>
+
+            <div class="ch"><h3>% de Ganhos e Perdas Acumulados</h3></div>
+            <div class="cv cv-pnl"><canvas id="pnl-pct-chart" role="img" aria-label="% acumulado vs BTC e BNB"></canvas></div>
+            <p class="legend" id="pnl-pct-legend"></p>
+
+            <div class="ch"><h3>Resumo de Ativos</h3><span class="cs" id="pnl-assets-sub">—</span></div>
+            <div class="pnl-donut"><div class="cv cv-donut"><canvas id="pnl-assets-chart" role="img" aria-label="Composição da carteira"></canvas><b class="donut-center" id="pnl-assets-total">—</b></div><ul class="pnl-assets" id="pnl-assets-list"></ul></div>
+        </div>
+
+        <div class="pnl-tab" data-tab="details" hidden>
+            <div class="table-scroll">
+                <table class="table" id="pnl-trades">
+                    <thead><tr><th scope="col">Data</th><th scope="col">Par</th><th scope="col">Lado</th><th scope="col" class="r">Qtd</th><th scope="col" class="r">Entrada</th><th scope="col" class="r">Saída</th><th scope="col" class="r">P&amp;L líq.</th><th scope="col" class="r">Taxas</th><th scope="col">Motivo</th></tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+            <div class="pager" id="pnl-pager" hidden><button class="pg-btn" id="pnl-prev" aria-label="Página anterior">‹</button><span class="pg-info" id="pnl-page">—</span><button class="pg-btn" id="pnl-next" aria-label="Próxima página">›</button></div>
+        </div>
+
+        <div class="pnl-tab" data-tab="symbols" hidden>
+            <div class="table-scroll">
+                <table class="table" id="pnl-symbols">
+                    <thead><tr><th scope="col">Par</th><th scope="col" class="r">Trades</th><th scope="col" class="r">Win rate</th><th scope="col" class="r" data-sort="net" aria-sort="descending"><button>P&amp;L líq.</button></th><th scope="col" class="r">Taxas</th><th scope="col" class="r">Funding</th></tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="pnl-tab" data-tab="income" hidden>
+            <div class="tr-stats" id="pnl-income-totals"></div>
+            <div class="table-scroll">
+                <table class="table" id="pnl-income">
+                    <thead><tr><th scope="col">Data</th><th scope="col">Tipo</th><th scope="col">Par</th><th scope="col" class="r">Valor</th></tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </div>
+    </details>
+
     <section class="two">
         <!-- Equity + drawdown -->
         <details class="card" open>
