@@ -39,4 +39,4 @@ def _fx_offline(monkeypatch):
 
     monkeypatch.setattr(fx.requests, "get", offline)
     monkeypatch.setitem(fx._cache, "next_at", 0.0)
-    monkeypatch.setitem(fx._cache, "data", {"usd_brl": None, "source": "awesomeapi", "fetched_at": None})
+    monkeypatch.setitem(fx._cache, "data", {"usd_brl": None, "source": None, "fetched_at": None})
