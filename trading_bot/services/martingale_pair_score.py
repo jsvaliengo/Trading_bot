@@ -40,6 +40,21 @@ def max_move_pct(closes: List[float]) -> float:
     return best
 
 
+def move_green(cfg=config) -> float:
+    return cfg.MARTINGALE_SCORE_MOVE_GREEN or cfg.MARTINGALE_STEP_PERCENT * cfg.MARTINGALE_MAX_LEVELS
+
+
+def rank_score(sc: Dict[str, Any], cfg=config) -> Optional[float]:
+    """Score contínuo pro ranking: soma das distâncias normalizadas aos limiares verdes
+    (1,0 = exatamente no limiar; menor = melhor) + MIN_VOLUME/volume se abaixo do piso. None sem dado."""
+    if sc.get("vol_pct") is None or sc.get("adx") is None or sc.get("max_move_pct") is None:
+        return None
+    vol_usd = max(float(sc.get("volume_usd") or 0.0), 1.0)
+    penalty = cfg.MARTINGALE_SCORE_MIN_VOLUME_USD / vol_usd if vol_usd < cfg.MARTINGALE_SCORE_MIN_VOLUME_USD else 0.0
+    return (sc["vol_pct"] / cfg.MARTINGALE_SCORE_VOL_GREEN + sc["adx"] / cfg.MARTINGALE_SCORE_ADX_GREEN
+            + sc["max_move_pct"] / move_green(cfg) + penalty)
+
+
 def score_pair(klines_1d: List[List[Any]], klines_4h: List[List[Any]], cfg=config) -> Dict[str, Any]:
     """Klines FECHADOS no formato bruto da Binance (lista de listas). Dados insuficientes → "unknown"."""
     out: Dict[str, Any] = {"color": "unknown", "vol_pct": None, "adx": None, "max_move_pct": None,
@@ -54,11 +69,10 @@ def score_pair(klines_1d: List[List[Any]], klines_4h: List[List[Any]], cfg=confi
     out["max_move_pct"] = max_move_pct([float(k[4]) for k in d])
     out["adx"] = TechnicalAnalysis.calculate_adx([float(k[2]) for k in klines_4h], [float(k[3]) for k in klines_4h],
                                                  [float(k[4]) for k in klines_4h], period=ADX_PERIOD)
-    move_green = cfg.MARTINGALE_SCORE_MOVE_GREEN or cfg.MARTINGALE_STEP_PERCENT * cfg.MARTINGALE_MAX_LEVELS
     checks = [  # (rótulo, valor, verde se <, vermelho se >, casas decimais, unidade)
         ("vol", out["vol_pct"], cfg.MARTINGALE_SCORE_VOL_GREEN, cfg.MARTINGALE_SCORE_VOL_RED, 1, "%"),
         ("adx", out["adx"], cfg.MARTINGALE_SCORE_ADX_GREEN, cfg.MARTINGALE_SCORE_ADX_RED, 0, ""),
-        ("movimento 30d", out["max_move_pct"], move_green, cfg.MARTINGALE_SCORE_MOVE_RED, 1, "%"),
+        ("movimento 30d", out["max_move_pct"], move_green(cfg), cfg.MARTINGALE_SCORE_MOVE_RED, 1, "%"),
     ]
     red = False
     for label, value, green, red_thr, nd, unit in checks:
