@@ -85,6 +85,11 @@ lista em pt-BR os critérios fora do verde (ex.: `vol 5,2% (>4,0%)`). As vermelh
 1000PEPE, SNX, SUI, 1000SHIB, DOGE, APE, SOL) também são avaliadas, com o marcador "planilha: evitar".
 Par ativo vermelho gera um aviso em linha no card.
 
+**Ranking** (`sheet.ranking`, `web/data.py:rank_pairs`): ordena as 36 moedas por cor (verde < amarelo < vermelho
+< sem dado) e, dentro da cor, por `rank_score` = `vol_pct/VOL_GREEN + adx/ADX_GREEN + max_move_pct/MOVE_GREEN`
+(+ `MIN_VOLUME/volume_usd` se abaixo do piso; menor = melhor). As vermelhas fixas da planilha vão sempre pro fim
+(`sheet_red`). O card mostra "Melhores agora" com N = moedas da faixa atual e onde os pares ativos caíram no ranking.
+
 Limiares calibrados em 09/11/26 contra a mainnet: com vol 4/7 só BNB saía verde; 5/8 porque a faixa diária
 normal de alts é 4–6 % (≈3 degraus de 1,5 %/dia, o que o martingale quer). No mês da queda (ADA −30 % em
 30 d) 34/36 ficaram vermelhas por `adx`/`max_move_pct` — leitura correta, não defeito do score.

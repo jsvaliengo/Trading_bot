@@ -422,6 +422,15 @@
         const at = sh.scores_updated_at ? Date.parse(sh.scores_updated_at) : NaN;
         $('sheet-coins').innerHTML = 'Moedas da planilha: ' + (sh.green || []).map(pill).join('') + ' <span>planilha: evitar (voláteis/memecoins):</span> ' + (sh.red || []).map(pill).join('')
             + ` <small>· score ${isNum(at) ? 'atualizado há ' + fmt.ago((Date.now() - at) / 1000) : 'ainda sem dado'}</small>`;
+        // Ranking pelo score: top N (N = moedas da faixa atual) + onde ficaram os pares ativos fora do top.
+        const ord = (i) => `${i}º`, slots = (rows[cur == null ? 0 : cur] || [])[8] || 0;
+        const ranking = (sh.ranking || []).filter(r => !r.sheet_red), ranked = ranking.filter(r => isNum(r.score));
+        const rpill = (r) => `<span class="side ${cls[r.color] || 'u'}${r.active ? ' on' : ''}" title="${esc(tip(r.symbol.replace(/USDT$/, ''), scores[r.symbol]))}">${ord(r.rank)} ${esc(r.symbol.replace(/USDT$/, ''))}</span>`;
+        const top = ranked.slice(0, slots), outside = ranking.filter(r => r.active && !top.includes(r));
+        $('sheet-rank').innerHTML = ranked.length
+            ? `Melhores agora (${slots} vaga${slots === 1 ? '' : 's'} na faixa): ` + top.map(rpill).join('')
+              + (outside.length ? ` <span>ativos fora do top: ${outside.map(r => `${esc(r.symbol.replace(/USDT$/, ''))} está em ${isNum(r.score) ? ord(r.rank) : 'sem dado'}`).join(', ')}</span>` : '')
+            : 'Melhores agora: ainda sem dado';
         const bad = [...bases].filter(c => (scores[c + 'USDT'] || {}).color === 'red');
         $('sheet-warn').hidden = !bad.length;
         $('sheet-warn').textContent = bad.map(c => `⚠ ${c} está vermelho: ${(scores[c + 'USDT'].reasons || []).join('; ')}`).join(' · ');

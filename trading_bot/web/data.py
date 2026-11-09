@@ -20,7 +20,7 @@ from ..core.config import config
 from ..core.donchian import r_multiple_now
 from ..core.equity import effective_equity, simulated_balance
 from ..core.trade_store import trading_day_start
-from ..services.martingale_pair_score import PairScoreCache
+from ..services.martingale_pair_score import PairScoreCache, rank_score
 from . import forward_test as ft
 from .fx import usd_brl
 
@@ -161,6 +161,20 @@ def sheet_row_index(equity: Optional[float]) -> Optional[int]:
     return idx
 
 
+_COLOR_RANK = {"green": 0, "yellow": 1, "red": 2, "unknown": 3}
+
+
+def rank_pairs(scores: Dict[str, Dict[str, Any]]) -> List[str]:
+    """Símbolos do melhor pro pior: cor (verde<amarelo<vermelho<sem dado), depois rank_score
+    (menor = melhor). As vermelhas fixas da planilha (COINTECH2U_RED) vão sempre pro fim."""
+    def key(sym: str):
+        sc = scores[sym]
+        rs = rank_score(sc)
+        return (sym.replace("USDT", "") in COINTECH2U_RED, _COLOR_RANK.get(sc.get("color"), 3),
+                float("inf") if rs is None else rs, sym)
+    return sorted(scores, key=key)
+
+
 def collect_martingale(bot, positions: List[Dict[str, Any]], summary: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Escada do martingale hedge (params, pico, stop de portfólio, pernas) + planilha
     CoinTech2u com a linha da equity atual. None fora da estratégia; a matemática fica
@@ -174,9 +188,14 @@ def collect_martingale(bot, positions: List[Dict[str, Any]], summary: Dict[str, 
     except Exception:
         return None
     scores = _pair_scores(bot)
+    full = {c + "USDT": scores["scores"].get(c + "USDT", {"color": "unknown"}) for c in COINTECH2U_GREEN + COINTECH2U_RED}
+    active = set(out.get("pairs") or {})
+    ranking = [{"symbol": sym, "rank": i + 1, "color": full[sym]["color"], "score": rank_score(full[sym]),
+                "active": sym in active, "sheet_red": sym.replace("USDT", "") in COINTECH2U_RED}
+               for i, sym in enumerate(rank_pairs(full))]
     out["sheet"] = {"rows": COINTECH2U_SHEET, "current": sheet_row_index(equity),
                     "green": COINTECH2U_GREEN, "red": COINTECH2U_RED,
-                    "scores": scores["scores"], "scores_updated_at": scores["updated_at"]}
+                    "scores": scores["scores"], "scores_updated_at": scores["updated_at"], "ranking": ranking}
     return out
 
 

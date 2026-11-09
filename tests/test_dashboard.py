@@ -703,6 +703,45 @@ def test_api_live_exposes_sheet_scores_from_cache(monkeypatch):
     assert "ADA" in sheet["green"]
 
 
+def test_rank_pairs_orders_by_color_then_score_with_sheet_reds_last():
+    def sc(color, vol, adx, mv, volu=100e6):
+        return {"color": color, "vol_pct": vol, "adx": adx, "max_move_pct": mv, "volume_usd": volu}
+    scores = {
+        "AAAUSDT": sc("yellow", 5.5, 10.0, 3.0),
+        "BBBUSDT": sc("green", 4.0, 20.0, 8.0),      # verde pior score que CCC
+        "CCCUSDT": sc("green", 1.0, 10.0, 2.0),
+        "DDDUSDT": sc("red", 9.0, 40.0, 30.0),
+        "EEEUSDT": {"color": "unknown"},
+        "DOGEUSDT": sc("green", 0.5, 5.0, 1.0),     # vermelha fixa da planilha: melhor número, mas vai pro fim
+        "FFFUSDT": sc("green", 1.0, 10.0, 2.0, volu=20e6),  # volume abaixo do piso penaliza
+    }
+    assert dashboard_data.rank_pairs(scores) == ["CCCUSDT", "BBBUSDT", "FFFUSDT", "AAAUSDT", "DDDUSDT", "EEEUSDT", "DOGEUSDT"]
+    assert dashboard_data.rank_score(scores["CCCUSDT"]) == pytest.approx(1.0 / 5 + 10 / 25 + 2.0 / 10.5)  # move_green = 1,5 × 7
+    assert dashboard_data.rank_score(scores["FFFUSDT"]) == pytest.approx(dashboard_data.rank_score(scores["CCCUSDT"]) + 2.0)
+    assert dashboard_data.rank_score({"color": "unknown"}) is None
+
+
+def test_api_live_exposes_sheet_ranking(monkeypatch):
+    from trading_bot.web.app import create_app
+
+    def sc(color, vol, adx, mv):
+        return {"color": color, "vol_pct": vol, "adx": adx, "max_move_pct": mv, "volume_usd": 100e6, "reasons": []}
+    monkeypatch.setattr(dashboard_data, "_score_cache", SimpleNamespace(get=lambda: {
+        "scores": {"ADAUSDT": sc("red", 6, 40, 30), "TRXUSDT": sc("yellow", 3, 21, 14), "BNBUSDT": sc("green", 2, 15, 5)},
+        "updated_at": "2026-11-09T12:00:00+00:00"}))
+    bot = _make_bot()
+    bot.martingale = SimpleNamespace(ladder=lambda positions, eq: {"legs": [], "pairs": {"ADAUSDT": {}, "TRXUSDT": {}}})
+    app, _ = create_app(bot)
+    ranking = app.test_client().get("/api/live", headers=_basic_auth("admin", "secret")).get_json()["martingale"]["sheet"]["ranking"]
+    assert len(ranking) == 36 and [r["rank"] for r in ranking] == list(range(1, 37))
+    assert [r["symbol"] for r in ranking[:3]] == ["BNBUSDT", "TRXUSDT", "ADAUSDT"]
+    assert ranking[0] == {"symbol": "BNBUSDT", "rank": 1, "color": "green", "score": pytest.approx(2 / 5 + 15 / 25 + 5 / 10.5),
+                          "active": False, "sheet_red": False}
+    assert ranking[1]["active"] and ranking[2]["active"]
+    assert ranking[3]["color"] == "unknown" and ranking[3]["score"] is None and not ranking[3]["sheet_red"]
+    assert all(r["sheet_red"] for r in ranking[-8:]) and {r["symbol"] for r in ranking[-8:]} == {c + "USDT" for c in dashboard_data.COINTECH2U_RED}
+
+
 def test_pair_scores_builds_cache_once_from_bot_exchange(monkeypatch):
     monkeypatch.setattr(dashboard_data, "_score_cache", None)
     bot = _make_bot()
