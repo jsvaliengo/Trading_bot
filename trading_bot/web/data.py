@@ -124,16 +124,50 @@ def _forward_test_restart() -> Optional[str]:
     return str(getattr(config, "FORWARD_TEST_RESTART_AT", "") or "").strip() or ft.RESTART_ISO
 
 
+# Planilha CoinTech2u "Binance Estratégia Padrão": (rótulo da banca, banca mínima USDT,
+# estratégia, 1ª ordem long, 1ª ordem short, alavancagem, stop loss, double first, moedas).
+# Faixa = da banca mínima até a próxima linha; abaixo de 90 nenhuma.
+COINTECH2U_SHEET = [
+    ("90–150", 90, "Millionaire Strategy 9", 3, 3, 20, 180, True, 1),
+    ("300", 300, "Millionaire Strategy 9", 3, 3, 20, 180, True, 2),
+    ("500", 500, "Millionaire Strategy 9", 3, 3, 20, 180, True, 3),
+    ("1.000", 1000, "Millionaire Strategy 9", 3, 3, 20, 180, True, 6),
+    ("2.000", 2000, "Millionaire Strategy 9", 3, 3, 20, 180, True, 9),
+    ("3.000", 3000, "Millionaire Strategy 9", 10, 10, 20, 600, False, 9),
+    ("4.000", 4000, "Millionaire Strategy 9", 12, 12, 20, 720, False, 10),
+    ("5.000", 5000, "Millionaire Strategy 9", 15, 15, 20, 900, False, 11),
+    ("6.000", 6000, "Millionaire Strategy 9", 17, 17, 20, 1020, False, 11),
+]
+COINTECH2U_GREEN = "ADA TRX ARB XRP APT FIL SUSHI ATOM CFX 1INCH MASK THETA OP COMP CHZ NEAR SAND CRV DOT".split()
+COINTECH2U_RED = "NOT 1000PEPE SNX SUI 1000SHIB DOGE APE SOL".split()
+
+
+def sheet_row_index(equity: Optional[float]) -> Optional[int]:
+    """Índice da linha da planilha pra equity (None abaixo da 1ª faixa ou sem equity)."""
+    if equity is None:
+        return None
+    idx = None
+    for i, row in enumerate(COINTECH2U_SHEET):
+        if equity >= row[1]:
+            idx = i
+    return idx
+
+
 def collect_martingale(bot, positions: List[Dict[str, Any]], summary: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Escada do martingale hedge (params, pico, stop de portfólio, pernas). None fora
-    da estratégia; a matemática fica em MartingaleRunner.ladder()."""
+    """Escada do martingale hedge (params, pico, stop de portfólio, pernas) + planilha
+    CoinTech2u com a linha da equity atual. None fora da estratégia; a matemática fica
+    em MartingaleRunner.ladder()."""
     runner = getattr(bot, "martingale", None)
     if runner is None or not hasattr(runner, "ladder"):
         return None
+    equity = _safe_float(summary.get("last_balance")) or None
     try:
-        return runner.ladder(positions, _safe_float(summary.get("last_balance")) or None)
+        out = runner.ladder(positions, equity)
     except Exception:
         return None
+    out["sheet"] = {"rows": COINTECH2U_SHEET, "current": sheet_row_index(equity),
+                    "green": COINTECH2U_GREEN, "red": COINTECH2U_RED}
+    return out
 
 
 def collect_engine(bot) -> Dict[str, Any]:
