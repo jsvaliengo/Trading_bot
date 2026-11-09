@@ -484,3 +484,112 @@ def test_collect_forward_test_donchian_mantem_filtro_de_estrategia_e_janela(monk
     assert out["trades"] == 1
     assert out["net_usd"] == pytest.approx(-4.0)
     assert out["start"] == "2026-10-24T23:43:07+00:00"
+
+
+# ---------- /api/pnl_report: aba "Ganhos e Perdas de Futuros" ----------
+
+
+_PNL_ROWS = [
+    # 02/11 23:30 UTC = 20:30 BRT → dia 2026-11-02 em BRT, 2026-11-02 em UTC
+    {"symbol": "ADAUSDT", "side": "LONG", "exit_at": "2026-11-02T23:30:00+00:00", "pnl_net": 3.0, "fees": 0.2, "funding": 0.0, "qty": 10, "entry_price": 0.5, "exit_price": 0.53, "close_reason": "TP"},
+    # 03/11 01:00 UTC = 02/11 22:00 BRT → dia 2026-11-02 em BRT (virada de dia muda o bucket)
+    {"symbol": "ADAUSDT", "side": "LONG", "exit_at": "2026-11-03T01:00:00+00:00", "pnl_net": -1.0, "fees": 0.1, "funding": -0.05, "qty": 10, "entry_price": 0.5, "exit_price": 0.49, "close_reason": "stop"},
+    {"symbol": "ETHUSDT", "side": "SHORT", "exit_at": "2026-11-05T12:00:00+00:00", "pnl_net": -4.0, "fees": 0.5, "funding": 0.0, "qty": 0.1, "entry_price": 2000, "exit_price": 2040, "close_reason": "stop"},
+    # fora do período pedido (antes): entra só no "acumulado" e na equity inicial
+    {"symbol": "BTCUSDT", "side": "LONG", "exit_at": "2026-10-20T12:00:00+00:00", "pnl_net": 10.0, "fees": 1.0, "funding": 0.0, "qty": 0.001, "entry_price": 60000, "exit_price": 70000, "close_reason": "TP"},
+]
+
+
+def _pnl_bot(exchange=None, rows=_PNL_ROWS):
+    store = SimpleNamespace(closed_trades=lambda strategy_type=None, limit=2000: [dict(r) for r in rows])
+    return SimpleNamespace(trade_store=store, initial_capital=100.0, exchange=exchange)
+
+
+@pytest.fixture
+def _brt(monkeypatch):
+    monkeypatch.setattr(global_config, "DAILY_PNL_TZ_OFFSET_HOURS", -3.0, raising=False)
+    monkeypatch.setattr(global_config, "SIMULATED_BALANCE_USD", 0.0, raising=False)
+
+
+def test_pnl_report_aggregates_period_in_trading_day(_brt):
+    from trading_bot.web.pnl_report import build_report
+
+    out = build_report(_pnl_bot(), "2026-11-01", "2026-11-07")
+    t = out["totals"]
+    assert (t["profit"], t["loss"], t["net"], t["trades"], t["wins"]) == (3.0, -5.0, -2.0, 3, 1)
+    assert t["fees"] == pytest.approx(0.8) and t["funding"] == pytest.approx(-0.05)
+    assert (t["best"], t["worst"]) == (3.0, -4.0)
+    # equity inicial = capital 100 + 10 do trade anterior; % = −2 / 110
+    assert t["start_equity"] == 110.0 and t["pct"] == pytest.approx(-2 / 110 * 100, rel=1e-4)
+    # dia de trading BRT: o trade de 03/11 01:00 UTC cai em 02/11
+    assert [(d["day"], d["net"], d["trades"]) for d in out["daily"]] == [("2026-11-02", 2.0, 2), ("2026-11-05", -4.0, 1)]
+    assert [(c["day"], c["value"]) for c in out["cumulative"]] == [("2026-11-02", 2.0), ("2026-11-05", -2.0)]
+    assert [(s["symbol"], s["net"], s["trades"], s["win_rate"]) for s in out["by_symbol"]] == [("ETHUSDT", -4.0, 1, 0.0), ("ADAUSDT", 2.0, 2, 50.0)]
+    assert [tr["symbol"] for tr in out["trades"]] == ["ETHUSDT", "ADAUSDT", "ADAUSDT"]  # saída desc
+    assert out["windows"]["all"]["usd"] == 8.0
+
+
+def test_pnl_report_without_exchange_or_store_is_empty_but_ok(_brt):
+    from trading_bot.web.pnl_report import build_report
+
+    out = build_report(SimpleNamespace(), None, None)
+    assert out["totals"]["trades"] == 0 and out["daily"] == [] and out["trades"] == []
+    assert out["income"] == [] and out["income_ok"] is False
+    assert out["reference"] == {"BTCUSDT": [], "BNBUSDT": []} and out["assets"]["ok"] is False
+    assert out["from"] <= out["to"] == out["today"]
+
+
+def test_pnl_report_income_failure_keeps_page_alive(_brt):
+    from trading_bot.web.pnl_report import build_report
+
+    def boom(**kw):
+        raise RuntimeError("binance down")
+
+    ex = SimpleNamespace(get_income_history=boom, get_account_info=lambda: {"wallet_balance": 55.5}, market_client=None)
+    out = build_report(_pnl_bot(ex), "2026-11-01", "2026-11-07")
+    assert out["income_ok"] is False and out["income"] == []
+    assert out["assets"] == {"ok": True, "items": [{"asset": "USDT", "balance": 55.5}], "total": 55.5}
+
+
+def test_pnl_report_income_and_reference_from_binance(_brt):
+    from trading_bot.web import pnl_report
+
+    pnl_report._ref_cache.update(key=None)
+    income = [
+        {"time": 1793664000000, "incomeType": "FUNDING_FEE", "symbol": "ADAUSDT", "income": "-0.01"},  # 03/11 00:00 UTC
+        {"time": 1793664000000, "incomeType": "COMMISSION", "symbol": "ADAUSDT", "income": "-0.2"},
+        {"time": 1700000000000, "incomeType": "TRANSFER", "symbol": "", "income": "100"},  # fora da janela
+    ]
+    klines = [[1793491200000, 0, 0, 0, "100", 0], [1793577600000, 0, 0, 0, "110", 0]]
+    ex = SimpleNamespace(
+        get_income_history=lambda **kw: income,
+        get_account_info=lambda: {"wallet_balance": 10.0},
+        market_client=SimpleNamespace(futures_klines=lambda **kw: klines),
+    )
+    out = pnl_report.build_report(_pnl_bot(ex), "2026-11-01", "2026-11-07")
+    assert out["income_ok"] is True and len(out["income"]) == 2
+    assert out["income_totals"] == {"REALIZED_PNL": 0.0, "COMMISSION": -0.2, "FUNDING_FEE": -0.01, "TRANSFER": 0.0}
+    assert [r["pct"] for r in out["reference"]["BTCUSDT"]] == [0.0, 10.0]
+
+
+def test_pnl_report_route_requires_auth_and_ignores_bad_dates(_brt):
+    from trading_bot.web.app import create_app
+
+    bot = _make_bot()
+    bot.trade_store = _pnl_bot().trade_store
+    app, _ = create_app(bot)
+    client = app.test_client()
+    assert client.get("/api/pnl_report").status_code == 401
+    r = client.get("/api/pnl_report?from=lixo&to=2026-11-07", headers=_basic_auth("admin", "secret"))
+    assert r.status_code == 200
+    body = r.get_json()
+    assert body["to"] == "2026-11-07" and body["from"] == "2026-11-01"
+    assert body["totals"]["trades"] == 3
+
+
+def test_pnl_report_days_preset_anchors_on_bot_trading_day(_brt):
+    from trading_bot.web.pnl_report import build_report
+
+    out = build_report(_pnl_bot(), None, None, days="30")
+    assert out["to"] == out["today"] and out["from"] == (__import__("datetime").date.fromisoformat(out["today"]) - __import__("datetime").timedelta(days=29)).isoformat()
+    assert build_report(_pnl_bot(), None, None, days="lixo")["from"] == (__import__("datetime").date.fromisoformat(out["today"]) - __import__("datetime").timedelta(days=6)).isoformat()
