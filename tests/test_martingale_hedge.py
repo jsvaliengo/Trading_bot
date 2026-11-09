@@ -66,6 +66,7 @@ class _Ex:
         self.orders = []
         self.set_leverage = MagicMock(return_value=True)
         self.cancel_open_orders = MagicMock(return_value=True)
+        self.min_notionals = {}   # minNotional por símbolo (override do default)
 
     def set_hedge_mode(self):
         return self.hedge
@@ -76,8 +77,8 @@ class _Ex:
     def get_open_positions(self, force_refresh=False):
         return [dict(p) for p in self.positions]
 
-    def get_symbol_info(self, _s):
-        return {"minNotional": self.min_notional, "quantityPrecision": 2, "pricePrecision": 4}
+    def get_symbol_info(self, s):
+        return {"minNotional": self.min_notionals.get(s, self.min_notional), "quantityPrecision": 2, "pricePrecision": 4}
 
     def get_symbol_ticker(self, _s):
         return {"price": str(self.price)}
@@ -319,6 +320,181 @@ def test_leg_state_survives_restart_via_state():
     leg = r2.pairs["ADAUSDT"].legs["LONG"]
     assert (leg.level, leg.last_fill) == (2, 98.5)                        # restaurado do state, não inferido
     assert len([o for o in ex.orders if o["position_side"] == "LONG"]) == 2   # sem reabrir/adicionar (SHORT bateu TP e reabriu)
+
+
+# ───────────── seleção automática de pares pelo ranking ─────────────
+def _sc(color, reasons=()):
+    # números coerentes com a cor pra rank_score ordenar; adx varia pra desempatar na ordem dada
+    vol, adx, mv = {"green": (2.0, 15.0, 5.0), "yellow": (4.0, 28.0, 12.0), "red": (6.0, 40.0, 30.0)}[color]
+    return {"color": color, "vol_pct": vol, "adx": adx, "max_move_pct": mv, "volume_usd": 200e6, "reasons": list(reasons)}
+
+
+def _scored(r, **colors):
+    """Instala um cache de score falso no runner: BNB="green", ADA="red"…; adx cresce na ordem dada (desempate)."""
+    scores = {}
+    for i, (base, color) in enumerate(colors.items()):
+        sc = _sc(color, ["adx 40 (>35)"] if color == "red" else [])
+        sc["adx"] += i * 0.1
+        scores[base + "USDT"] = sc
+    r.score_cache = SimpleNamespace(get=lambda: {"scores": scores, "updated_at": "2026-11-09T12:00:00+00:00"})
+    return scores
+
+
+def _tp_closed_all(ex, r):
+    """Simula as pernas fechadas por TP: exchange sem posição e pernas locais resetadas."""
+    ex.positions = []
+    for plan in r.pairs.values():
+        for leg in plan.legs.values():
+            leg.reset()
+
+
+@pytest.fixture
+def _one_slot_auto(monkeypatch):
+    # banca 100 → faixa 90–150 = 1 moeda; auto ligado, sem cooldown
+    monkeypatch.setattr(config, "MARTINGALE_AUTO_PAIRS", True)
+    monkeypatch.setattr(config, "MARTINGALE_PAIR_SWAP_COOLDOWN_MINUTES", 0)
+
+
+def _runner(ex, pairs=("ADAUSDT",)):
+    bot = _bot(ex, pairs)
+    r = mg.MartingaleRunner(bot)
+    bot.martingale = r
+    assert r.start()
+    return bot, r
+
+
+def test_swaps_red_pair_for_best_green_when_both_legs_are_flat(_one_slot_auto, caplog):
+    ex = _Ex(balance=100.0, min_notional=1.0)
+    bot, r = _runner(ex)
+    _scored(r, BNB="green", ADA="red", TRX="yellow")
+    caplog.set_level("INFO")
+    r.tick()
+    assert list(r.pairs) == ["BNBUSDT"]
+    assert {o["symbol"] for o in ex.orders} == {"BNBUSDT"} and len(ex.orders) == 2      # base LONG+SHORT no par novo
+    ex.set_leverage.assert_any_call("BNBUSDT", config.MARTINGALE_LEVERAGE)
+    assert "trocando slot ADAUSDT → BNBUSDT" in caplog.text and "ADA vermelho: adx 40 (>35)" in caplog.text
+    assert "BNB verde, 1º no ranking" in caplog.text
+    assert "ADAUSDT → BNBUSDT" in bot.telegram.send_message.call_args[0][0]
+
+
+def test_never_swaps_while_one_leg_is_open(_one_slot_auto):
+    ex = _Ex(balance=100.0, min_notional=1.0)
+    bot, r = _runner(ex)
+    r.tick()                                                   # abre LONG e SHORT em ADA
+    ex.positions = [p for p in ex.positions if p["side"] == "SHORT"]   # LONG fechada fora; SHORT segue aberta
+    _scored(r, BNB="green", ADA="red")
+    r.tick()
+    assert list(r.pairs) == ["ADAUSDT"] and all(o["symbol"] == "ADAUSDT" for o in ex.orders)
+    bot.telegram.send_message.assert_not_called()
+
+
+def test_transient_empty_positions_read_does_not_swap(_one_slot_auto):
+    ex = _Ex(balance=100.0, min_notional=1.0)
+    bot, r = _runner(ex)
+    r.tick()                                                   # ADA LONG+SHORT abertas (pernas locais nível 1)
+    real = ex.positions
+    ex.positions = []                                          # leitura vazia transitória da exchange
+    _scored(r, BNB="green", ADA="red")
+    r.tick()
+    assert list(r.pairs) == ["ADAUSDT"]                        # pernas locais ainda não zeradas: não troca
+    ex.positions = real
+
+
+@pytest.mark.parametrize("current", ["green", "yellow"])
+def test_keeps_current_pair_when_green_or_yellow(_one_slot_auto, current):
+    ex = _Ex(balance=100.0, min_notional=1.0)
+    bot, r = _runner(ex)
+    _scored(r, BNB="green", ADA=current)        # BNB tem número melhor, mas ADA não está vermelho
+    r.tick()
+    assert list(r.pairs) == ["ADAUSDT"]
+
+
+def test_keeps_current_pair_without_score(_one_slot_auto):
+    ex = _Ex(balance=100.0, min_notional=1.0)
+    bot, r = _runner(ex)
+    r.tick()
+    assert list(r.pairs) == ["ADAUSDT"]        # cache vazio (1ª rodada ainda não terminou)
+    r.score_cache = SimpleNamespace(get=lambda: {"scores": {"BNBUSDT": _sc("green")}, "updated_at": None})
+    _tp_closed_all(ex, r)
+    r.tick()
+    assert list(r.pairs) == ["ADAUSDT"]        # ADA sem score (unknown): mantém
+
+
+def test_swap_cooldown_blocks_ping_pong(_one_slot_auto, monkeypatch):
+    monkeypatch.setattr(config, "MARTINGALE_PAIR_SWAP_COOLDOWN_MINUTES", 360)
+    ex = _Ex(balance=100.0, min_notional=1.0)
+    bot, r = _runner(ex)
+    _scored(r, BNB="green", ADA="red")
+    r.tick()
+    assert list(r.pairs) == ["BNBUSDT"]        # par inicial (since=0) troca na hora
+    _tp_closed_all(ex, r)
+    _scored(r, ETH="green", BNB="red")
+    r.tick()
+    assert list(r.pairs) == ["BNBUSDT"]        # BNB acabou de ocupar a vaga: 6h de cooldown
+    r.pairs["BNBUSDT"].since -= 361 * 60
+    _tp_closed_all(ex, r)
+    r.tick()
+    assert list(r.pairs) == ["ETHUSDT"]
+
+
+def test_fills_slots_of_current_sheet_row_and_shrinks_when_row_drops(_one_slot_auto):
+    ex = _Ex(balance=300.0, min_notional=1.0)   # faixa 300 → 2 moedas
+    bot, r = _runner(ex)
+    _scored(r, TRX="green", BNB="yellow", ADA="red")
+    r.tick()
+    assert list(r.pairs) == ["TRXUSDT", "BNBUSDT"]   # ADA vermelho sai, TRX entra; 2ª vaga vai pro próximo (BNB)
+    _tp_closed_all(ex, r)
+    ex.balance = 250.0                               # faixa 90–300 = 1 moeda (sem bater o stop de 20%): solta o pior zerado
+    r.tick()
+    assert list(r.pairs) == ["TRXUSDT"]
+
+
+def test_skips_candidates_already_in_slot_with_open_position_or_below_min_notional(_one_slot_auto):
+    ex = _Ex(balance=300.0, min_notional=0.5)   # faixa 300 → 2 vagas, ambas ocupadas
+    ex.min_notionals["ETHUSDT"] = 1000.0
+    bot, r = _runner(ex, pairs=("ADAUSDT", "TRXUSDT"))
+    ex.positions = [{"symbol": "BNBUSDT", "side": "LONG", "entry_price": 1.0, "quantity": 1.0, "unrealized_pnl": 0.0, "mark_price": 1.0}]
+    _scored(r, TRX="green", BNB="green", ETH="green", LINK="green", ADA="red")
+    r.tick()
+    # TRX já ocupa vaga, BNB tem posição órfã na exchange, ETH não cabe na 1ª ordem → LINK
+    assert "LINKUSDT" in r.pairs and "ADAUSDT" not in r.pairs and "ETHUSDT" not in r.pairs and "BNBUSDT" not in r.pairs
+
+
+def test_pairs_persist_in_state_and_win_over_env_on_restart(_one_slot_auto):
+    from trading_bot.core.bot_state_serde import BotStatePersistence
+
+    ex = _Ex(balance=100.0, min_notional=1.0)
+    bot, r = _runner(ex)
+    _scored(r, BNB="green", ADA="red")
+    r.tick()
+    bot.kill_switch = None
+    payload = BotStatePersistence(bot).build_payload()
+    assert payload["martingale_pairs"] == ["BNBUSDT"]
+    bot2 = _bot(_Ex(balance=100.0, min_notional=1.0), pairs=("ADAUSDT",))
+    r2 = mg.MartingaleRunner(bot2)
+    r2.saved_pairs = payload["martingale_pairs"]   # bot.load_state() guarda state['martingale_pairs'] aqui
+    assert r2.start() and list(r2.pairs) == ["BNBUSDT"]
+
+
+def test_auto_pairs_off_pins_env_pairs(monkeypatch):
+    monkeypatch.setattr(config, "MARTINGALE_AUTO_PAIRS", False)
+    monkeypatch.setattr(config, "MARTINGALE_PAIR_SWAP_COOLDOWN_MINUTES", 0)
+    ex = _Ex(balance=100.0, min_notional=1.0)
+    bot = _bot(ex)
+    r = mg.MartingaleRunner(bot)
+    r.saved_pairs = ["BNBUSDT"]
+    assert r.start() and list(r.pairs) == ["ADAUSDT"] and r.score_cache is None
+    _scored(r, BNB="green", ADA="red")
+    r.tick()
+    assert list(r.pairs) == ["ADAUSDT"]
+
+
+def test_dashboard_reads_scores_from_runner_cache(_one_slot_auto):
+    from trading_bot.web import data as dashboard_data
+
+    bot, r = _runner(_Ex(balance=100.0, min_notional=1.0))
+    scores = _scored(r, ADA="green")
+    assert dashboard_data._pair_scores(bot)["scores"] == scores
 
 
 # ───────────── integração no bot ─────────────

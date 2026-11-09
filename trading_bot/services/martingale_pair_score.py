@@ -88,6 +88,56 @@ def score_pair(klines_1d: List[List[Any]], klines_4h: List[List[Any]], cfg=confi
     return out
 
 
+# Planilha CoinTech2u "Binance Estratégia Padrão": (rótulo da banca, banca mínima USDT,
+# estratégia, 1ª ordem long, 1ª ordem short, alavancagem, stop loss, double first, moedas).
+# Faixa = da banca mínima até a próxima linha; abaixo de 90 nenhuma.
+COINTECH2U_SHEET = [
+    ("90–150", 90, "Valiengo's Strategy", 3, 3, 20, 180, True, 1),
+    ("300", 300, "Valiengo's Strategy", 3, 3, 20, 180, True, 2),
+    ("500", 500, "Valiengo's Strategy", 3, 3, 20, 180, True, 3),
+    ("1.000", 1000, "Valiengo's Strategy", 3, 3, 20, 180, True, 6),
+    ("2.000", 2000, "Valiengo's Strategy", 3, 3, 20, 180, True, 9),
+    ("3.000", 3000, "Valiengo's Strategy", 10, 10, 20, 600, False, 9),
+    ("4.000", 4000, "Valiengo's Strategy", 12, 12, 20, 720, False, 10),
+    ("5.000", 5000, "Valiengo's Strategy", 15, 15, 20, 900, False, 11),
+    ("6.000", 6000, "Valiengo's Strategy", 17, 17, 20, 1020, True, 11),
+    ("7.000", 7000, "Valiengo's Strategy", 20, 20, 20, 1200, True, 11),
+    ("8.000", 8000, "Valiengo's Strategy", 21, 21, 20, 1260, True, 12),
+    ("9.000", 9000, "Valiengo's Strategy", 24, 24, 20, 1440, True, 12),
+    ("10.000", 10000, "Valiengo's Strategy", 28, 28, 20, 1680, True, 12),
+]
+# Verdes incluem as moedas que a planilha só libera nas faixas maiores (UNI ≥3k, BNB ≥4k,
+# LTC…AAVE ≥6k, AVAX ≥7k).
+COINTECH2U_GREEN = ("ADA TRX ARB XRP APT FIL SUSHI ATOM CFX 1INCH MASK THETA OP COMP CHZ NEAR SAND CRV DOT "
+                    "UNI BNB LTC BCH LINK ETC ETH AAVE AVAX").split()
+COINTECH2U_RED = "NOT 1000PEPE SNX SUI 1000SHIB DOGE APE SOL".split()
+
+
+def sheet_row_index(equity: Optional[float]) -> Optional[int]:
+    """Índice da linha da planilha pra equity (None abaixo da 1ª faixa ou sem equity)."""
+    if equity is None:
+        return None
+    idx = None
+    for i, row in enumerate(COINTECH2U_SHEET):
+        if equity >= row[1]:
+            idx = i
+    return idx
+
+
+_COLOR_RANK = {"green": 0, "yellow": 1, "red": 2, "unknown": 3}
+
+
+def rank_pairs(scores: Dict[str, Dict[str, Any]]) -> List[str]:
+    """Símbolos do melhor pro pior: cor (verde<amarelo<vermelho<sem dado), depois rank_score
+    (menor = melhor). As vermelhas fixas da planilha (COINTECH2U_RED) vão sempre pro fim."""
+    def key(sym: str):
+        sc = scores[sym]
+        rs = rank_score(sc)
+        return (sym.replace("USDT", "") in COINTECH2U_RED, _COLOR_RANK.get(sc.get("color"), 3),
+                float("inf") if rs is None else rs, sym)
+    return sorted(scores, key=key)
+
+
 class PairScoreCache:
     """Recalcula o score de todos os símbolos a cada `refresh_minutes` numa thread daemon
     iniciada no 1º get(). get() nunca bloqueia: devolve {} até a 1ª rodada terminar.
