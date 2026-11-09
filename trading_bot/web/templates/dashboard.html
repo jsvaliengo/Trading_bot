@@ -120,14 +120,14 @@
     </section>
 
     <!-- 3b. Escada martingale (só com TRADING_BOT_STRATEGY=martingale_hedge) -->
-    <details class="card" open id="mg-card" hidden>
+    <details class="card" id="mg-card" hidden>
         <summary><h2>Escada martingale</h2><span class="cs" id="mg-stop">—</span></summary>
         <p class="cs" id="mg-params">—</p>
         <div id="mg-list"></div>
     </details>
 
     <!-- 3c. Ganhos e Perdas de Futuros (estilo app da Binance; dados do TradeStore + income da Binance) -->
-    <details class="card pnl" open id="pnl-card">
+    <details class="card pnl" id="pnl-card">
         <summary><h2>Ganhos e Perdas de Futuros</h2><span class="cs" id="pnl-sub">—</span></summary>
         <div class="chips" role="tablist" aria-label="Mercado">
             <button class="chip on" role="tab" aria-selected="true">USDT-M</button>
@@ -229,7 +229,7 @@
 
     <section class="two">
         <!-- Equity + drawdown -->
-        <details class="card" open>
+        <details class="card" id="eq-card">
             <summary><h2>Equity</h2><span class="cs" id="eq-sub">—</span></summary>
             <div class="chips" role="tablist" aria-label="Janela do gráfico">
                 <button class="chip" role="tab" data-range="all">Tudo</button>
@@ -243,7 +243,7 @@
         </details>
 
         <!-- Performance & risco -->
-        <details class="card" open>
+        <details class="card" id="perf-card">
             <summary><h2>Performance e risco</h2><span class="cs" id="perf-sub">—</span></summary>
             <table class="kv" id="perf">
                 <thead><tr><th scope="col"></th><th scope="col" class="r">Ao vivo</th><th scope="col" class="r">Pesquisa</th></tr></thead>
@@ -277,14 +277,14 @@
         </details>
 
         <!-- Saúde -->
-        <details class="card">
+        <details class="card" id="health-card">
             <summary><h2>Saúde</h2><span class="badge" id="hl-badge">—</span></summary>
             <ul class="hlist" id="health-list"></ul>
         </details>
     </section>
 
     <!-- Planilha de banca (no lugar de Trades, só no martingale) -->
-    <details class="card" open id="sheet-card" hidden>
+    <details class="card" id="sheet-card" hidden>
         <summary><h2>Planilha — Binance Estratégia Padrão</h2><span class="cs" id="sheet-sub">—</span></summary>
         <div class="table-scroll">
             <table class="table sheet" id="sheet-table">
@@ -298,7 +298,7 @@
     </details>
 
     <!-- Trades -->
-    <details class="card" open id="trades-card">
+    <details class="card" id="trades-card">
         <summary><h2>Trades</h2><span class="cs" id="tr-sub">—</span></summary>
         <div class="filters" id="filters">
             <label>Estratégia <select id="f-strategy"><option value="donchian_4h">Donchian 4h</option><option value="all">todas</option><option value="other">outras</option></select></label>
@@ -341,7 +341,7 @@
                 <div class="cv cv-r"><canvas id="mfe-chart" role="img" aria-label="MFE por trade contra R realizado"></canvas></div>
             </div>
         </details>
-        <details class="card">
+        <details class="card" id="cal-card">
             <summary><h2>Calendário</h2><span class="badge" id="cal-sum">—</span></summary>
             <p class="cs" id="cal-sub">dia de trading em BRT, só trades Donchian</p>
             <div class="cal" id="calendar"></div>
