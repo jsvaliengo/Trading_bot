@@ -899,6 +899,8 @@ def test_index_has_cointech2u_sheet_card_and_hidden_cards():
     html = client.get("/").data.decode()
     assert 'id="sheet-card" hidden' in html and "Planilha — Binance Estratégia Padrão" in html and "CoinTech2u" not in html
     assert 'id="eng-card"' in html and 'id="trades-card"' in html
+    for i in ("tile-last-bar", "tile-next-bar", "rdist-card", "cal-sub"):
+        assert f'id="{i}"' in html
 
 
 def test_live_and_pnl_report_expose_fx(_brt, monkeypatch):

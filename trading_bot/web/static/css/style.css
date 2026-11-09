@@ -129,6 +129,8 @@ details.card > :not(summary):first-of-type { margin-top:10px; }
 
 /* Status: a linha que responde "está vivo? onde estou?" */
 .status { display:grid; grid-template-columns:repeat(8, minmax(0,1fr)); gap:1px; background:var(--border); border:1px solid var(--border); border-radius:10px; overflow:hidden; }
+/* Fora do Donchian somem 2 tiles; :where mantém a especificidade para os breakpoints abaixo vencerem. */
+.status:where(:has(.tile[hidden])) { grid-template-columns:repeat(6, minmax(0,1fr)); }
 .tile { background:var(--bg-card); padding:12px 14px 10px; display:flex; flex-direction:column; gap:2px; min-width:0; }
 .tl { font-size:11.5px; color:var(--text-muted); white-space:nowrap; }
 .tv { font-size:22px; font-weight:500; letter-spacing:-.02em; line-height:1.15; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
@@ -262,7 +264,7 @@ details.card > :not(summary):first-of-type { margin-top:10px; }
 /* Responsivo */
 @media (max-width: 1180px) { .status { grid-template-columns:repeat(4, minmax(0,1fr)); } }
 /* Fora do Donchian o Motor some e a Saúde ocupa a linha inteira em vez de deixar um buraco. */
-#eng-card[hidden] + .card { grid-column:1 / -1; }
+#eng-card[hidden] + .card, #rdist-card[hidden] + .card { grid-column:1 / -1; }
 @media (max-width: 1100px) { .two { grid-template-columns:1fr; } }
 @media (max-width: 860px) {
     .tracks { grid-template-columns:repeat(2, minmax(0,1fr)); }
