@@ -17,6 +17,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+import re
 import requests
 
 from trading_bot.core.config import config as global_config
@@ -183,11 +184,24 @@ def test_martingale_card_is_collapsible_details():
     _login(client)
     html = client.get("/").data.decode()
     card = html.split('id="mg-card"')[1].split("</details>")[0]
-    assert '<details class="card" open id="mg-card" hidden>' in html
+    assert '<details class="card" id="mg-card" hidden>' in html
     assert "<summary><h2>Escada martingale</h2>" in card and 'id="mg-stop"' in card.split("</summary>")[0]
     assert 'id="mg-params"' in card.split("</summary>")[1] and 'id="mg-list"' in card
     js = open("trading_bot/web/static/js/main.js", encoding="utf-8").read()
     assert "'tradingbot-open:' + d.id" in js
+
+
+def test_all_cards_start_closed_and_have_id_for_persistence():
+    """Todo <details class="card"> nasce fechado (sem `open`) e tem id, para o localStorage lembrar o que o usuário abriu."""
+    from trading_bot.web.app import create_app
+    app, _ = create_app(_make_bot())
+    client = app.test_client()
+    _login(client)
+    html = client.get("/").data.decode()
+    tags = re.findall(r'<details class="card[^"]*"[^>]*>', html)
+    assert len(tags) >= 10
+    assert not [t for t in tags if re.search(r"\bopen\b", t)]
+    assert not [t for t in tags if 'id="' not in t]
 
 
 def test_pages_default_to_dark_theme_and_apply_saved_light_inline():
