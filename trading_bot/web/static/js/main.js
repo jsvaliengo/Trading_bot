@@ -8,6 +8,14 @@
 (function () {
     'use strict';
 
+    // Sessão expirou: qualquer /api/* com 401 manda pro login e volta pra cá depois.
+    const rawFetch = window.fetch.bind(window);
+    window.fetch = async (url, opts) => {
+        const r = await rawFetch(url, opts);
+        if (r.status === 401 && String(url).startsWith('/api/')) location.href = '/login?next=' + encodeURIComponent(location.pathname);
+        return r;
+    };
+
     const $ = (id) => document.getElementById(id);
     const $$ = (sel) => Array.from(document.querySelectorAll(sel));
     const cssv = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();

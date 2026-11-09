@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="color-scheme" content="dark light">
+    <title>Entrar · Trading Bot</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/login.css') }}">
+</head>
+<body class="login-body">
+<main class="login-card" aria-labelledby="login-title">
+    <div class="login-brand">
+        <span class="login-logo" aria-hidden="true">TB</span>
+        <div>
+            <h1 class="login-title" id="login-title">Trading Bot</h1>
+            <span class="env env-{{ environment }}">{{ environment }}</span>
+        </div>
+    </div>
+
+    {% if error %}
+    <p class="login-error" role="alert">{{ error }}</p>
+    {% endif %}
+
+    <form method="post" action="/login" class="login-form" novalidate>
+        <input type="hidden" name="csrf" value="{{ csrf_token }}">
+        <input type="hidden" name="next" value="{{ next }}">
+        <label class="login-field">
+            <span>Usuário</span>
+            <input type="text" name="username" value="{{ username }}" autocomplete="username" autocapitalize="none" spellcheck="false" required {% if not username %}autofocus{% endif %}>
+        </label>
+        <label class="login-field">
+            <span>Senha</span>
+            <input type="password" name="password" autocomplete="current-password" required {% if username %}autofocus{% endif %}>
+        </label>
+        <label class="login-remember">
+            <input type="checkbox" name="remember" value="1" checked>
+            <span>Manter conectado neste aparelho</span>
+        </label>
+        <button type="submit" class="btn login-submit">Entrar</button>
+    </form>
+</main>
+</body>
+</html>
