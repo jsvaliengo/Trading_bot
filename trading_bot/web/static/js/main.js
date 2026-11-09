@@ -356,7 +356,8 @@
     function renderEngine(e, positions) {
         const has = e && e.params;
         $('eng-params').textContent = has ? `entrada ${e.params.entry_bars} barras · saída ${e.params.exit_bars} · stop ${e.params.stop_atr_mult}×ATR(${e.params.atr_bars}) · risco ${String(e.params.risk_percent).replace('.', ',')}% por trade · máx. ${e.params.max_positions} posições, ${e.params.max_gross_mult}× equity bruto` : 'estratégia Donchian não ativa neste processo';
-        $('eng-card').hidden = !has;
+        $('eng-card').hidden = $('tile-last-bar').hidden = $('tile-next-bar').hidden = $('rdist-card').hidden = !has;
+        $('cal-sub').textContent = has ? 'dia de trading em BRT, só trades Donchian' : 'dia de trading em BRT';
         if (!has) { $('eng-sub').textContent = '—'; $('eng-list').innerHTML = ''; return; }
         const c = e.counters || {};
         const skips = e.skips || {}; const nSkip = sum(Object.values(skips));

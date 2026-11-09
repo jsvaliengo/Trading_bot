@@ -51,12 +51,12 @@
             <b class="tv" id="st-pos">—</b>
             <span class="tf" id="st-pos-f">—</span>
         </div>
-        <div class="tile">
+        <div class="tile" id="tile-last-bar">
             <span class="tl">Última barra</span>
             <b class="tv" id="st-bar">—</b>
             <span class="tf" id="st-bar-f">—</span>
         </div>
-        <div class="tile">
+        <div class="tile" id="tile-next-bar">
             <span class="tl">Próxima barra</span>
             <b class="tv" id="st-next">—</b>
             <span class="tf" id="st-next-f">—</span>
@@ -326,7 +326,7 @@
     </details>
 
     <section class="two">
-        <details class="card">
+        <details class="card" id="rdist-card">
             <summary><h2>Distribuição de R e excursões</h2><span class="badge" id="rh-n">—</span></summary>
             <p class="cs">Trend following paga vários −1R para pegar poucos trades grandes. À direita, até onde cada trade andou a favor (MFE) contra o resultado em R.</p>
             <div class="two-cv">
@@ -336,7 +336,7 @@
         </details>
         <details class="card">
             <summary><h2>Calendário</h2><span class="badge" id="cal-sum">—</span></summary>
-            <p class="cs">dia de trading em BRT, só trades Donchian</p>
+            <p class="cs" id="cal-sub">dia de trading em BRT, só trades Donchian</p>
             <div class="cal" id="calendar"></div>
             <p class="legend"><i class="sw sw-neg"></i> perda <i class="sw sw-zero"></i> sem trade <i class="sw sw-pos"></i> ganho</p>
             <div class="chips chips-cal" role="tablist" aria-label="Agregado">
