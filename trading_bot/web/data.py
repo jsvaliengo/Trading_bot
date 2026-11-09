@@ -129,19 +129,19 @@ def _forward_test_restart() -> Optional[str]:
 # estratégia, 1ª ordem long, 1ª ordem short, alavancagem, stop loss, double first, moedas).
 # Faixa = da banca mínima até a próxima linha; abaixo de 90 nenhuma.
 COINTECH2U_SHEET = [
-    ("90–150", 90, "Millionaire Strategy 9", 3, 3, 20, 180, True, 1),
-    ("300", 300, "Millionaire Strategy 9", 3, 3, 20, 180, True, 2),
-    ("500", 500, "Millionaire Strategy 9", 3, 3, 20, 180, True, 3),
-    ("1.000", 1000, "Millionaire Strategy 9", 3, 3, 20, 180, True, 6),
-    ("2.000", 2000, "Millionaire Strategy 9", 3, 3, 20, 180, True, 9),
-    ("3.000", 3000, "Millionaire Strategy 9", 10, 10, 20, 600, False, 9),
-    ("4.000", 4000, "Millionaire Strategy 9", 12, 12, 20, 720, False, 10),
-    ("5.000", 5000, "Millionaire Strategy 9", 15, 15, 20, 900, False, 11),
-    ("6.000", 6000, "Millionaire Strategy 9", 17, 17, 20, 1020, True, 11),
-    ("7.000", 7000, "Millionaire Strategy 9", 20, 20, 20, 1200, True, 11),
-    ("8.000", 8000, "Millionaire Strategy 9", 21, 21, 20, 1260, True, 12),
-    ("9.000", 9000, "Millionaire Strategy 9", 24, 24, 20, 1440, True, 12),
-    ("10.000", 10000, "Millionaire Strategy 9", 28, 28, 20, 1680, True, 12),
+    ("90–150", 90, "Valiengo's Strategy", 3, 3, 20, 180, True, 1),
+    ("300", 300, "Valiengo's Strategy", 3, 3, 20, 180, True, 2),
+    ("500", 500, "Valiengo's Strategy", 3, 3, 20, 180, True, 3),
+    ("1.000", 1000, "Valiengo's Strategy", 3, 3, 20, 180, True, 6),
+    ("2.000", 2000, "Valiengo's Strategy", 3, 3, 20, 180, True, 9),
+    ("3.000", 3000, "Valiengo's Strategy", 10, 10, 20, 600, False, 9),
+    ("4.000", 4000, "Valiengo's Strategy", 12, 12, 20, 720, False, 10),
+    ("5.000", 5000, "Valiengo's Strategy", 15, 15, 20, 900, False, 11),
+    ("6.000", 6000, "Valiengo's Strategy", 17, 17, 20, 1020, True, 11),
+    ("7.000", 7000, "Valiengo's Strategy", 20, 20, 20, 1200, True, 11),
+    ("8.000", 8000, "Valiengo's Strategy", 21, 21, 20, 1260, True, 12),
+    ("9.000", 9000, "Valiengo's Strategy", 24, 24, 20, 1440, True, 12),
+    ("10.000", 10000, "Valiengo's Strategy", 28, 28, 20, 1680, True, 12),
 ]
 # Verdes incluem as moedas que a planilha só libera nas faixas maiores (UNI ≥3k, BNB ≥4k,
 # LTC…AAVE ≥6k, AVAX ≥7k).

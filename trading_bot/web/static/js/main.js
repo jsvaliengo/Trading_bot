@@ -401,7 +401,7 @@
         </div>`).join('') || '<p class="empty">Nenhum par na escada (estratégia não iniciou ou nenhum par cabe na ordem base).</p>';
     }
 
-    // Planilha CoinTech2u: linha da equity atual destacada, moedas da planilha com as do bot marcadas.
+    // Planilha de banca: linha da equity atual destacada, moedas da planilha com as do bot marcadas.
     function renderSheet(sh, botPairs) {
         if (!sh) return;
         const eq = state.live && state.live.summary && state.live.summary.last_balance;

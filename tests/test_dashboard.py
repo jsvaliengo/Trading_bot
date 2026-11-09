@@ -685,6 +685,7 @@ def test_collect_martingale_sheet_row_for_equity(equity, expected):
     assert sheet["rows"][1][8] == 2 and sheet["rows"][8][6:9] == (1020, True, 11)
     assert sheet["rows"][12][3:9] == (28, 28, 20, 1680, True, 12)
     assert "ADA" in sheet["green"] and "AVAX" in sheet["green"] and "DOGE" in sheet["red"]
+    assert {r[2] for r in sheet["rows"]} == {"Valiengo's Strategy"}
 
 
 def test_api_live_exposes_sheet_scores_from_cache(monkeypatch):
@@ -717,7 +718,7 @@ def test_index_has_cointech2u_sheet_card_and_hidden_cards():
     from trading_bot.web.app import create_app
     app, _ = create_app(_make_bot())
     html = app.test_client().get("/", headers=_basic_auth("admin", "secret")).data.decode()
-    assert 'id="sheet-card" hidden' in html and "Planilha CoinTech2u" in html
+    assert 'id="sheet-card" hidden' in html and "Planilha — Binance Estratégia Padrão" in html and "CoinTech2u" not in html
     assert 'id="eng-card"' in html and 'id="trades-card"' in html
 
 
