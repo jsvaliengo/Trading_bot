@@ -386,6 +386,9 @@ class TradingConfig:
     # Só troca par com AMBAS as pernas zeradas; AUTO_PAIRS=false prende MARTINGALE_PAIRS.
     MARTINGALE_AUTO_PAIRS: bool = _env_bool("TRADING_BOT_MARTINGALE_AUTO_PAIRS", True)
     MARTINGALE_PAIR_SWAP_COOLDOWN_MINUTES: int = _env_int("TRADING_BOT_MARTINGALE_PAIR_SWAP_COOLDOWN_MINUTES", 360)
+    # Drenagem: par listado não abre base nem adiciona; pernas abertas seguem até o TP (ou zero-a-zero) e não
+    # reabrem; zerado sai da vaga. Não conta pra vaga da planilha (o substituto entra na hora). Runtime: /drain.
+    MARTINGALE_DRAIN_PAIRS: List[str] = None  # env TRADING_BOT_MARTINGALE_DRAIN_PAIRS, default vazio
     # Saída no zero-a-zero: par vermelho (cooldown vencido, candidato verde/amarelo disponível) com a soma do
     # P&L não realizado das pernas abertas ≥ RED_EXIT_MIN_PNL_USDT fecha as duas a mercado e cede a vaga no
     # mesmo tick. O unRealizedProfit da Binance é BRUTO (mark − média × qty): não desconta as taxas de abertura
@@ -1142,6 +1145,9 @@ class TradingConfig:
             self.MARTINGALE_PAIRS = self.normalize_pair_list(
                 [p.strip() for p in _raw_mg.split(",") if p.strip()]
             )[: self.MARTINGALE_MAX_PAIRS] if _raw_mg else []
+        if self.MARTINGALE_DRAIN_PAIRS is None:
+            _raw_dr = os.getenv("TRADING_BOT_MARTINGALE_DRAIN_PAIRS", "").strip()
+            self.MARTINGALE_DRAIN_PAIRS = self.normalize_pair_list([p.strip() for p in _raw_dr.split(",")]) if _raw_dr else []
         self.MARTINGALE_PORTFOLIO_STOP_PERCENT = min(25.0, max(5.0, float(self.MARTINGALE_PORTFOLIO_STOP_PERCENT)))
 
         # Pares desabilitados por padrão (safety). Ver bot.py: disabled_pairs é

@@ -311,7 +311,10 @@ def test_leg_state_survives_restart_via_state():
     ex.price = 98.5
     r.tick()                                   # LONG nível 2, último fill 98,5
     bot.martingale, bot.kill_switch = r, None
-    legs = BotStatePersistence(bot).build_payload()["martingale_legs"]
+    r.drain.add("TRXUSDT")
+    payload = BotStatePersistence(bot).build_payload()
+    legs = payload["martingale_legs"]
+    assert payload["martingale_drain_pairs"] == ["TRXUSDT"]
     assert legs["ADAUSDT"]["LONG"]["level"] == 2 and legs["ADAUSDT"]["LONG"]["last_fill"] == 98.5
     bot2 = _bot(ex)
     r2 = mg.MartingaleRunner(bot2)
@@ -709,3 +712,68 @@ def test_fixed_mode_bumps_base_to_min_notional_instead_of_skipping(monkeypatch, 
     monkeypatch.setattr(config, "MARTINGALE_FIRST_ORDER_USDT", 2.0)
     r3 = mg.MartingaleRunner(_bot(_Ex(min_notional=5.0)))
     assert r3.start() and r3.base == 2.5                                 # $4 dobrado < $5: base = 5/2
+
+
+# ───────────── drenagem de par (MARTINGALE_DRAIN_PAIRS / /drain) ─────────────
+@pytest.fixture
+def _drain_ada(monkeypatch):
+    monkeypatch.setattr(config, "MARTINGALE_DRAIN_PAIRS", ["ADAUSDT"])
+
+
+def test_draining_pair_neither_adds_nor_reopens_but_still_takes_profit(monkeypatch):
+    ex = _Ex(min_notional=1.0)
+    bot, r = _runner(ex)
+    monkeypatch.setattr(config, "MARTINGALE_AUTO_PAIRS", False)
+    r.tick()
+    ex.price = 98.5
+    r.tick()
+    ex.price = 97.0
+    r.tick()                                                   # LONG nível 3
+    assert r.pairs["ADAUSDT"].legs["LONG"].level == 3
+    r.drain.add("ADAUSDT")
+    n = len(ex.orders)
+    ex.price = 95.5
+    r.tick()                                                   # cruzou a próxima adição: nada
+    assert r.pairs["ADAUSDT"].legs["LONG"].level == 3 and len(ex.orders) == n
+    ex.price = 96.0                                            # SHORT (reaberta a 97 após TP) → TP em 96.03
+    r.tick()
+    assert ("ADAUSDT", "SHORT", "Martingale TP nível 1") in bot.closed
+    r.tick()                                                   # SHORT fechada não reabre
+    assert len(ex.orders) == n and r.pairs["ADAUSDT"].legs["SHORT"].level == 0
+    assert r.snapshot()["draining"] == ["ADAUSDT"]
+
+
+def test_draining_pair_frees_its_slot_immediately(_one_slot_auto, _drain_ada):
+    ex = _Ex(balance=300.0, min_notional=1.0)                  # faixa 300 → 2 vagas
+    bot, r = _runner(ex, pairs=("ADAUSDT", "TRXUSDT"))
+    r.drain = set(config.MARTINGALE_DRAIN_PAIRS)
+    r.pairs["ADAUSDT"].legs["LONG"].level = 2                  # ADA com perna aberta
+    ex.positions = [{"symbol": "ADAUSDT", "side": "LONG", "entry_price": 100.0, "quantity": 1.0, "unrealized_pnl": -0.2, "mark_price": 100.0}]
+    _scored(r, BNB="green", TRX="green", ADA="green")
+    r.tick()
+    assert list(r.pairs) == ["ADAUSDT", "TRXUSDT", "BNBUSDT"]  # BNB entra com ADA ainda aberta
+    assert {o["symbol"] for o in ex.orders} == {"TRXUSDT", "BNBUSDT"}
+    r.tick()
+    assert "ADAUSDT" in r.pairs and len(r.pairs) == 3          # vaga não é duplicada
+
+
+def test_draining_pair_is_removed_once_flat_and_never_re_added(_one_slot_auto, _drain_ada, caplog):
+    ex = _Ex(balance=100.0, min_notional=0.5)                  # 1 vaga
+    bot, r = _runner(ex, pairs=("ADAUSDT", "TRXUSDT"))
+    r.drain = set(config.MARTINGALE_DRAIN_PAIRS)
+    _scored(r, ADA="green", TRX="yellow")
+    caplog.set_level("INFO")
+    r.tick()
+    assert list(r.pairs) == ["TRXUSDT"] and "ADAUSDT drenado" in caplog.text
+    assert all(o["symbol"] == "TRXUSDT" for o in ex.orders)
+    _tp_closed_all(ex, r)
+    _scored(r, ADA="green", TRX="red")                         # ADA 1º no ranking, mas drenando: não volta
+    r.tick()
+    assert "ADAUSDT" not in r.pairs
+
+
+def test_pair_outside_drain_list_behaves_as_before(_drain_ada):
+    ex = _Ex(min_notional=1.0)
+    bot, r = _runner(ex, pairs=("TRXUSDT",))
+    r.tick()
+    assert [o["symbol"] for o in ex.orders] == ["TRXUSDT", "TRXUSDT"] and r.snapshot()["draining"] == []

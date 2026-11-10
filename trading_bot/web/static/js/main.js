@@ -397,12 +397,13 @@
         };
         const unreal = (positions || []).map(p => p.unrealized_pnl_usd).filter(isNum);
         $('legs-sum').textContent = unreal.length ? `não realizado ${fmt.usd(sum(unreal), { signed: true })}` : '';
+        const draining = new Set(m.draining || []);
         $('mg-list').innerHTML = (m.legs || []).map(l => {
             const pos = (positions || []).find(p => p.symbol === l.symbol && p.side === l.side);
             const age = pos && pos.entry_time ? (Date.now() - new Date(pos.entry_time).getTime()) / 36e5 : null;
             return `<div class="prow">
             <div class="prow-top">
-                <span class="psym">${esc(l.symbol)} <span class="side ${l.side === 'LONG' ? 'l' : 's'}">${esc(l.side)}</span></span>
+                <span class="psym">${esc(l.symbol)} <span class="side ${l.side === 'LONG' ? 'l' : 's'}">${esc(l.side)}</span>${draining.has(l.symbol) ? ' <span class="badge warn">drenando</span>' : ''}</span>
                 <span class="pr-pnl ${cls(l.unrealized_pnl_usd)}">${fmt.usd(l.unrealized_pnl_usd, { signed: true })}${pos ? `<small>${fmt.pct(pos.unrealized_pnl_percent)}</small>` : ''}</span>
                 <span class="pr-r">${l.level}/${l.max_levels}<small>nível</small></span>
                 <span class="pr-meta">${isNum(l.quantity) ? `${fmt.price(l.quantity)} un · ${fmt.usd(l.notional)}` : 'sem posição'}${age != null ? ` · ${fmt.dur(age)}` : ''}</span>
@@ -431,7 +432,7 @@
             const p = pairs[l.symbol] || (pairs[l.symbol] = { symbol: l.symbol, notional: 0, upnl: 0, legs: [] });
             p.notional += isNum(l.mark_price) ? l.quantity * l.mark_price : (l.notional || 0); p.upnl += l.unrealized_pnl_usd || 0; p.legs.push(l);
         }
-        const list = Object.values(pairs), total = sum(list.map(p => p.notional)) || 1;
+        const list = Object.values(pairs), total = sum(list.map(p => p.notional)) || 1, draining = new Set(m.draining || []);
         if (ringSel && !pairs[ringSel]) ringSel = null;
         const GAP = 6, span = (360 - list.length * GAP) / total;
         let a = 0, segs = '', badges = '';
@@ -440,7 +441,7 @@
             const sel = p.symbol === ringSel, [mx, my] = ringPt(a1 - 2, 118), [bx, by] = ringPt(mid, 150);
             segs += `<path class="ring-seg${sel ? ' sel' : ''}" d="${ringArc(a0, a1)}" stroke="url(#rg${i % 5})" data-symbol="${esc(p.symbol)}"/>` +
                 `<circle class="ring-mk ${cls(p.upnl)}" cx="${mx.toFixed(1)}" cy="${my.toFixed(1)}" r="4"/>`;
-            badges += `<button type="button" class="ring-badge${sel ? ' on' : ''}" style="left:${(bx / 3.2).toFixed(1)}%;top:${(by / 3.2).toFixed(1)}%" data-symbol="${esc(p.symbol)}" aria-pressed="${sel}">${esc(p.symbol.replace(/USDT$/, ''))}</button>`;
+            badges += `<button type="button" class="ring-badge${sel ? ' on' : ''}${draining.has(p.symbol) ? ' drain' : ''}" style="left:${(bx / 3.2).toFixed(1)}%;top:${(by / 3.2).toFixed(1)}%" data-symbol="${esc(p.symbol)}" aria-pressed="${sel}">${esc(p.symbol.replace(/USDT$/, ''))}</button>`;
         });
         $('ring-segs').innerHTML = segs; $('ring-badges').innerHTML = badges;
         $('ring-state').textContent = s.paused ? 'Pausado' : (s.running ? 'Rodando' : 'Parado');

@@ -154,6 +154,7 @@ class MartingaleRunner:
         self.pairs: Dict[str, PairPlan] = {}
         self.saved_legs: Dict[str, Dict[str, Dict[str, Any]]] = {}   # do bot_state, aplicado em start()
         self.saved_pairs: List[str] = []                              # idem: conjunto atual de pares
+        self.drain: set = set(config.MARTINGALE_DRAIN_PAIRS or [])    # env ∪ state (/drain); não abre nem adiciona
         self.score_cache: Optional[PairScoreCache] = None             # dono do score (dashboard lê daqui)
         self.stops = 0
 
@@ -162,6 +163,7 @@ class MartingaleRunner:
         return {
             "enabled": self.enabled, "base_notional": self.base, "capital": self.capital,
             "peak_equity": self.peak, "portfolio_stops": self.stops,
+            "draining": sorted(self.drain & set(self.pairs)),
             "pairs": {s: {side: {k: getattr(leg, k) for k in LEG_STATE} for side, leg in p.legs.items()}
                       for s, p in list(self.pairs.items())},   # list(): o dashboard lê noutra thread
             "params": {
@@ -299,6 +301,11 @@ class MartingaleRunner:
             self._portfolio_stop(positions, equity)
             return
         by_key = {f"{p['symbol']}_{p['side']}": p for p in positions}
+        busy = {k.rsplit("_", 1)[0] for k in by_key}
+        for sym in [s for s, p in self.pairs.items() if s in self.drain and s not in busy
+                    and all(leg.level == 0 for leg in p.legs.values())]:
+            del self.pairs[sym]
+            self._announce(f"{sym} drenado: ambas as pernas zeradas, par removido")
         if c.MARTINGALE_AUTO_PAIRS and not bot.paused:
             self._rebalance(by_key, equity)   # antes do loop: a base do par novo abre neste tick
         for sym, plan in list(self.pairs.items()):
@@ -316,7 +323,7 @@ class MartingaleRunner:
         c = config
         if pos is None:
             leg.reset()
-            if not self.bot.paused:
+            if not self.bot.paused and plan.symbol not in self.drain:
                 self._open(plan, leg, price, k=0)
             return
         ex_avg, ex_qty = float(pos["entry_price"]), float(pos["quantity"])
@@ -332,7 +339,7 @@ class MartingaleRunner:
             if self.bot.close_position(pos, f"Martingale TP nível {leg.level}"):
                 leg.reset()
             return
-        if (not self.bot.paused and leg.level < c.MARTINGALE_MAX_LEVELS
+        if (not self.bot.paused and plan.symbol not in self.drain and leg.level < c.MARTINGALE_MAX_LEVELS
                 and time.time() - leg.last_add_ts >= c.MARTINGALE_MIN_ADD_INTERVAL_SECONDS
                 and add_triggered(price, leg.side, next_trigger(leg.last_fill, leg.side, c.MARTINGALE_STEP_PERCENT))):
             self._open(plan, leg, price, k=leg.level)
@@ -346,19 +353,22 @@ class MartingaleRunner:
         scores = self.score_cache.get()["scores"] if self.score_cache else {}
         if not scores:
             return
+        active = lambda: sum(s not in self.drain for s in self.pairs)      # noqa: E731  drenando não ocupa vaga
         row = sheet_row_index(equity)
-        slots = COINTECH2U_SHEET[row][8] if row is not None else len(self.pairs)
+        slots = COINTECH2U_SHEET[row][8] if row is not None else active()
         busy = {k.rsplit("_", 1)[0] for k in by_key}                      # símbolo com posição na exchange
         order = rank_pairs({b + "USDT": scores.get(b + "USDT", {"color": "unknown"}) for b in COINTECH2U_GREEN})
         pos = {s: i for i, s in enumerate(order)}
         color = lambda s: scores.get(s, {}).get("color", "unknown")  # noqa: E731
-        candidates = [s for s in order if color(s) in ("green", "yellow") and s not in self.pairs and s not in busy]
+        candidates = [s for s in order if color(s) in ("green", "yellow") and s not in self.pairs and s not in busy
+                      and s not in self.drain]
         now = time.time()
         # zerada = exchange sem posição E perna local já resetada (leitura vazia transitória não troca par)
-        flat = sorted((s for s, p in self.pairs.items() if s not in busy and all(leg.level == 0 for leg in p.legs.values())),
+        flat = sorted((s for s, p in self.pairs.items() if s not in busy and s not in self.drain
+                       and all(leg.level == 0 for leg in p.legs.values())),
                       key=lambda s: -pos.get(s, len(order)))  # pior 1º
         for sym in flat:
-            if len(self.pairs) <= slots:
+            if active() <= slots:
                 break
             del self.pairs[sym]
             self._announce(f"soltando vaga de {sym} (faixa da planilha pede {slots} moeda(s))")
@@ -395,9 +405,11 @@ class MartingaleRunner:
                     self.pairs[sym].legs[p["side"]].reset()
                 else:
                     del self.pairs[sym]
+                    if sym in self.drain:        # a vaga já foi reocupada quando entrou na drenagem
+                        continue
                     self._take(candidates, now)
                     self._announce(f"trocando slot {sym} → {new} ({new[:-4]} {pos[new] + 1}º no ranking)")
-        while len(self.pairs) < slots:
+        while active() < slots:
             new = self._take(candidates, now)
             if new is None:
                 break

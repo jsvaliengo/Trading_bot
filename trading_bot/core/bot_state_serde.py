@@ -140,4 +140,7 @@ class BotStatePersistence:
             'martingale_pairs': (
                 list(bot.martingale.pairs) if getattr(bot, 'martingale', None) is not None else None
             ),
+            'martingale_drain_pairs': (
+                sorted(bot.martingale.drain) if getattr(bot, 'martingale', None) is not None else None
+            ),
         }
