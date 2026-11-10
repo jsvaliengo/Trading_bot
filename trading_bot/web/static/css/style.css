@@ -14,6 +14,9 @@
     --warn:#fab219; --warn-soft:rgba(250,178,25,.14);
     --bad:#e0524f; --bad-soft:rgba(224,82,79,.16);
     --focus:#8fbcff;
+    /* fundo em gradiente + cartões de vidro (anel/hero); --bg-card continua o token lido pelo main.js */
+    --bg-grad:linear-gradient(165deg,#0a0f2a 0%,#131a3f 45%,#2a1850 100%);
+    --glass:rgba(255,255,255,.055); --glass-border:rgba(255,255,255,.10);
 }
 :root[data-theme="light"] {
     color-scheme: light;
@@ -25,13 +28,15 @@
     --warn:#a86a00; --warn-soft:rgba(168,106,0,.12);
     --bad:#c93b38; --bad-soft:rgba(201,59,56,.12);
     --focus:#1d5fb8;
+    --bg-grad:linear-gradient(165deg,#eef1fb 0%,#e9ecf8 45%,#f1e9fb 100%);
+    --glass:rgba(255,255,255,.72); --glass-border:rgba(16,24,40,.10);
 }
 
 * { box-sizing:border-box; margin:0; padding:0; }
 html { -webkit-text-size-adjust:100%; }
 body {
-    background:var(--bg-app); color:var(--text);
-    font-family:'IBM Plex Sans',system-ui,-apple-system,'Segoe UI',sans-serif;
+    background:var(--bg-app) var(--bg-grad) fixed; color:var(--text);
+    font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
     font-size:13.5px; line-height:1.5; min-height:100vh; -webkit-font-smoothing:antialiased;
     padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px);
 }
@@ -49,7 +54,7 @@ button { font:inherit; color:inherit; }
 .top {
     position:sticky; top:env(safe-area-inset-top,0px); z-index:30;
     display:flex; align-items:center; gap:16px; flex-wrap:wrap;
-    padding:10px 22px; background:var(--bg-app); border-bottom:1px solid var(--border);
+    padding:10px 22px; background:color-mix(in srgb, var(--bg-app) 70%, transparent); backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px); border-bottom:1px solid var(--border);
 }
 .top-id { display:flex; align-items:center; gap:10px; min-width:0; }
 .top-title { font-size:15px; font-weight:600; letter-spacing:-.01em; white-space:nowrap; }
@@ -91,7 +96,7 @@ button { font:inherit; color:inherit; }
 
 /* Layout */
 .wrap { max-width:1360px; margin:0 auto; padding:16px 22px 48px; display:flex; flex-direction:column; gap:14px; }
-.card { background:var(--bg-card); border:1px solid var(--border); border-radius:10px; padding:16px 18px; min-width:0; }
+.card { background:var(--glass); border:1px solid var(--glass-border); border-radius:20px; padding:16px 18px; min-width:0; backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px); }
 .two { display:grid; grid-template-columns:1.4fr 1fr; gap:14px; align-items:start; }
 .ch { display:flex; align-items:baseline; justify-content:space-between; gap:12px; margin-bottom:12px; flex-wrap:wrap; }
 h2 { font-size:14.5px; font-weight:600; letter-spacing:-.01em; }
@@ -108,7 +113,7 @@ h2 { font-size:14.5px; font-weight:600; letter-spacing:-.01em; }
 .sw-pos { width:10px; height:10px; border-radius:2px; background:var(--accent); }
 
 /* Seções recolhíveis */
-details.card > summary { list-style:none; cursor:pointer; display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; margin:-16px -18px; padding:14px 18px; }
+details.card > summary { list-style:none; cursor:pointer; display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; margin:-16px -18px; padding:14px 18px; border-radius:20px; }
 details.card > summary::-webkit-details-marker { display:none; }
 details.card > summary::before { content:"▸"; color:var(--text-muted); font-size:12px; width:12px; flex:none; align-self:center; transition:transform .12s ease; }
 details.card[open] > summary::before { transform:rotate(90deg); }
@@ -116,11 +121,40 @@ details.card[open] > summary { margin-bottom:0; }
 details.card > summary .cs, details.card > summary .badge { margin-left:auto; }
 details.card > :not(summary):first-of-type { margin-top:10px; }
 
+/* Anel da carteira: um arco por par (∝ notional), saldo no centro, badges com o ticker em volta. */
+.ring-card { padding:14px 18px 18px; }
+.ring-head { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+.ring-state { display:inline-flex; align-items:center; gap:6px; font-size:12px; font-weight:600; padding:4px 11px; border-radius:999px; background:var(--glass); border:1px solid var(--glass-border); color:var(--text-dim); }
+.ring-state::before { content:""; width:7px; height:7px; border-radius:50%; background:currentColor; }
+.ring-state.ok { color:var(--good); } .ring-state.warn { color:var(--warn); } .ring-state.bad { color:var(--bad); }
+.ring-wrap { position:relative; width:min(100%, 300px); aspect-ratio:1; margin:8px auto 0; }
+.ring { width:100%; height:100%; display:block; }
+.ring-track { fill:none; stroke:var(--glass-border); stroke-width:3; }
+.ring-seg { fill:none; stroke-width:22; stroke-linecap:round; cursor:pointer; transition:stroke-width .15s ease, opacity .15s ease; }
+.ring-seg:hover { opacity:.85; }
+/* par selecionado: o arco vira contorno ("esvaziou" pro centro) */
+.ring-seg.sel { stroke-width:7; stroke-dasharray:3 7; }
+.ring-mk { stroke:var(--bg-app); stroke-width:2; fill:var(--text-muted); pointer-events:none; }
+.ring-mk.pos { fill:var(--good); filter:drop-shadow(0 0 4px var(--good)); } .ring-mk.neg { fill:var(--bad); filter:drop-shadow(0 0 4px var(--bad)); }
+.ring-badge { position:absolute; transform:translate(-50%,-50%); min-width:36px; height:36px; padding:0 8px; border-radius:999px; border:1px solid var(--glass-border); background:var(--bg-elevated); color:var(--text); font-size:11.5px; font-weight:700; letter-spacing:.02em; cursor:pointer; box-shadow:0 2px 10px rgba(0,0,0,.25); }
+.ring-badge.on { border-color:var(--text); }
+.ring-center { position:absolute; inset:0; margin:auto; width:62%; height:62%; border-radius:50%; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; gap:2px; cursor:pointer; }
+.rc-l { font-size:12px; color:var(--text-dim); font-weight:500; }
+.rc-v { font-family:'IBM Plex Mono',ui-monospace,monospace; font-size:24px; font-weight:600; letter-spacing:-.02em; line-height:1.1; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.rc-t { font-family:'IBM Plex Mono',ui-monospace,monospace; font-size:13px; font-weight:500; }
+.rc-s { font-size:11.5px; color:var(--text-muted); }
+.ring-center .brl { margin-top:2px; }
+/* Pernas ativas: ações em pílulas (Pausar / Retomar / Fechar tudo) e uma linha-cartão por perna. */
+.pills { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:6px; }
+.pills .btn { border-radius:999px; padding:8px 16px; background:var(--glass); border-color:var(--border-strong); white-space:nowrap; }
+.pills .btn:hover:not(:disabled) { background:var(--accent-soft); border-color:var(--accent); }
+.pills .btn-danger:hover:not(:disabled) { background:var(--bad-soft); }
+
 /* Status: a linha que responde "está vivo? onde estou?" */
-.status { display:grid; grid-template-columns:repeat(8, minmax(0,1fr)); gap:1px; background:var(--border); border:1px solid var(--border); border-radius:10px; overflow:hidden; }
+.status { display:grid; grid-template-columns:repeat(8, minmax(0,1fr)); gap:1px; background:var(--border); border:1px solid var(--glass-border); border-radius:20px; overflow:hidden; }
 /* Fora do Donchian somem 2 tiles; :where mantém a especificidade para os breakpoints abaixo vencerem. */
 .status:where(:has(.tile[hidden])) { grid-template-columns:repeat(6, minmax(0,1fr)); }
-.tile { background:var(--bg-card); padding:12px 14px 10px; display:flex; flex-direction:column; gap:2px; min-width:0; }
+.tile { background:var(--glass); backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px); padding:12px 14px 10px; display:flex; flex-direction:column; gap:2px; min-width:0; }
 .tl { font-size:11.5px; color:var(--text-muted); white-space:nowrap; }
 .tv { font-size:22px; font-weight:500; letter-spacing:-.02em; line-height:1.15; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .tile-main .tv { font-size:26px; }
