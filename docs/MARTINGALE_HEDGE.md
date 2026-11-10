@@ -103,7 +103,7 @@ mesmo sem dashboard aberto; o dashboard lê dele) e, a cada tick, antes de mexer
 1. **Escada em andamento não é trocada.** Um par só muda de vaga quando **ambas** as pernas estão zeradas:
    exchange sem posição no símbolo **e** perna local já resetada (uma leitura vazia transitória da exchange não troca)
    — ou pela **saída no zero-a-zero** (regra 8), já que a perna que bate TP reabre na hora e o par quase nunca zera.
-2. **Vagas** = coluna `moedas` da faixa atual da planilha pela equity (`sheet_row_index`; $300–500 → 2). Abaixo da 1ª
+2. **Vagas** = coluna `moedas` da faixa atual da planilha pela equity (`sheet_row_index`; $300–500 → 3). Abaixo da 1ª
    faixa mantém o número atual. Faixa menor solta as vagas excedentes (só pares zerados, pior colocado primeiro);
    faixa maior ocupa as vagas livres com os melhores candidatos.
 3. **Candidatos** = `COINTECH2U_GREEN` (28 moedas; as vermelhas fixas da planilha nunca entram) com cor verde ou

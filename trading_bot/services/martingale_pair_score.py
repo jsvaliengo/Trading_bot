@@ -93,7 +93,7 @@ def score_pair(klines_1d: List[List[Any]], klines_4h: List[List[Any]], cfg=confi
 # Faixa = da banca mínima até a próxima linha; abaixo de 90 nenhuma.
 COINTECH2U_SHEET = [
     ("90–150", 90, "Valiengo's Strategy", 3, 3, 20, 180, True, 1),
-    ("300", 300, "Valiengo's Strategy", 3, 3, 20, 180, True, 2),
+    ("300", 300, "Valiengo's Strategy", 3, 3, 20, 180, True, 3),
     ("500", 500, "Valiengo's Strategy", 3, 3, 20, 180, True, 3),
     ("1.000", 1000, "Valiengo's Strategy", 3, 3, 20, 180, True, 6),
     ("2.000", 2000, "Valiengo's Strategy", 3, 3, 20, 180, True, 9),
