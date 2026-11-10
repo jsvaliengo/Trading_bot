@@ -119,7 +119,12 @@ details.card > summary .cs, details.card > summary .badge { margin-left:auto; }
 details.card > :not(summary):first-of-type { margin-top:10px; }
 
 /* Anel da carteira: um arco por par (∝ notional), saldo no centro, badges com o ticker em volta. */
-.ring-card { padding:14px 18px 18px; }
+.ring-card { padding:14px 18px 18px; display:flex; flex-wrap:wrap; align-items:center; gap:4px 28px; }
+.ring-head { flex-basis:100%; }
+/* a linha de status (tiles) é movida pra cá pelo main.js no martingale: vira um grid de métricas ao lado do anel */
+.ring-card .status { flex:1 1 360px; grid-template-columns:repeat(3, minmax(0,1fr)); gap:14px 18px; background:none; border:0; border-radius:0; margin-top:8px; }
+.ring-card .tile { background:none; backdrop-filter:none; -webkit-backdrop-filter:none; padding:0; }
+.ring-card .tl { white-space:normal; }
 .ring-head { display:flex; align-items:center; justify-content:space-between; gap:10px; }
 .ring-state { display:inline-flex; align-items:center; gap:6px; font-size:12px; font-weight:600; padding:4px 11px; border-radius:999px; background:var(--glass); border:1px solid var(--glass-border); color:var(--text-dim); }
 .ring-state::before { content:""; width:7px; height:7px; border-radius:50%; background:currentColor; }
@@ -141,6 +146,7 @@ details.card > :not(summary):first-of-type { margin-top:10px; }
 .rc-t { font-family:'IBM Plex Mono',ui-monospace,monospace; font-size:13px; font-weight:500; }
 .rc-s { font-size:11.5px; color:var(--text-muted); }
 .ring-center .brl { margin-top:2px; }
+.rc-sub { max-width:72%; line-height:1.25; }   /* pico · capital: quebra em 2 linhas pra não encostar no arco */
 /* Pernas ativas: ações em pílulas (Pausar / Retomar / Fechar tudo) e uma linha-cartão por perna. */
 .pills { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:6px; }
 .pills .btn { border-radius:999px; padding:8px 16px; background:var(--glass); border-color:var(--border-strong); white-space:nowrap; }
@@ -206,6 +212,7 @@ details.card > :not(summary):first-of-type { margin-top:10px; }
 .prow { padding:10px 0; border-top:1px solid var(--border); }
 .prow:first-child { border-top:0; padding-top:2px; }
 .prow-top { display:grid; grid-template-columns:1.2fr 1fr 1fr 1fr auto; align-items:baseline; gap:10px; }
+#mg-list .prow-top { grid-template-columns:1.2fr 1fr 1fr 1fr auto auto; }
 .pr-close { display:inline-flex; align-items:center; gap:6px; justify-content:flex-end; font-size:12px; color:var(--text-dim); white-space:nowrap; }
 .btn-xs { padding:3px 8px; font-size:11.5px; }
 .psym { font-weight:600; font-size:14px; display:inline-flex; align-items:center; gap:8px; }
@@ -297,6 +304,7 @@ details.card > :not(summary):first-of-type { margin-top:10px; }
     .two-cv { grid-template-columns:1fr; }
     .prow-top { grid-template-columns:1fr 1fr; }
     .pr-meta { grid-column:2; }
+    #mg-list .prow-top { grid-template-columns:1fr 1fr; }
     .pr-close { grid-column:1 / -1; justify-content:flex-start; }
 }
 @media (max-width: 760px) {

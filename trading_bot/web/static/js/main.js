@@ -316,9 +316,7 @@
                     <span class="pr-pnl ${cls(p.unrealized_pnl_usd)}">${fmt.usd(p.unrealized_pnl_usd, { signed: true })}<small>${fmt.pct(p.unrealized_pnl_percent)}</small></span>
                     <span class="pr-r ${cls(p.r_now)}">${fmt.r(p.r_now)}<small>risco ${fmt.usd(p.risk_usd)}${isNum(p.trail_floor_r) ? ` · piso ${fmt.r(p.trail_floor_r)}` : ''}</small></span>
                     <span class="pr-meta">${fmt.price(p.quantity)} un · ${fmt.dur(age)}</span>
-                    <span class="pr-close" data-symbol="${esc(p.symbol)}" data-pnl="${esc(fmt.usd(p.unrealized_pnl_usd, { signed: true }))}">${
-                        closing.has(p.symbol) ? '<small class="dim">fechando…</small>' : '<button type="button" class="btn btn-quiet btn-xs" data-close="ask">Fechar</button>'
-                    }</span>
+                    ${closeCell(p)}
                 </div>
                 ${isD ? ruler(p) : `<div class="ruler-l"><span>stop <b>${fmt.price(p.custom_stop_loss)}</b></span><span>TP <b>${fmt.price(p.custom_take_profit)}</b></span></div>`}
             </div>`;
@@ -327,7 +325,10 @@
 
     // Fechar posição: o botão vira Confirmar/Cancelar inline; o próximo poll remove o card.
     const closing = new Set();
-    $('positions-list').addEventListener('click', async (e) => {
+    const closeCell = (p) => `<span class="pr-close" data-symbol="${esc(p.symbol)}" data-pnl="${esc(fmt.usd(p.unrealized_pnl_usd, { signed: true }))}">${
+        closing.has(p.symbol) ? '<small class="dim">fechando…</small>' : '<button type="button" class="btn btn-quiet btn-xs" data-close="ask">Fechar</button>'
+    }</span>`;
+    const onClose = async (e) => {
         const btn = e.target.closest('[data-close]'); if (!btn) return;
         const cell = btn.closest('.pr-close'), sym = cell.dataset.symbol;
         if (btn.dataset.close === 'ask') {
@@ -349,7 +350,8 @@
             }
             reqRefresh();
         }
-    });
+    };
+    $('positions-list').addEventListener('click', onClose); $('mg-list').addEventListener('click', onClose);
 
     // ───────── Motor Donchian ─────────
     function renderEngine(e, positions) {
@@ -375,16 +377,13 @@
     }
 
     // ───────── Escada martingale ─────────
-    function renderMartingale(m, s) {
-        $('ft-card').hidden = !!m; $('mg-card').hidden = $('ring-card').hidden = $('legs-card').hidden = !m;
+    function renderMartingale(m, s, positions) {
+        $('ft-card').hidden = $('pos-card').hidden = $('tile-equity').hidden = $('eqperf-row').hidden = $('rdist-row').hidden = !!m; $('ring-card').hidden = $('legs-card').hidden = !m;
         $('trades-card').hidden = !!m; $('sheet-card').hidden = !m;
         if (!m) return;
+        const rc = $('ring-card'), st = $('status'); if (st.parentElement !== rc) rc.appendChild(st);   // tiles viram o grid de métricas do anel
         renderRing(m, s);
         renderSheet(m.sheet, Object.keys(m.pairs || {}));
-        const p = m.params || {}, n = (v, d = 2) => String(Number(v).toFixed(d)).replace(/\.?0+$/, '').replace('.', ',');
-        $('mg-params').textContent = `X ${n(p.step_percent)}% · m ${n(p.multiplier)} · TP ${n(p.tp_percent)}% · N ${p.max_levels} · base ${fmt.usd(m.base_notional)} · capital ${fmt.usd(m.capital)} · pico ${fmt.usd(m.peak_equity)} · ${p.leverage}×` + (m.portfolio_stops ? ` · ${m.portfolio_stops} stop(s) de portfólio` : '');
-        const stop = $('mg-stop'); stop.textContent = `stop de portfólio em ${fmt.usd(m.portfolio_stop_equity)}` + (isNum(m.portfolio_stop_room_pct) ? ` — faltam ${fmt.pct(m.portfolio_stop_room_pct, 2, false)}` : '');
-        stop.className = 'cs ' + (isNum(m.portfolio_stop_room_pct) && m.portfolio_stop_room_pct < 5 ? 'warn' : '');
         const away = (px, pct) => isNum(px) ? `<b>${fmt.price(px)}</b>${isNum(pct) ? ` <small>(${fmt.pct(pct)})</small>` : ''}` : '<b>—</b>';
         // Barra: 0% = TP, 100% = próxima adição; a mesma fração vale p/ LONG (preço caindo) e SHORT (subindo).
         const addBar = (l) => {
@@ -394,13 +393,19 @@
             const dist = Math.abs(l.next_add_price - l.mark_price) / l.mark_price * 100;
             return `<div class="addbar"><span class="addbar-t"><i style="width:${(100 - pct).toFixed(1)}%"></i></span><small>faltam ${fmt.pct(dist, 1, false)} p/ L${l.level + 1}</small></div>`;
         };
-        $('mg-list').innerHTML = (m.legs || []).map(l => `<div class="prow">
+        const unreal = (positions || []).map(p => p.unrealized_pnl_usd).filter(isNum);
+        $('legs-sum').textContent = unreal.length ? `não realizado ${fmt.usd(sum(unreal), { signed: true })}` : '';
+        $('mg-list').innerHTML = (m.legs || []).map(l => {
+            const pos = (positions || []).find(p => p.symbol === l.symbol && p.side === l.side);
+            const age = pos && pos.entry_time ? (Date.now() - new Date(pos.entry_time).getTime()) / 36e5 : null;
+            return `<div class="prow">
             <div class="prow-top">
                 <span class="psym">${esc(l.symbol)} <span class="side ${l.side === 'LONG' ? 'l' : 's'}">${esc(l.side)}</span></span>
-                <span class="pr-pnl ${cls(l.unrealized_pnl_usd)}">${fmt.usd(l.unrealized_pnl_usd, { signed: true })}</span>
+                <span class="pr-pnl ${cls(l.unrealized_pnl_usd)}">${fmt.usd(l.unrealized_pnl_usd, { signed: true })}${pos ? `<small>${fmt.pct(pos.unrealized_pnl_percent)}</small>` : ''}</span>
                 <span class="pr-r">${l.level}/${l.max_levels}<small>nível</small></span>
-                <span class="pr-meta">${isNum(l.quantity) ? `${fmt.price(l.quantity)} un · ${fmt.usd(l.notional)}` : 'sem posição'}</span>
+                <span class="pr-meta">${isNum(l.quantity) ? `${fmt.price(l.quantity)} un · ${fmt.usd(l.notional)}` : 'sem posição'}${age != null ? ` · ${fmt.dur(age)}` : ''}</span>
                 <span class="pr-meta">média <b>${fmt.price(l.avg_price)}</b></span>
+                ${pos ? closeCell(pos) : ''}
             </div>
             <div class="ruler-l">
                 <span>próx. adição @ ${l.level >= l.max_levels ? '<b>teto da escada</b>' : away(l.next_add_price, l.next_add_pct)}</span>
@@ -408,7 +413,7 @@
                 <span>preço <b>${fmt.price(l.mark_price)}</b></span>
             </div>
             ${addBar(l)}
-        </div>`).join('') || '<p class="empty">Nenhum par na escada (estratégia não iniciou ou nenhum par cabe na ordem base).</p>';
+        </div>`; }).join('') || '<p class="empty">Nenhum par na escada (estratégia não iniciou ou nenhum par cabe na ordem base).</p>';
     }
 
     // ───────── Anel da carteira ─────────
@@ -438,7 +443,8 @@
         $('ring-segs').innerHTML = segs; $('ring-badges').innerHTML = badges;
         $('ring-state').textContent = s.paused ? 'Pausado' : (s.running ? 'Rodando' : 'Parado');
         $('ring-state').className = 'ring-state ' + (s.paused ? 'warn' : (s.running ? 'ok' : 'bad'));
-        $('ring-stop').textContent = `stop em ${fmt.usd(m.portfolio_stop_equity)}`;
+        $('ring-stop').textContent = `stop em ${fmt.usd(m.portfolio_stop_equity)}` + (isNum(m.portfolio_stop_room_pct) ? ` · faltam ${fmt.pct(m.portfolio_stop_room_pct, 1, false)}` : '');
+        $('ring-stop').className = 'cs ' + (isNum(m.portfolio_stop_room_pct) && m.portfolio_stop_room_pct < 5 ? 'warn' : '');
         const c = $('ring-center'), sp = pairs[ringSel];
         if (sp) {
             const deep = sp.legs.reduce((x, y) => (y.level > x.level ? y : x));
@@ -448,7 +454,8 @@
         } else {
             const eq = s.last_balance, d = s.daily_pnl, pct = isNum(d) && isNum(eq) && eq - d > 0 ? d / (eq - d) * 100 : null;
             c.innerHTML = `<span class="rc-l">Saldo</span><b class="rc-v">${fmt.usd(eq)}</b>` +
-                `<span class="rc-t ${cls(d)}">${fmt.usd(d, { signed: true })}${isNum(pct) ? ` (${fmt.pct(pct)})` : ''}</span>` + brlTag(eq);
+                `<span class="rc-t ${cls(d)}">${fmt.usd(d, { signed: true })}${isNum(pct) ? ` (${fmt.pct(pct)})` : ''}</span>` + brlTag(eq) +
+                `<span class="rc-s rc-sub">${esc($('st-equity-f').textContent)}</span>`;
         }
     }
     $('ring-card').addEventListener('click', (e) => {
@@ -806,7 +813,7 @@
         renderForwardTest(ft);
         renderPerf(ft);
         renderPositions(pos);
-        renderMartingale(l.martingale, s);
+        renderMartingale(l.martingale, s, pos);
         renderEngine(e, pos);
         renderHealth(h, s);
         renderRHist(ft.r_histogram);
