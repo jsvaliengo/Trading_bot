@@ -386,6 +386,12 @@ class TradingConfig:
     # Só troca par com AMBAS as pernas zeradas; AUTO_PAIRS=false prende MARTINGALE_PAIRS.
     MARTINGALE_AUTO_PAIRS: bool = _env_bool("TRADING_BOT_MARTINGALE_AUTO_PAIRS", True)
     MARTINGALE_PAIR_SWAP_COOLDOWN_MINUTES: int = _env_int("TRADING_BOT_MARTINGALE_PAIR_SWAP_COOLDOWN_MINUTES", 360)
+    # Saída no zero-a-zero: par vermelho (cooldown vencido, candidato verde/amarelo disponível) com a soma do
+    # P&L não realizado das pernas abertas ≥ RED_EXIT_MIN_PNL_USDT fecha as duas a mercado e cede a vaga no
+    # mesmo tick. O unRealizedProfit da Binance é BRUTO (mark − média × qty): não desconta as taxas de abertura
+    # nem a de fechamento; o 0.0 é zero-a-zero bruto, suba o piso pra cobrir fees.
+    MARTINGALE_RED_EXIT_AT_BREAKEVEN: bool = _env_bool("TRADING_BOT_MARTINGALE_RED_EXIT_AT_BREAKEVEN", True)
+    MARTINGALE_RED_EXIT_MIN_PNL_USDT: float = _env_float("TRADING_BOT_MARTINGALE_RED_EXIT_MIN_PNL_USDT", 0.0)
     MIN_VOLATILITY_PERCENT: float = 1.5       # Volatilidade mínima 1.5%
     MAX_MIN_NOTIONAL: float = 10.0            # Mínimo notional máximo $10 (exclui BTC $100, ETH $20)
     # RVOL = volume da última hora fechada ÷ média horária recente. Piso baixo

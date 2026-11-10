@@ -339,8 +339,9 @@ class MartingaleRunner:
 
     # ---- seleção automática de pares (docs/MARTINGALE_HEDGE.md, "Seleção automática") ----
     def _rebalance(self, by_key: Dict[str, Dict[str, Any]], equity: float) -> None:
-        """Só pares com AMBAS as pernas zeradas mudam: vermelho → melhor candidato verde/amarelo;
-        nº de vagas = moedas da faixa da planilha. Sem score, nada muda."""
+        """Par vermelho zerado (ambas as pernas) → melhor candidato verde/amarelo; par vermelho com
+        perna aberta sai no zero-a-zero (RED_EXIT_AT_BREAKEVEN); nº de vagas = moedas da faixa da
+        planilha. Sem score, nada muda."""
         c = config
         scores = self.score_cache.get()["scores"] if self.score_cache else {}
         if not scores:
@@ -351,7 +352,7 @@ class MartingaleRunner:
         order = rank_pairs({b + "USDT": scores.get(b + "USDT", {"color": "unknown"}) for b in COINTECH2U_GREEN})
         pos = {s: i for i, s in enumerate(order)}
         color = lambda s: scores.get(s, {}).get("color", "unknown")  # noqa: E731
-        candidates = (s for s in order if color(s) in ("green", "yellow") and s not in self.pairs and s not in busy)
+        candidates = [s for s in order if color(s) in ("green", "yellow") and s not in self.pairs and s not in busy]
         now = time.time()
         # zerada = exchange sem posição E perna local já resetada (leitura vazia transitória não troca par)
         flat = sorted((s for s, p in self.pairs.items() if s not in busy and all(leg.level == 0 for leg in p.legs.values())),
@@ -370,24 +371,57 @@ class MartingaleRunner:
             del self.pairs[sym]
             self._announce(f"trocando slot {sym} → {new} ({sym[:-4]} vermelho: {'; '.join(scores[sym].get('reasons') or [])}; "
                            f"{new[:-4]} {'verde' if color(new) == 'green' else 'amarelo'}, {pos[new] + 1}º no ranking)")
+        if c.MARTINGALE_RED_EXIT_AT_BREAKEVEN:
+            # Par vermelho com perna aberta quase nunca zera (a perna que bate TP reabre na hora):
+            # no zero-a-zero fecha as duas a mercado e cede a vaga. Só mexe em posição presente na
+            # leitura; o candidato é só espiado até o fechamento confirmar.
+            for sym in sorted((s for s in self.pairs if s in busy), key=lambda s: -pos.get(s, len(order))):
+                if color(sym) != "red" or now - self.pairs[sym].since < c.MARTINGALE_PAIR_SWAP_COOLDOWN_MINUTES * 60:
+                    continue
+                open_legs = [by_key[k] for k in (f"{sym}_{side}" for side in SIDES) if k in by_key]
+                pnl = sum(float(p.get("unrealized_pnl") or 0) for p in open_legs)
+                if pnl < c.MARTINGALE_RED_EXIT_MIN_PNL_USDT:
+                    continue
+                new = self._peek(candidates)
+                if new is None:
+                    break
+                self._announce(f"fechando {sym} no zero-a-zero ({pnl:+.2f}$) para liberar vaga: {sym[:-4]} vermelho "
+                               f"({'; '.join(scores[sym].get('reasons') or [])}); candidato {new[:-4]} "
+                               f"{'verde' if color(new) == 'green' else 'amarelo'} {pos[new] + 1}º")
+                for p in open_legs:
+                    if not self.bot.close_position(p, "Martingale: par vermelho saindo no zero-a-zero"):
+                        logger.error(f"❌ Martingale: fechamento de {p['side']} {sym} falhou — par mantido na vaga")
+                        break
+                    self.pairs[sym].legs[p["side"]].reset()
+                else:
+                    del self.pairs[sym]
+                    self._take(candidates, now)
+                    self._announce(f"trocando slot {sym} → {new} ({new[:-4]} {pos[new] + 1}º no ranking)")
         while len(self.pairs) < slots:
             new = self._take(candidates, now)
             if new is None:
                 break
             self._announce(f"ocupando vaga livre com {new} ({pos[new] + 1}º no ranking; faixa pede {slots} moeda(s))")
 
-    def _take(self, candidates, now: float) -> Optional[str]:
-        """Próximo candidato cuja 1ª ordem cobre o minNotional; já entra em self.pairs."""
+    def _peek(self, candidates: List[str]) -> Optional[str]:
+        """1º candidato cuja 1ª ordem cobre o minNotional (descarta os que não cabem); não ocupa vaga."""
         c = config
         first_fill = level_notional(self.base, c.MARTINGALE_MULTIPLIER, 0, c.MARTINGALE_DOUBLE_FIRST)
-        for sym in candidates:
-            info = self.bot.exchange.get_symbol_info(sym) or {}
-            if first_fill < float(info.get("minNotional", 0) or 0):
-                logger.info(f"⏭️ Martingale: candidato {sym} pulado — 1ª ordem ${first_fill:.2f} < minNotional {info.get('minNotional')}")
-                continue
-            self._add_pair(sym, info, since=now)
-            return sym
+        while candidates:
+            info = self.bot.exchange.get_symbol_info(candidates[0]) or {}
+            if first_fill >= float(info.get("minNotional", 0) or 0):
+                return candidates[0]
+            logger.info(f"⏭️ Martingale: candidato {candidates[0]} pulado — 1ª ordem ${first_fill:.2f} < minNotional {info.get('minNotional')}")
+            candidates.pop(0)
         return None
+
+    def _take(self, candidates: List[str], now: float) -> Optional[str]:
+        """Próximo candidato que cabe; já entra em self.pairs."""
+        sym = self._peek(candidates)
+        if sym is not None:
+            candidates.pop(0)
+            self._add_pair(sym, self.bot.exchange.get_symbol_info(sym) or {}, since=now)
+        return sym
 
     def _announce(self, msg: str) -> None:
         logger.info(f"🎰 Martingale: {msg}")
