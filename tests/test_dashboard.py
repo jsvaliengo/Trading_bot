@@ -204,6 +204,26 @@ def test_all_cards_start_closed_and_have_id_for_persistence():
     assert not [t for t in tags if 'id="' not in t]
 
 
+def test_mobile_first_pwa_metas_hero_and_tabbar():
+    """Celular: metas de PWA/iOS, hero no topo fixo, barra inferior com âncoras para cards existentes; login com input 16px."""
+    from trading_bot.web.app import create_app
+    app, _ = create_app(_make_bot())
+    client = app.test_client()
+    login = client.get("/login").data.decode()
+    _login(client)
+    html = client.get("/").data.decode()
+    for page in (html, login):
+        assert 'viewport-fit=cover' in page and 'name="apple-mobile-web-app-capable" content="yes"' in page
+        assert 'rel="apple-touch-icon"' in page and 'rel="manifest"' in page
+    assert 'id="hd-equity"' in html and 'id="hd-today"' in html
+    for href in re.findall(r'<nav class="tabbar"[^>]*>(.*?)</nav>', html, re.S)[0].split('href="')[1:]:
+        assert f'id="{href.split(chr(34))[0][1:]}"' in html
+    assert client.get("/static/manifest.webmanifest").status_code == 200
+    assert client.get("/static/icon-180.png").status_code == 200
+    css = open("trading_bot/web/static/css/login.css", encoding="utf-8").read()
+    assert "font-size:16px" in css.split(".login-field input {")[1].split("}")[0]
+
+
 def test_pages_default_to_dark_theme_and_apply_saved_light_inline():
     """Escuro é o padrão independente do sistema; o claro salvo é aplicado por script inline no <head> (sem flash)."""
     from trading_bot.web.app import create_app
