@@ -132,6 +132,25 @@ mesmo sem dashboard aberto; o dashboard lê dele) e, a cada tick, antes de mexer
 Limites: o `B` por capital (sem `FIRST_ORDER_USDT`) é calculado com o nº de pares do boot e não é refeito ao
 mudar o conjunto; o cooldown não é persistido (restart zera). Desligar: `TRADING_BOT_MARTINGALE_AUTO_PAIRS=false`.
 
+### Drenagem de par (`TRADING_BOT_MARTINGALE_DRAIN_PAIRS`)
+
+Pra tirar um par sem fechar as pernas na mão (ex.: "ADA para de comprar, BNB entra agora"):
+`TRADING_BOT_MARTINGALE_DRAIN_PAIRS=ADAUSDT` (lista separada por vírgula; default vazio) ou, em runtime,
+`/drain ADAUSDT` no Telegram (`/undrain ADAUSDT` tira; `/drain` sem argumento lista). O conjunto é persistido em
+`martingale_drain_pairs` no `bot_state` e unido à env no boot (a env sempre volta no restart; pra parar de drenar
+de vez, tire da env). Um par drenando:
+
+- **não abre base nem adiciona nível** (perna fechada fica fechada; perna aberta segue até o TP, ou até a saída
+  no zero-a-zero da regra 8 se ficar vermelho — nesse caso a vaga não é reocupada de novo);
+- **não conta pra vaga da planilha**: `_rebalance` vê só os pares não drenados, então a vaga é reocupada pelo
+  melhor candidato no mesmo tick, ainda com as pernas do par drenado abertas;
+- **nunca é candidato** enquanto estiver na lista;
+- com **ambas as pernas zeradas** sai de `self.pairs` (`🎰 Martingale: ADAUSDT drenado: ambas as pernas zeradas,
+  par removido`, também no Telegram). Roda independente de `AUTO_PAIRS`.
+
+Dashboard: `draining` no JSON do martingale, chip "drenando" ao lado do símbolo em Pernas ativas e badge do
+anel esmaecido.
+
 ## O que fica desligado sob esta estratégia
 
 TP/SL/trailing por ordem, IA, kill switches (sequência negativa, win rate, drawdown do pullback), meta de

@@ -77,6 +77,8 @@ class TelegramCommandHandler:
             '/strategy': self.cmd_strategy,
             '/rescore': self.cmd_rescore,
             '/invert': self.cmd_invert,
+            '/drain': self.cmd_drain,
+            '/undrain': lambda args: self.cmd_drain(args, undrain=True),
         }
         
         logger.info("📱 Telegram Command Handler inicializado")
@@ -2011,6 +2013,19 @@ class TelegramCommandHandler:
         prefix = "" if success else ""
         self.send_message(f"{prefix}{message}")
 
+    def cmd_drain(self, args: list, undrain: bool = False):
+        """/drain [PAR] lista/entra na drenagem do martingale (sem base nem adição; zerado sai da vaga);
+        /undrain PAR tira. Persistido no bot_state (a env MARTINGALE_DRAIN_PAIRS volta no restart)."""
+        runner = getattr(self.bot, "martingale", None) if self.bot is not None else None
+        if runner is None:
+            self.send_message("❌ Estratégia martingale não ativa")
+            return
+        sym = self.config.normalize_pair_symbol(args[0]) if args and self.config is not None else ""
+        if sym:
+            (runner.drain.discard if undrain else runner.drain.add)(sym)
+            self._persist_runtime_state()
+        self.send_message(f"🚰 <b>Drenando</b>: {', '.join(sorted(runner.drain)) or 'nenhum par'}")
+
     def cmd_close_all(self, args: list):
         """Fecha todas as posições."""
         if self.bot is None:
@@ -2252,6 +2267,7 @@ class TelegramCommandHandler:
 /strategy disable &lt;nome&gt; - Desativar
 
 <b>⚡ AÇÕES:</b>
+/drain [PAR] - Martingale: lista/drena par (sem novas ordens; sai da vaga ao zerar); /undrain PAR
 /closeall - Fechar todas posições
 /closeall confirm - Confirmar (bloqueado em drawdown profundo)
 /closeall eu_sei_o_risco - Forçar fechamento em drawdown

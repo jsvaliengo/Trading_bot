@@ -800,6 +800,8 @@ class TradingBot:
                 self.martingale.saved_legs = dict(state['martingale_legs'])
             if getattr(self, 'martingale', None) is not None and state.get('martingale_pairs'):
                 self.martingale.saved_pairs = list(state['martingale_pairs'])
+            if getattr(self, 'martingale', None) is not None and state.get('martingale_drain_pairs'):
+                self.martingale.drain |= set(state['martingale_drain_pairs'])
             saved_max_drawdown = state.get('max_drawdown_from_peak_percent')
             if saved_max_drawdown is not None:
                 try:
