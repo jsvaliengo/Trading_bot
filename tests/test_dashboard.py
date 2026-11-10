@@ -209,7 +209,8 @@ def test_ring_card_badges_and_legs_list():
     assert '<svg class="ring"' in ring and 'id="rg4"' in ring and 'id="ring-segs"' in ring
     assert 'id="ring-badges"' in ring and 'id="ring-center"' in ring and 'id="ring-state"' in ring
     legs = html.split('id="legs-card"')[1].split("</section>")[0]
-    assert "Pernas ativas" in legs and 'id="mg-list"' in legs
+    assert "Posições abertas" in legs and 'id="legs-sum"' in legs and 'id="mg-list"' in legs
+    assert '<a href="#legs-card">Posições</a>' in html
     for b in ("btn-pause", "btn-resume", "btn-close-all"):
         assert f'id="{b}"' in legs and html.count(f'id="{b}"') == 1
     js = open("trading_bot/web/static/js/main.js", encoding="utf-8").read()
@@ -477,7 +478,19 @@ def test_close_position_calls_bot_with_symbol_and_manual_reason():
     app, _ = create_app(bot)
     r = _close_position(app.test_client(), "BTCUSDT", {"confirm": "BTCUSDT"})
     assert r.status_code == 200 and r.get_json() == {"ok": True, "symbol": "BTCUSDT"}
-    bot.close_position_manual.assert_called_once_with("BTCUSDT", "Manual (dashboard)")
+    bot.close_position_manual.assert_called_once_with("BTCUSDT", "Manual (dashboard)", side=None)
+
+
+def test_close_position_passes_side_and_rejects_bad_side():
+    """Hedge: LONG e SHORT do mesmo símbolo; o dashboard manda o lado da perna que o usuário clicou."""
+    from trading_bot.web.app import create_app
+    bot = _make_bot()
+    app, _ = create_app(bot)
+    r = _close_position(app.test_client(), "ADAUSDT", {"confirm": "ADAUSDT", "side": "SHORT"})
+    assert r.status_code == 200
+    bot.close_position_manual.assert_called_once_with("ADAUSDT", "Manual (dashboard)", side="SHORT")
+    r = _close_position(app.test_client(), "ADAUSDT", {"confirm": "ADAUSDT", "side": "both"})
+    assert r.status_code == 400 and bot.close_position_manual.call_count == 1
 
 
 def test_close_position_reports_unconfirmed_close():

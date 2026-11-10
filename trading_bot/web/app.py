@@ -209,9 +209,12 @@ def _register_routes(app: Flask, socketio: SocketIO) -> None:
         payload = request.get_json(silent=True) or {}
         if payload.get("confirm") != symbol:
             return jsonify({"ok": False, "error": "confirm precisa ser igual ao símbolo"}), 400
+        side = payload.get("side") or request.args.get("side") or None
+        if side not in (None, "LONG", "SHORT"):
+            return jsonify({"ok": False, "error": "side precisa ser LONG ou SHORT"}), 400
         # Mesmo caminho do exit do Donchian: fecha a mercado, registra, cancela o stop órfão.
         try:
-            closed = bot.close_position_manual(symbol, "Manual (dashboard)")
+            closed = bot.close_position_manual(symbol, "Manual (dashboard)", side=side)
         except LookupError as exc:
             return jsonify({"ok": False, "error": str(exc)}), 404
         except Exception as exc:

@@ -325,14 +325,14 @@
 
     // Fechar posição: o botão vira Confirmar/Cancelar inline; o próximo poll remove o card.
     const closing = new Set();
-    const closeCell = (p) => `<span class="pr-close" data-symbol="${esc(p.symbol)}" data-pnl="${esc(fmt.usd(p.unrealized_pnl_usd, { signed: true }))}">${
+    const closeCell = (p) => `<span class="pr-close" data-symbol="${esc(p.symbol)}" data-side="${esc(p.side)}" data-pnl="${esc(fmt.usd(p.unrealized_pnl_usd, { signed: true }))}">${
         closing.has(p.symbol) ? '<small class="dim">fechando…</small>' : '<button type="button" class="btn btn-quiet btn-xs" data-close="ask">Fechar</button>'
     }</span>`;
     const onClose = async (e) => {
         const btn = e.target.closest('[data-close]'); if (!btn) return;
-        const cell = btn.closest('.pr-close'), sym = cell.dataset.symbol;
+        const cell = btn.closest('.pr-close'), sym = cell.dataset.symbol, side = cell.dataset.side;
         if (btn.dataset.close === 'ask') {
-            cell.innerHTML = `<small>fechar ${esc(sym)} a mercado (${esc(cell.dataset.pnl)})?</small>
+            cell.innerHTML = `<small>fechar ${esc(side)} ${esc(sym)} a mercado (${esc(cell.dataset.pnl)})?</small>
                 <button type="button" class="btn btn-danger btn-xs" data-close="yes">Confirmar</button>
                 <button type="button" class="btn btn-quiet btn-xs" data-close="no">Cancelar</button>`;
         } else if (btn.dataset.close === 'no') {
@@ -340,7 +340,7 @@
         } else {
             closing.add(sym); cell.innerHTML = '<small class="dim">fechando…</small>';
             try {
-                const r = await fetch(`/api/positions/${encodeURIComponent(sym)}/close`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirm: sym }), credentials: 'include' });
+                const r = await fetch(`/api/positions/${encodeURIComponent(sym)}/close`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirm: sym, side }), credentials: 'include' });
                 const body = await r.json().catch(() => ({}));
                 if (!r.ok || !body.ok) throw new Error(body.error || ('HTTP ' + r.status));
             } catch (err) {

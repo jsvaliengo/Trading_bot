@@ -4681,11 +4681,13 @@ class TradingBot:
         self.exchange.cancel_open_orders(pos["symbol"])
         return True
 
-    def close_position_manual(self, symbol: str, reason: str = "Manual (dashboard)") -> bool:
-        """Fechamento manual (dashboard). LookupError se o símbolo não tem posição aberta."""
-        live = [p for p in self.exchange.get_open_positions(force_refresh=True) if p["symbol"] == symbol]
+    def close_position_manual(self, symbol: str, reason: str = "Manual (dashboard)", side: str | None = None) -> bool:
+        """Fechamento manual (dashboard). LookupError se o símbolo (e o lado, quando dado) não tem posição aberta.
+        No hedge há LONG e SHORT do mesmo símbolo: `side` escolhe a perna; sem `side` fecha a 1ª (caminho legado)."""
+        live = [p for p in self.exchange.get_open_positions(force_refresh=True)
+                if p["symbol"] == symbol and (side is None or p["side"] == side)]
         if not live:
-            raise LookupError(f"{symbol} não tem posição aberta")
+            raise LookupError(f"{symbol}{' ' + side if side else ''} não tem posição aberta")
         logger.warning(f"🖐️ Fechamento manual de {live[0]['side']} {symbol}: {reason}")
         return self.close_position(live[0], reason)
 
