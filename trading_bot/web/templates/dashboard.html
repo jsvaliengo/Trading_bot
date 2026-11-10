@@ -11,7 +11,6 @@
     <meta name="apple-mobile-web-app-title" content="Trader">
     <link rel="apple-touch-icon" href="{{ url_for('static', filename='icon-180.png') }}">
     <link rel="manifest" href="{{ url_for('static', filename='manifest.webmanifest') }}">
-    <script>try{var t=localStorage.getItem('tradingbot-theme');if(t==="light")document.documentElement.setAttribute('data-theme',t)}catch(e){}</script>
     <title>Forward test · {{ environment|upper }}</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -33,15 +32,7 @@
         <span><span class="tl">Equity</span><b class="tv" id="hd-equity">—</b></span>
         <span><span class="tl">Hoje</span><b class="tv" id="hd-today">—</b></span>
     </div>
-    <div class="top-ctrls">
-        <button class="btn btn-quiet btn-icon" id="theme-toggle" aria-label="Alternar tema claro/escuro" title="Tema">
-            <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path class="ico-moon" d="M10 1.5a6.5 6.5 0 1 0 4.5 11.2A7 7 0 0 1 10 1.5z" fill="currentColor"/><circle class="ico-sun" cx="8" cy="8" r="3.4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
-        </button>
-        <form method="post" action="/logout">
-            <input type="hidden" name="csrf" value="{{ csrf_token }}">
-            <button type="submit" class="btn btn-quiet" id="btn-logout" title="Encerrar a sessão">Sair</button>
-        </form>
-    </div>
+    <time class="clock" id="clock" aria-label="Hora em São Paulo">--:--:--</time>
 </header>
 
 <div class="banner" id="pause-banner" hidden role="status"></div>
@@ -327,6 +318,7 @@
     <!-- Planilha de banca (no lugar de Trades, só no martingale) -->
     <details class="card" id="sheet-card" hidden>
         <summary><h2>Planilha — Binance Estratégia Padrão</h2><span class="cs" id="sheet-sub">—</span></summary>
+        <p class="cs sheet-coins" id="sheet-pace" hidden></p>
         <div class="table-scroll">
             <table class="table sheet" id="sheet-table">
                 <thead><tr><th scope="col">Banca (USDT)</th><th scope="col">Estratégia</th><th scope="col" class="r">1ª ordem Long</th><th scope="col" class="r">1ª ordem Short</th><th scope="col" class="r">Alavancagem</th><th scope="col" class="r">Stop Loss</th><th scope="col">Double First</th><th scope="col" class="r">Moedas</th></tr></thead>

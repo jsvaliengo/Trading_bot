@@ -173,7 +173,9 @@ def test_index_requires_auth_returns_html():
     assert r.status_code == 200
     assert b"Forward test" in r.data
     assert b"socket.io" in r.data.lower() or b"socket.io" in r.data
-    assert b'action="/logout"' in r.data
+    # Topo sem Sair nem toggle de tema; relógio no lugar (main.js atualiza a cada segundo).
+    assert b'action="/logout"' not in r.data and b'theme-toggle' not in r.data
+    assert b'id="clock"' in r.data and b'tradingbot-theme' not in r.data
 
 
 def test_martingale_card_is_collapsible_details():
@@ -243,8 +245,8 @@ def test_mobile_first_pwa_metas_hero_and_tabbar():
     assert "font-size:16px" in css.split(".login-field input {")[1].split("}")[0]
 
 
-def test_pages_default_to_dark_theme_and_apply_saved_light_inline():
-    """Escuro é o padrão independente do sistema; o claro salvo é aplicado por script inline no <head> (sem flash)."""
+def test_pages_are_dark_only_without_theme_script():
+    """Escuro é o único tema: nenhuma página lê tradingbot-theme do localStorage nem tem toggle."""
     from trading_bot.web.app import create_app
     app, _ = create_app(_make_bot())
     client = app.test_client()
@@ -253,8 +255,7 @@ def test_pages_default_to_dark_theme_and_apply_saved_light_inline():
     for page in (login_page, client.get("/").data):
         assert b'<meta name="color-scheme" content="dark">' in page
         assert b"prefers-color-scheme" not in page
-        head = page.split(b"</head>")[0]
-        assert b"localStorage.getItem('tradingbot-theme')" in head and b'if(t==="light")' in head
+        assert b"tradingbot-theme" not in page and b"theme-toggle" not in page
     css = open("trading_bot/web/static/css/style.css", encoding="utf-8").read()
     assert "prefers-color-scheme" not in css and 'color-scheme: dark' in css.split("[data-theme=")[0]
 
@@ -324,6 +325,23 @@ def test_api_without_auth_is_401_json_and_basic_still_works():
     assert r.status_code == 401 and r.get_json()["ok"] is False
     assert client.post("/api/control/pause").status_code == 401
     assert client.get("/api/live", headers=_basic_auth("admin", "secret")).status_code == 200
+
+
+def test_login_cookie_is_session_only_unless_remember():
+    """Sem 'remember' o cookie morre com o navegador; com ele ganha Expires/Max-Age."""
+    from trading_bot.web.app import create_app
+    app, _ = create_app(_make_bot())
+    client = app.test_client()
+    client.get("/login")
+    r = client.post("/login", data={"username": "admin", "password": "secret", "csrf": _csrf(client), "next": "/"})
+    cookie = r.headers.get("Set-Cookie", "")
+    assert r.status_code == 302 and "session=" in cookie
+    assert "Expires=" not in cookie and "Max-Age=" not in cookie
+    r = _login(app.test_client())  # helper manda remember=1
+    cookie = r.headers.get("Set-Cookie", "")
+    assert "Expires=" in cookie  # Werkzeug emite só Expires (sem Max-Age) p/ sessão permanente
+    # A página de login nasce com o "manter conectado" desmarcado.
+    assert b'name="remember" value="1" checked' not in client.get("/login").data
 
 
 def test_logout_clears_session():
@@ -655,6 +673,32 @@ def test_collect_martingale_none_without_runner_and_present_with_it():
     assert calls == [([{"symbol": "ADAUSDT"}], 100.0)]
     bot.martingale = SimpleNamespace(ladder=lambda positions, equity: 1 / 0)
     assert dashboard_data.collect_martingale(bot, [], {}) is None
+
+
+def test_project_next_bank_math():
+    from datetime import date
+    out = dashboard_data.project_next_bank(307.17, 500, 0.49, date(2026, 11, 10))
+    assert out["gap"] == pytest.approx(192.83) and out["eta_days"] == 394 and out["eta_date"] == "2027-12-09"
+    assert dashboard_data.project_next_bank(307.17, 500, -0.2, date(2026, 11, 10))["eta_days"] is None
+    assert dashboard_data.project_next_bank(600.0, 500, 1.0, date(2026, 11, 10))["eta_days"] == 0
+    assert dashboard_data.project_next_bank(307.17, None, 1.0, date(2026, 11, 10)) == {"next_bank": None, "gap": None, "eta_days": None, "eta_date": None}
+
+
+def test_martingale_projection_uses_realized_trades_window():
+    """Ritmo = P&L realizado do martingale / dias desde o 1º trade (máx. 14), sem contar hoje se hoje não fechou trade."""
+    from datetime import datetime, timedelta, timezone
+    now = datetime.now(timezone.utc)
+    rows = [{"exit_at": (now - timedelta(days=1, hours=2)).isoformat(), "pnl_net": 2.0, "strategy_type": "martingale_hedge"},
+            {"exit_at": (now - timedelta(days=1, hours=1)).isoformat(), "pnl_net": -0.5, "strategy_type": "martingale_hedge"}]
+    bot = _make_bot()
+    bot.trade_store = SimpleNamespace(closed_trades=lambda strategy_type=None, limit=2000: rows)
+    bot.martingale = SimpleNamespace(ladder=lambda positions, equity: {"legs": []})
+    pj = dashboard_data.collect_martingale(bot, [], {"last_balance": 310.0})["sheet"]["projection"]
+    assert pj["trades"] == 2 and pj["next_bank"] == 500 and pj["gap"] == pytest.approx(190.0)
+    assert pj["days_elapsed"] in (1, 2) and pj["avg_daily"] == pytest.approx(1.5 / pj["days_elapsed"])
+    assert pj["eta_days"] == pj["days_elapsed"] * 127  # ceil(190 / (1.5/d))
+    bot.trade_store = SimpleNamespace(closed_trades=lambda strategy_type=None, limit=2000: [])
+    assert dashboard_data.collect_martingale(bot, [], {"last_balance": 310.0})["sheet"]["projection"] is None
 
 
 # ---------- collect_forward_test: card "Desde o início" por estratégia ----------

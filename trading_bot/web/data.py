@@ -13,12 +13,14 @@ from __future__ import annotations
 import json
 import os
 import time
-from datetime import datetime
+import math
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from ..core.config import config
 from ..core.donchian import r_multiple_now
 from ..core.equity import effective_equity, simulated_balance
+from ..core.martingale import STRATEGY_TYPE as MARTINGALE_STRATEGY
 from ..core.trade_store import trading_day_start
 from ..services.martingale_pair_score import (COINTECH2U_GREEN, COINTECH2U_RED, COINTECH2U_SHEET, PairScoreCache,
                                               rank_pairs, rank_score, sheet_row_index)
@@ -144,10 +146,44 @@ def collect_martingale(bot, positions: List[Dict[str, Any]], summary: Dict[str, 
     ranking = [{"symbol": sym, "rank": i + 1, "color": full[sym]["color"], "score": rank_score(full[sym]),
                 "active": sym in active, "sheet_red": sym.replace("USDT", "") in COINTECH2U_RED}
                for i, sym in enumerate(rank_pairs(full))]
-    out["sheet"] = {"rows": COINTECH2U_SHEET, "current": sheet_row_index(equity),
+    cur = sheet_row_index(equity)
+    nxt = COINTECH2U_SHEET[0 if cur is None else cur + 1] if cur is None or cur + 1 < len(COINTECH2U_SHEET) else None
+    out["sheet"] = {"rows": COINTECH2U_SHEET, "current": cur,
                     "green": COINTECH2U_GREEN, "red": COINTECH2U_RED,
-                    "scores": scores["scores"], "scores_updated_at": scores["updated_at"], "ranking": ranking}
+                    "scores": scores["scores"], "scores_updated_at": scores["updated_at"], "ranking": ranking,
+                    "projection": _martingale_projection(bot, equity, nxt[1] if nxt else None)}
     return out
+
+
+def _martingale_projection(bot, balance: Optional[float], next_bank: Optional[float]) -> Optional[Dict[str, Any]]:
+    """Ritmo de P&L realizado (SQLite) desde o 1º trade do martingale, no máximo 14 dias;
+    o dia de hoje só conta se já fechou trade. None sem trades."""
+    store = getattr(bot, "trade_store", None)
+    try:
+        rows = store.closed_trades(MARTINGALE_STRATEGY) if store is not None else []
+    except Exception:
+        rows = []
+    stamped = [(ft.parse_utc(r.get("exit_at")), _safe_float(r.get("pnl_net"))) for r in rows]
+    stamped = [(t, pnl) for t, pnl in stamped if t is not None]
+    if not stamped or balance is None:
+        return None
+    now = datetime.now(timezone.utc)
+    today0 = trading_day_start(now)
+    start = max(trading_day_start(min(t for t, _ in stamped)), today0 - timedelta(days=13))
+    end = now if any(t >= today0 for t, _ in stamped) else today0
+    days = max(1, math.ceil((end - start) / timedelta(days=1)))
+    window = [pnl for t, pnl in stamped if t >= start]
+    avg = sum(window) / days
+    return {"avg_daily": avg, "days_elapsed": days, "trades": len(window),
+            **project_next_bank(balance, next_bank, avg, today0.date())}
+
+
+def project_next_bank(balance: float, next_bank: Optional[float], avg_daily: float, today: date) -> Dict[str, Any]:
+    """Quanto falta pra próxima faixa da planilha e em quantos dias chega nesse ritmo (None se ritmo <= 0)."""
+    gap = None if next_bank is None else max(0.0, float(next_bank) - float(balance))
+    eta_days = None if gap is None or avg_daily <= 0 else math.ceil(gap / avg_daily)
+    return {"next_bank": next_bank, "gap": gap, "eta_days": eta_days,
+            "eta_date": (today + timedelta(days=eta_days)).isoformat() if eta_days is not None else None}
 
 
 _score_cache: Optional[PairScoreCache] = None
