@@ -941,7 +941,9 @@ class TradingBot:
             logger.info(f"   • Trades fechados: {self.closed_trades_count}")
             logger.info(f"   • P&L Total: ${self.total_pnl:.2f}")
             logger.info(f"   • Snapshots no histórico: {len(self.portfolio_history)}")
-            logger.info(f"   • Pares desabilitados: {', '.join(config.DISABLED_PAIRS) if config.DISABLED_PAIRS else 'nenhum'}")
+            # Martingale não consulta DISABLED_PAIRS — logar a lista só confunde.
+            if config.STRATEGY != MARTINGALE:
+                logger.info(f"   • Pares desabilitados: {', '.join(config.DISABLED_PAIRS) if config.DISABLED_PAIRS else 'nenhum'}")
             if self.double_first_used:
                 logger.info(f"   • Double First usados: {len(self.double_first_used)}")
             
