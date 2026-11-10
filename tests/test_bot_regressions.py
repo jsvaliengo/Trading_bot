@@ -3208,6 +3208,26 @@ def test_manual_close_nao_duplica_registro_quando_monitor_ve_posicao_sumir():
     assert "BATUSDT_SHORT" not in bot.known_positions
 
 
+def test_manual_close_com_side_fecha_so_a_perna_pedida_no_hedge():
+    """Martingale hedge: ADA LONG e ADA SHORT abertos ao mesmo tempo. Fechar com side=SHORT
+    manda a ordem só pra perna SHORT (positionSide da perna); sem side, comportamento legado (1ª perna)."""
+    bot = _bot_for_market_close({"orderId": 7, "status": "FILLED", "avgPrice": "0.50"})
+    sent = []
+    bot.exchange.close_position = lambda symbol, side: sent.append((symbol, side)) or {"orderId": 7, "status": "FILLED", "avgPrice": "0.50"}
+    bot.exchange.cancel_open_orders = MagicMock(return_value=True)
+    live = [{"symbol": "ADAUSDT", "side": "LONG", "entry_price": 0.51, "quantity": 58.0, "mark_price": 0.50, "unrealized_pnl": -0.5},
+            {"symbol": "ADAUSDT", "side": "SHORT", "entry_price": 0.51, "quantity": 12.0, "mark_price": 0.50, "unrealized_pnl": 0.1}]
+    bot.exchange.get_open_positions = lambda *a, **kw: list(live)
+    bot.known_positions = {f"ADAUSDT_{p['side']}": dict(p, strategy_type="martingale_hedge") for p in live}
+
+    assert bot.close_position_manual("ADAUSDT", side="SHORT") is True
+    assert sent == [("ADAUSDT", "SHORT")]
+    assert bot.close_position_manual("ADAUSDT") is True       # legado: sem side fecha a 1ª perna viva
+    assert sent[-1] == ("ADAUSDT", "LONG")
+    with pytest.raises(LookupError):
+        bot.close_position_manual("TRXUSDT", side="LONG")
+
+
 def test_dedupe_manual_close_script_apaga_so_a_linha_binance_do_mesmo_minuto(tmp_path, capsys):
     from trading_bot.core.trade_store import TradeStore
     from scripts.dedupe_manual_close import main

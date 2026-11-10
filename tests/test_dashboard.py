@@ -178,19 +178,23 @@ def test_index_requires_auth_returns_html():
     assert b'id="clock"' in r.data and b'tradingbot-theme' not in r.data
 
 
-def test_martingale_card_is_collapsible_details():
-    """Escada martingale é um <details class="card"> com o stop no summary e os parâmetros no conteúdo."""
+def test_martingale_dashboard_is_ring_legs_sheet_pnl_health():
+    """Sem card "Escada martingale"; no martingale o main.js esconde ft/pos/equity/perf/rdist/calendário
+    e move a linha de tiles pra dentro do anel (tile Equity some: o saldo já está no centro)."""
     from trading_bot.web.app import create_app
     app, _ = create_app(_make_bot())
     client = app.test_client()
     _login(client)
     html = client.get("/").data.decode()
-    card = html.split('id="mg-card"')[1].split("</details>")[0]
-    assert '<details class="card" id="mg-card" hidden>' in html
-    assert "<summary><h2>Escada martingale</h2>" in card and 'id="mg-stop"' in card.split("</summary>")[0]
-    assert 'id="mg-params"' in card.split("</summary>")[1]
+    assert "mg-card" not in html and "mg-params" not in html and "Escada martingale" not in html
+    for i in ("status", "tile-equity", "pos-card", "eqperf-row", "rdist-row", "legs-sum"):
+        assert f'id="{i}"' in html, i
+    assert html.index('id="eqperf-row"') < html.index('id="eq-card"') < html.index('id="perf-card"') < html.index("</section>", html.index('id="eqperf-row"'))
+    assert html.index('id="rdist-row"') < html.index('id="cal-card"') < html.index("</section>", html.index('id="rdist-row"'))
     js = open("trading_bot/web/static/js/main.js", encoding="utf-8").read()
     assert "'tradingbot-open:' + d.id" in js
+    assert "$('ft-card').hidden = $('pos-card').hidden = $('tile-equity').hidden = $('eqperf-row').hidden = $('rdist-row').hidden = !!m" in js
+    assert "rc.appendChild(st)" in js and "$('mg-list').addEventListener('click', onClose)" in js
 
 
 def test_ring_card_badges_and_legs_list():
@@ -205,7 +209,8 @@ def test_ring_card_badges_and_legs_list():
     assert '<svg class="ring"' in ring and 'id="rg4"' in ring and 'id="ring-segs"' in ring
     assert 'id="ring-badges"' in ring and 'id="ring-center"' in ring and 'id="ring-state"' in ring
     legs = html.split('id="legs-card"')[1].split("</section>")[0]
-    assert "Pernas ativas" in legs and 'id="mg-list"' in legs
+    assert "Posições abertas" in legs and 'id="legs-sum"' in legs and 'id="mg-list"' in legs
+    assert '<a href="#legs-card">Posições</a>' in html
     for b in ("btn-pause", "btn-resume", "btn-close-all"):
         assert f'id="{b}"' in legs and html.count(f'id="{b}"') == 1
     js = open("trading_bot/web/static/js/main.js", encoding="utf-8").read()
@@ -220,7 +225,7 @@ def test_all_cards_start_closed_and_have_id_for_persistence():
     _login(client)
     html = client.get("/").data.decode()
     tags = re.findall(r'<details class="card[^"]*"[^>]*>', html)
-    assert len(tags) >= 10
+    assert len(tags) >= 9
     assert not [t for t in tags if re.search(r"\bopen\b", t)]
     assert not [t for t in tags if 'id="' not in t]
 
@@ -473,7 +478,19 @@ def test_close_position_calls_bot_with_symbol_and_manual_reason():
     app, _ = create_app(bot)
     r = _close_position(app.test_client(), "BTCUSDT", {"confirm": "BTCUSDT"})
     assert r.status_code == 200 and r.get_json() == {"ok": True, "symbol": "BTCUSDT"}
-    bot.close_position_manual.assert_called_once_with("BTCUSDT", "Manual (dashboard)")
+    bot.close_position_manual.assert_called_once_with("BTCUSDT", "Manual (dashboard)", side=None)
+
+
+def test_close_position_passes_side_and_rejects_bad_side():
+    """Hedge: LONG e SHORT do mesmo símbolo; o dashboard manda o lado da perna que o usuário clicou."""
+    from trading_bot.web.app import create_app
+    bot = _make_bot()
+    app, _ = create_app(bot)
+    r = _close_position(app.test_client(), "ADAUSDT", {"confirm": "ADAUSDT", "side": "SHORT"})
+    assert r.status_code == 200
+    bot.close_position_manual.assert_called_once_with("ADAUSDT", "Manual (dashboard)", side="SHORT")
+    r = _close_position(app.test_client(), "ADAUSDT", {"confirm": "ADAUSDT", "side": "both"})
+    assert r.status_code == 400 and bot.close_position_manual.call_count == 1
 
 
 def test_close_position_reports_unconfirmed_close():

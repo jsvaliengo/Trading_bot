@@ -62,9 +62,9 @@
         </div>
     </section>
 
-    <!-- 0b. Pernas ativas + ações (só no martingale) -->
+    <!-- 0b. Posições abertas (pernas da escada) + ações (só no martingale) -->
     <section class="card" id="legs-card" aria-labelledby="legs-h" hidden>
-        <header class="ch"><h2 id="legs-h">Pernas ativas</h2></header>
+        <header class="ch"><h2 id="legs-h">Posições abertas</h2><span class="cs" id="legs-sum">—</span></header>
         <div class="pills">
             <button class="btn" id="btn-pause" data-action="pause" title="Pausar novas entradas">Pausar</button>
             <button class="btn" id="btn-resume" data-action="resume" title="Retomar entradas">Retomar</button>
@@ -73,9 +73,9 @@
         <div id="mg-list"></div>
     </section>
 
-    <!-- 1. Linha de status: está vivo? barra, equity, posições, P&L -->
-    <section class="status" aria-label="Status">
-        <div class="tile tile-main">
+    <!-- 1. Linha de status: está vivo? barra, equity, posições, P&L. No martingale o main.js move esta linha pra dentro do anel. -->
+    <section class="status" id="status" aria-label="Status">
+        <div class="tile tile-main" id="tile-equity">
             <span class="tl">Equity</span>
             <b class="tv" id="st-equity">—</b>
             <span class="tf" id="st-equity-f">—</span>
@@ -146,17 +146,11 @@
         </div>
     </section>
 
-    <!-- 3. Posições -->
-    <section class="card" aria-labelledby="pos-h">
+    <!-- 3. Posições (no martingale as pernas já trazem isso: card oculto) -->
+    <section class="card" id="pos-card" aria-labelledby="pos-h">
         <header class="ch"><h2 id="pos-h">Posições abertas <span class="badge" id="positions-count">0</span></h2><span class="cs" id="pos-sum">—</span></header>
         <div id="positions-list"><p class="empty">Nenhuma posição aberta. O motor entra só no fechamento de barra 4h com rompimento de 40 barras.</p></div>
     </section>
-
-    <!-- 3b. Escada martingale (só com TRADING_BOT_STRATEGY=martingale_hedge) -->
-    <details class="card" id="mg-card" hidden>
-        <summary><h2>Escada martingale</h2><span class="cs" id="mg-stop">—</span></summary>
-        <p class="cs" id="mg-params">—</p>
-    </details>
 
     <!-- 3c. Ganhos e Perdas de Futuros (estilo app da Binance; dados do TradeStore + income da Binance) -->
     <details class="card pnl" id="pnl-card">
@@ -259,7 +253,8 @@
         </div>
     </details>
 
-    <section class="two">
+    <!-- Equity + Performance (ocultos no martingale: curva/tabela são do forward test Donchian) -->
+    <section class="two" id="eqperf-row">
         <!-- Equity + drawdown -->
         <details class="card" id="eq-card">
             <summary><h2>Equity</h2><span class="cs" id="eq-sub">—</span></summary>
@@ -365,7 +360,8 @@
         </div>
     </details>
 
-    <section class="two">
+    <!-- Distribuição de R + Calendário (ocultos no martingale) -->
+    <section class="two" id="rdist-row">
         <details class="card" id="rdist-card">
             <summary><h2>Distribuição de R e excursões</h2><span class="badge" id="rh-n">—</span></summary>
             <p class="cs">Trend following paga vários −1R para pegar poucos trades grandes. À direita, até onde cada trade andou a favor (MFE) contra o resultado em R.</p>
@@ -389,7 +385,7 @@
 </main>
 
 <nav class="tabbar" aria-label="Seções">
-    <a href="#legs-card">Pernas</a>
+    <a href="#legs-card">Posições</a>
     <a href="#pnl-card">P&amp;L</a>
     <a href="#sheet-card">Planilha</a>
     <a href="#health-card">Saúde</a>
