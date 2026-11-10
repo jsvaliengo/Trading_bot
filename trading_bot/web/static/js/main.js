@@ -65,24 +65,10 @@
     const PAGE = 15;
     const charts = {};
 
-    // ───────── Tema ─────────
-    const THEME_KEY = 'tradingbot-theme';
-    // Escuro é o padrão; o script inline no <head> já aplicou a escolha salva antes do CSS (sem flash).
-    function currentTheme() { return document.documentElement.getAttribute('data-theme') || 'dark'; }
-    function rerenderCharts() {
-        Object.keys(charts).forEach(k => { try { charts[k].destroy(); } catch (e) { /* já destruído */ } delete charts[k]; });
-        if (state.live) renderLive(state.live);
-        if (state.hist) renderHistory(state.hist);
-        if (state.pnl) renderPnl(state.pnl);
-    }
-    function initTheme() {
-        $('theme-toggle').addEventListener('click', () => {
-            const next = currentTheme() === 'dark' ? 'light' : 'dark';
-            document.documentElement.setAttribute('data-theme', next);
-            try { localStorage.setItem(THEME_KEY, next); } catch (e) { /* storage bloqueado: vale só nesta página */ }
-            rerenderCharts();
-        });
-    }
+    // ───────── Relógio (America/Sao_Paulo) ─────────
+    const clockFmt = new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const tickClock = () => { $('clock').textContent = clockFmt.format(new Date()); };
+    tickClock(); setInterval(tickClock, 1000);
 
     // ───────── Chart helpers ─────────
     function palette() {
@@ -400,6 +386,14 @@
         const stop = $('mg-stop'); stop.textContent = `stop de portfólio em ${fmt.usd(m.portfolio_stop_equity)}` + (isNum(m.portfolio_stop_room_pct) ? ` — faltam ${fmt.pct(m.portfolio_stop_room_pct, 2, false)}` : '');
         stop.className = 'cs ' + (isNum(m.portfolio_stop_room_pct) && m.portfolio_stop_room_pct < 5 ? 'warn' : '');
         const away = (px, pct) => isNum(px) ? `<b>${fmt.price(px)}</b>${isNum(pct) ? ` <small>(${fmt.pct(pct)})</small>` : ''}` : '<b>—</b>';
+        // Barra: 0% = TP, 100% = próxima adição; a mesma fração vale p/ LONG (preço caindo) e SHORT (subindo).
+        const addBar = (l) => {
+            if (l.level >= l.max_levels) return `<div class="addbar max"><span class="addbar-t"></span><small>nível máx.</small></div>`;
+            if (![l.mark_price, l.tp_price, l.next_add_price].every(isNum) || l.next_add_price === l.tp_price) return '';
+            const pct = Math.min(100, Math.max(0, (l.mark_price - l.tp_price) / (l.next_add_price - l.tp_price) * 100));
+            const dist = Math.abs(l.next_add_price - l.mark_price) / l.mark_price * 100;
+            return `<div class="addbar"><span class="addbar-t"><i style="width:${(100 - pct).toFixed(1)}%"></i></span><small>faltam ${fmt.pct(dist, 1, false)} p/ L${l.level + 1}</small></div>`;
+        };
         $('mg-list').innerHTML = (m.legs || []).map(l => `<div class="prow">
             <div class="prow-top">
                 <span class="psym">${esc(l.symbol)} <span class="side ${l.side === 'LONG' ? 'l' : 's'}">${esc(l.side)}</span></span>
@@ -413,6 +407,7 @@
                 <span>TP @ ${away(l.tp_price, l.tp_pct)}</span>
                 <span>preço <b>${fmt.price(l.mark_price)}</b></span>
             </div>
+            ${addBar(l)}
         </div>`).join('') || '<p class="empty">Nenhum par na escada (estratégia não iniciou ou nenhum par cabe na ordem base).</p>';
     }
 
@@ -472,6 +467,14 @@
         // linha: [rótulo, banca mín., estratégia, 1ª long, 1ª short, alavancagem, stop, double first, moedas]
         $('sheet-sub').textContent = `Banca ${fmt.usd(eq)} → ` + (cur == null ? 'abaixo da 1ª faixa (90 USDT)' : `faixa ${rows[cur][1]} USDT · ${rows[cur][8]} moeda(s)`)
             + (nxt ? ` · próxima faixa $${nxt[1]} (${nxt[8]} moedas)` : '');
+        const pj = sh.projection, pace = $('sheet-pace');
+        pace.hidden = !pj;
+        if (pj) {
+            const dias = `${pj.days_elapsed} dia${pj.days_elapsed === 1 ? '' : 's'}`;
+            pace.textContent = `Ritmo: ${fmt.usd(pj.avg_daily, { signed: true })}/dia (${pj.trades} trades em ${dias})`
+                + (pj.next_bank == null ? '' : pj.eta_days == null ? ' · próxima faixa não alcançável neste ritmo'
+                    : ` · faltam ${fmt.usd(pj.gap)} p/ $${pj.next_bank} → ~${pj.eta_days} dias (≈ ${pj.eta_date.split('-').reverse().join('/')})`);
+        }
         $('sheet-table').querySelector('tbody').innerHTML = rows.map((r, i) => `<tr class="${i === cur ? 'cur' : ''}">
             <td>${esc(r[0])}</td><td class="sans">${esc(r[2])}</td><td class="r">${r[3]}</td><td class="r">${r[4]}</td><td class="r">${r[5]}</td><td class="r">${Number(r[6]).toLocaleString('pt-BR')}</td><td class="sans">${r[7] ? 'ON' : 'OFF'}</td><td class="r">${r[8]}</td></tr>`).join('');
         const bases = new Set((botPairs || []).map(p => String(p).replace(/USDT$/, '')));
@@ -888,7 +891,7 @@
     setInterval(fetchHistory, HISTORY_INTERVAL);
 
     // ───────── Boot ─────────
-    initTheme(); initChips(); initTrades(); initPnl();
+    initChips(); initTrades(); initPnl();
     fetchHistory();   // também dispara o primeiro fetchPnl()
     if (typeof io !== 'undefined') {
         socket = io({ transports: ['polling', 'websocket'], reconnectionDelayMax: 10000 });

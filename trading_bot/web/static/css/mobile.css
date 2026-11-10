@@ -5,9 +5,10 @@
     html { -webkit-text-size-adjust:100%; }
     body { font-size:14px; }
 
-    /* Topo fixo: linha 1 = estado/ambiente + tema + sair; linha 2 = hero (equity, hoje); linha 3 = ações. */
+    /* Topo fixo: linha 1 = título/estado/ambiente + relógio; linha 2 = hero (equity, hoje). */
     .top { gap:6px 8px; padding:6px max(12px, env(safe-area-inset-right)) 8px max(12px, env(safe-area-inset-left)); }
-    .top-id { width:100%; gap:8px; order:1; }
+    .top-id { flex:1; min-width:0; gap:8px; order:1; }
+    .clock { order:1; }
     .top-title { font-size:13px; color:var(--text-muted); flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; }
     .fx { flex-basis:100%; font-size:12px; gap:6px; }
     .hero { display:flex; width:100%; gap:16px; order:2; }
@@ -15,10 +16,6 @@
     body:has(#ring-card:not([hidden])) .hero { display:none; }
     .hero > span { flex:1; min-width:0; display:flex; flex-direction:column; }
     .hero .tv { font-size:22px; }
-    .top-ctrls { width:100%; margin-left:0; gap:6px; order:3; }
-    .top-ctrls .btn { flex:1 1 0; min-height:44px; padding:8px 6px; font-size:13px; white-space:nowrap; }
-    .top-ctrls .btn-icon { flex:0 0 44px; }
-    .top-ctrls form { display:contents; }
     .banner { padding:8px max(12px, env(safe-area-inset-right)) 8px max(12px, env(safe-area-inset-left)); font-size:13px; }
 
     /* Barra inferior fixa, acima do indicador de home. */
