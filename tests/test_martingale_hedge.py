@@ -3,6 +3,7 @@ stop de portfólio, recusa sem hedge mode, pular par abaixo do minNotional e int
 from __future__ import annotations
 
 import threading
+import time
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -377,11 +378,12 @@ def test_swaps_red_pair_for_best_green_when_both_legs_are_flat(_one_slot_auto, c
     assert "ADAUSDT → BNBUSDT" in bot.telegram.send_message.call_args[0][0]
 
 
-def test_never_swaps_while_one_leg_is_open(_one_slot_auto):
+def test_never_swaps_while_one_leg_is_open_below_breakeven(_one_slot_auto):
     ex = _Ex(balance=100.0, min_notional=1.0)
     bot, r = _runner(ex)
     r.tick()                                                   # abre LONG e SHORT em ADA
     ex.positions = [p for p in ex.positions if p["side"] == "SHORT"]   # LONG fechada fora; SHORT segue aberta
+    ex.positions[0]["unrealized_pnl"] = -0.5                   # no prejuízo: a saída no zero-a-zero não se aplica
     _scored(r, BNB="green", ADA="red")
     r.tick()
     assert list(r.pairs) == ["ADAUSDT"] and all(o["symbol"] == "ADAUSDT" for o in ex.orders)
@@ -458,6 +460,67 @@ def test_skips_candidates_already_in_slot_with_open_position_or_below_min_notion
     r.tick()
     # TRX já ocupa vaga, BNB tem posição órfã na exchange, ETH não cabe na 1ª ordem → LINK
     assert "LINKUSDT" in r.pairs and "ADAUSDT" not in r.pairs and "ETHUSDT" not in r.pairs and "BNBUSDT" not in r.pairs
+
+
+def _red_with_open_legs(pnl=(0.02, 0.01), **colors):
+    """ADA vermelho com LONG+SHORT abertas e P&L não realizado dado por perna; BNB verde como candidato."""
+    ex = _Ex(balance=100.0, min_notional=1.0)
+    bot, r = _runner(ex)
+    r.tick()                                                   # abre LONG e SHORT em ADA
+    for p, u in zip(ex.positions, pnl):
+        p["unrealized_pnl"] = u
+    _scored(r, **(colors or {"BNB": "green", "ADA": "red"}))
+    return ex, bot, r
+
+
+def test_red_pair_exits_at_breakeven_and_frees_slot_for_green(_one_slot_auto, caplog):
+    ex, bot, r = _red_with_open_legs(pnl=(0.02, 0.01))
+    caplog.set_level("INFO")
+    r.tick()
+    assert [c[:2] for c in bot.closed] == [("ADAUSDT", "LONG"), ("ADAUSDT", "SHORT")]
+    assert all(c[2] == "Martingale: par vermelho saindo no zero-a-zero" for c in bot.closed)
+    assert list(r.pairs) == ["BNBUSDT"]
+    assert [o["symbol"] for o in ex.orders][-2:] == ["BNBUSDT", "BNBUSDT"]     # base do par novo no mesmo tick
+    assert "fechando ADAUSDT no zero-a-zero (+0.03$) para liberar vaga: ADA vermelho (adx 40 (>35)); candidato BNB verde 1º" in caplog.text
+    assert "trocando slot ADAUSDT → BNBUSDT" in caplog.text
+    assert any("zero-a-zero" in c[0][0] for c in bot.telegram.send_message.call_args_list)
+
+
+def test_red_pair_with_negative_pnl_stays(_one_slot_auto):
+    ex, bot, r = _red_with_open_legs(pnl=(-0.6, 0.1))
+    r.tick()
+    assert bot.closed == [] and list(r.pairs) == ["ADAUSDT"]
+
+
+def test_red_pair_never_closes_into_an_empty_slot(_one_slot_auto):
+    ex, bot, r = _red_with_open_legs(pnl=(0.02, 0.01), ADA="red", TRX="red")   # nenhum candidato verde/amarelo
+    r.tick()
+    assert bot.closed == [] and list(r.pairs) == ["ADAUSDT"]
+
+
+def test_red_exit_respects_feature_flag(_one_slot_auto, monkeypatch):
+    monkeypatch.setattr(config, "MARTINGALE_RED_EXIT_AT_BREAKEVEN", False)
+    ex, bot, r = _red_with_open_legs(pnl=(0.02, 0.01))
+    r.tick()
+    assert bot.closed == [] and list(r.pairs) == ["ADAUSDT"]
+
+
+def test_red_exit_respects_swap_cooldown(_one_slot_auto, monkeypatch):
+    monkeypatch.setattr(config, "MARTINGALE_PAIR_SWAP_COOLDOWN_MINUTES", 360)
+    ex, bot, r = _red_with_open_legs(pnl=(0.02, 0.01))
+    r.pairs["ADAUSDT"].since = time.time()                     # acabou de ocupar a vaga
+    r.tick()
+    assert bot.closed == [] and list(r.pairs) == ["ADAUSDT"]
+    r.pairs["ADAUSDT"].since -= 361 * 60
+    r.tick()
+    assert len(bot.closed) == 2 and list(r.pairs) == ["BNBUSDT"]
+
+
+def test_red_exit_keeps_pair_when_a_close_fails(_one_slot_auto):
+    ex, bot, r = _red_with_open_legs(pnl=(0.02, 0.01))
+    bot.close_position = lambda pos, reason: False
+    r.tick()
+    assert list(r.pairs) == ["ADAUSDT"] and r.pairs["ADAUSDT"].legs["LONG"].level == 1
 
 
 def test_pairs_persist_in_state_and_win_over_env_on_restart(_one_slot_auto):

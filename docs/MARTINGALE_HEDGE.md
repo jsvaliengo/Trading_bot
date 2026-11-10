@@ -100,8 +100,9 @@ normal de alts é 4–6 % (≈3 degraus de 1,5 %/dia, o que o martingale quer). 
 mesmo sem dashboard aberto; o dashboard lê dele) e, a cada tick, antes de mexer nas pernas, roda
 `MartingaleRunner._rebalance` (`core/martingale.py`):
 
-1. **Escada em andamento nunca é trocada.** Um par só muda de vaga quando **ambas** as pernas estão zeradas:
-   exchange sem posição no símbolo **e** perna local já resetada (uma leitura vazia transitória da exchange não troca).
+1. **Escada em andamento não é trocada.** Um par só muda de vaga quando **ambas** as pernas estão zeradas:
+   exchange sem posição no símbolo **e** perna local já resetada (uma leitura vazia transitória da exchange não troca)
+   — ou pela **saída no zero-a-zero** (regra 8), já que a perna que bate TP reabre na hora e o par quase nunca zera.
 2. **Vagas** = coluna `moedas` da faixa atual da planilha pela equity (`sheet_row_index`; $300–500 → 2). Abaixo da 1ª
    faixa mantém o número atual. Faixa menor solta as vagas excedentes (só pares zerados, pior colocado primeiro);
    faixa maior ocupa as vagas livres com os melhores candidatos.
@@ -116,6 +117,17 @@ mesmo sem dashboard aberto; o dashboard lê dele) e, a cada tick, antes de mexer
    o conjunto inicial/fallback). Com `AUTO_PAIRS=false` a env é fixa e o state é ignorado.
 7. Cada troca gera log INFO `🎰 Martingale: trocando slot ADAUSDT → BNBUSDT (ADA vermelho: …; BNB verde, 1º no
    ranking)` e a mesma mensagem no Telegram. O dashboard mostra os pares ativos contornados na planilha.
+8. **Saída no zero-a-zero** (`TRADING_BOT_MARTINGALE_RED_EXIT_AT_BREAKEVEN=true`, default): par **vermelho** com
+   perna(s) aberta(s), cooldown vencido, **candidato** verde/amarelo disponível (mesma lista da regra 3; só espiado
+   até o fechamento confirmar) e soma do `unrealized_pnl` das pernas presentes na leitura ≥
+   `TRADING_BOT_MARTINGALE_RED_EXIT_MIN_PNL_USDT` (0.0) → fecha as pernas a mercado (`bot.close_position`, ordem
+   reduce-only com `positionSide` da perna, registrada no TradeStore/Telegram como "Martingale: par vermelho saindo
+   no zero-a-zero"), reseta as pernas, tira o par da vaga e ocupa-a com o candidato no mesmo tick (a base do par
+   novo abre neste tick; o par fechado não reabre). Se um fechamento falhar, o par fica na vaga. Não roda com o
+   bot pausado. **Atenção**: o `unRealizedProfit` da Binance é bruto (mark − média × qty), sem a taxa de abertura
+   já paga nem a de fechamento; `0.0` é zero-a-zero bruto (≈ −0,1% do notional líquido no taker) — suba o piso
+   pra cobrir fees. Log/Telegram: `🎰 Martingale: fechando ADAUSDT no zero-a-zero (+0.03$) para liberar vaga: ADA
+   vermelho (…); candidato BNB verde 1º` seguido do `trocando slot`.
 
 Limites: o `B` por capital (sem `FIRST_ORDER_USDT`) é calculado com o nº de pares do boot e não é refeito ao
 mudar o conjunto; o cooldown não é persistido (restart zera). Desligar: `TRADING_BOT_MARTINGALE_AUTO_PAIRS=false`.
