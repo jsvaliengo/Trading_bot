@@ -22,18 +22,20 @@
     const isNum = (v) => v !== null && v !== undefined && !isNaN(v);
     const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+    // sinal após arredondar a d casas: o que vira "0,00" na tela é zero (sem sinal, sem cor)
+    const sgn = (v, d = 2) => Math.abs(v) < 0.5 * 10 ** -d ? 0 : Math.sign(v);
     const fmt = {
         usd(v, o = {}) {
             if (!isNum(v)) return '—';
-            const sign = v < 0 ? '−' : (o.signed && v > 0 ? '+' : '');
+            const s = sgn(v), sign = s < 0 ? '−' : (o.signed && s > 0 ? '+' : '');
             return sign + '$' + Math.abs(Number(v)).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
         },
         // equivalente em BRL pela cotação do payload (state.fx); '' sem cotação, aí o texto some
-        brl(usd) { const r = state.fx && state.fx.usd_brl; if (!isNum(usd) || !isNum(r)) return ''; return '≈ ' + (usd < 0 ? '−' : '') + Math.abs(usd * r).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }); },
-        pct(v, d = 2, signed = true) { if (!isNum(v)) return '—'; const s = v < 0 ? '−' : (signed && v > 0 ? '+' : ''); return s + Math.abs(Number(v)).toFixed(d).replace('.', ',') + '%'; },
+        brl(usd) { const r = state.fx && state.fx.usd_brl; if (!isNum(usd) || !isNum(r)) return ''; return '≈ ' + (sgn(usd * r) < 0 ? '−' : '') + Math.abs(usd * r).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }); },
+        pct(v, d = 2, signed = true) { if (!isNum(v)) return '—'; const z = sgn(v, d), s = z < 0 ? '−' : (signed && z > 0 ? '+' : ''); return s + Math.abs(Number(v)).toFixed(d).replace('.', ',') + '%'; },
         num(v, d = 2) { if (!isNum(v)) return '—'; return Number(v).toLocaleString('pt-BR', { minimumFractionDigits: d, maximumFractionDigits: d }); },
         price(v) { if (!isNum(v)) return '—'; const a = Math.abs(v); const d = a >= 1000 ? 1 : a >= 10 ? 2 : a >= 1 ? 3 : a >= 0.01 ? 5 : 7; return Number(v).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d }); },
-        r(v) { if (!isNum(v)) return '—'; return (v < 0 ? '−' : '+') + Math.abs(v).toFixed(2).replace('.', ',') + 'R'; },
+        r(v) { if (!isNum(v)) return '—'; const z = sgn(v); return (z < 0 ? '−' : z > 0 ? '+' : '') + Math.abs(v).toFixed(2).replace('.', ',') + 'R'; },
         // Horários no fuso do dia de trading (snapshot.tz_offset_hours), não no do navegador:
         // desloca o instante e formata como UTC, porque toLocale* só aceita nomes IANA.
         _tz(iso) { const d = new Date(iso); return isNaN(d) ? null : new Date(d.getTime() + (fmt.tzOffset || 0) * 3600e3); },
@@ -57,7 +59,7 @@
         },
         clock(sec) { sec = Math.max(0, Math.round(sec)); const h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60), s = sec % 60; return h ? `${h}h ${String(m).padStart(2, '0')}min` : `${m}:${String(s).padStart(2, '0')}`; },
     };
-    const cls = (v) => v > 0 ? 'pos' : v < 0 ? 'neg' : '';
+    const cls = (v) => { const z = sgn(v); return z > 0 ? 'pos' : z < 0 ? 'neg' : ''; };
     const sum = (a) => a.reduce((s, v) => s + v, 0);
 
     const state = { live: null, fx: null, hist: null, pnl: null, chartRange: 'test', page: 1, sortKey: 'exit_time', sortDir: -1, agg: 'week',
@@ -634,7 +636,7 @@
         for (let d = new Date(start); d <= last; d.setUTCDate(d.getUTCDate() + 1)) {
             const key = d.toISOString().slice(0, 10), v = byDay.get(key);
             const future = d > end, before = key < startIso;
-            const c = v ? (v.net > 0 ? 'pos' : v.net < 0 ? 'neg' : '') : '';
+            const c = v ? cls(v.net) : '';
             const op = v ? (0.35 + 0.65 * Math.min(1, Math.abs(v.net) / maxAbs)).toFixed(2) : '';
             html += `<i class="${c}${future || before ? ' future' : ''}" style="${op ? `opacity:${op}` : ''}" title="${fmt.day(key)}${v ? `: ${fmt.usd(v.net, { signed: true })} em ${v.trades} trade(s)` : ''}"></i>`;
         }
@@ -704,7 +706,7 @@
         for (let d = 1; d <= nDays; d++) {
             const key = `${pnlState.month}-${String(d).padStart(2, '0')}`, v = byDay.get(key);
             const out = key < p.from || key > p.to, future = key > p.today;
-            const c = v ? (v.net > 0 ? 'pos' : v.net < 0 ? 'neg' : 'zero') : (out || future ? 'off' : 'zero');
+            const c = v ? (cls(v.net) || 'zero') : (out || future ? 'off' : 'zero');
             html += `<span class="day ${c}" role="gridcell" title="${fmt.day(key)}${v ? `: ${fmt.usd(v.net, { signed: true })} em ${v.trades} trade(s)` : ''}"><small>${d}</small>${v ? `<b>${fmt.usd(v.net, { signed: true })}</b>` : (out || future ? '' : '<b>0</b>')}</span>`;
         }
         $('pnl-cal').innerHTML = html;
