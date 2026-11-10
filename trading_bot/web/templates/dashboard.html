@@ -34,9 +34,6 @@
         <span><span class="tl">Hoje</span><b class="tv" id="hd-today">—</b></span>
     </div>
     <div class="top-ctrls">
-        <button class="btn btn-quiet" id="btn-pause" data-action="pause" title="Pausar novas entradas">Pausar</button>
-        <button class="btn btn-quiet" id="btn-resume" data-action="resume" title="Retomar entradas">Retomar</button>
-        <button class="btn btn-quiet btn-danger" id="btn-close-all" data-action="close_all" title="Fechar todas as posições a mercado">Fechar tudo</button>
         <button class="btn btn-quiet btn-icon" id="theme-toggle" aria-label="Alternar tema claro/escuro" title="Tema">
             <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path class="ico-moon" d="M10 1.5a6.5 6.5 0 1 0 4.5 11.2A7 7 0 0 1 10 1.5z" fill="currentColor"/><circle class="ico-sun" cx="8" cy="8" r="3.4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
         </button>
@@ -50,6 +47,40 @@
 <div class="banner" id="pause-banner" hidden role="status"></div>
 
 <main class="wrap">
+
+    <!-- 0. Anel: notional por par (segmentos), saldo no centro; toque num par mostra as pernas dele (só no martingale) -->
+    <section class="card ring-card" id="ring-card" aria-label="Carteira" hidden>
+        <div class="ring-head">
+            <span class="ring-state" id="ring-state">—</span>
+            <small class="cs" id="ring-stop">—</small>
+        </div>
+        <div class="ring-wrap">
+            <svg class="ring" viewBox="0 0 320 320" aria-hidden="true">
+                <defs>
+                    <linearGradient id="rg0" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#34d399"/><stop offset="1" stop-color="#16a34a"/></linearGradient>
+                    <linearGradient id="rg1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fbbf24"/><stop offset="1" stop-color="#f97316"/></linearGradient>
+                    <linearGradient id="rg2" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#60a5fa"/><stop offset="1" stop-color="#2563eb"/></linearGradient>
+                    <linearGradient id="rg3" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#a78bfa"/><stop offset="1" stop-color="#7c3aed"/></linearGradient>
+                    <linearGradient id="rg4" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#f472b6"/><stop offset="1" stop-color="#db2777"/></linearGradient>
+                </defs>
+                <circle class="ring-track" cx="160" cy="160" r="118"/>
+                <g id="ring-segs"></g>
+            </svg>
+            <div class="ring-badges" id="ring-badges"></div>
+            <div class="ring-center" id="ring-center" title="Voltar ao total"></div>
+        </div>
+    </section>
+
+    <!-- 0b. Pernas ativas + ações (só no martingale) -->
+    <section class="card" id="legs-card" aria-labelledby="legs-h" hidden>
+        <header class="ch"><h2 id="legs-h">Pernas ativas</h2></header>
+        <div class="pills">
+            <button class="btn" id="btn-pause" data-action="pause" title="Pausar novas entradas">Pausar</button>
+            <button class="btn" id="btn-resume" data-action="resume" title="Retomar entradas">Retomar</button>
+            <button class="btn btn-danger" id="btn-close-all" data-action="close_all" title="Fechar todas as posições a mercado">Fechar tudo</button>
+        </div>
+        <div id="mg-list"></div>
+    </section>
 
     <!-- 1. Linha de status: está vivo? barra, equity, posições, P&L -->
     <section class="status" aria-label="Status">
@@ -134,7 +165,6 @@
     <details class="card" id="mg-card" hidden>
         <summary><h2>Escada martingale</h2><span class="cs" id="mg-stop">—</span></summary>
         <p class="cs" id="mg-params">—</p>
-        <div id="mg-list"></div>
     </details>
 
     <!-- 3c. Ganhos e Perdas de Futuros (estilo app da Binance; dados do TradeStore + income da Binance) -->
@@ -367,7 +397,7 @@
 </main>
 
 <nav class="tabbar" aria-label="Seções">
-    <a href="#mg-card">Martingale</a>
+    <a href="#legs-card">Pernas</a>
     <a href="#pnl-card">P&amp;L</a>
     <a href="#sheet-card">Planilha</a>
     <a href="#health-card">Saúde</a>

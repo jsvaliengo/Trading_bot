@@ -389,10 +389,11 @@
     }
 
     // ───────── Escada martingale ─────────
-    function renderMartingale(m) {
-        $('ft-card').hidden = !!m; $('mg-card').hidden = !m;
+    function renderMartingale(m, s) {
+        $('ft-card').hidden = !!m; $('mg-card').hidden = $('ring-card').hidden = $('legs-card').hidden = !m;
         $('trades-card').hidden = !!m; $('sheet-card').hidden = !m;
         if (!m) return;
+        renderRing(m, s);
         renderSheet(m.sheet, Object.keys(m.pairs || {}));
         const p = m.params || {}, n = (v, d = 2) => String(Number(v).toFixed(d)).replace(/\.?0+$/, '').replace('.', ',');
         $('mg-params').textContent = `X ${n(p.step_percent)}% · m ${n(p.multiplier)} · TP ${n(p.tp_percent)}% · N ${p.max_levels} · base ${fmt.usd(m.base_notional)} · capital ${fmt.usd(m.capital)} · pico ${fmt.usd(m.peak_equity)} · ${p.leverage}×` + (m.portfolio_stops ? ` · ${m.portfolio_stops} stop(s) de portfólio` : '');
@@ -414,6 +415,54 @@
             </div>
         </div>`).join('') || '<p class="empty">Nenhum par na escada (estratégia não iniciou ou nenhum par cabe na ordem base).</p>';
     }
+
+    // ───────── Anel da carteira ─────────
+    // Um arco por par com perna aberta, comprimento ∝ notional (qty×mark das duas pernas); toque seleciona o par.
+    let ringSel = null, ringLast = null;
+    const ringPt = (a, r) => { const t = (a - 90) * Math.PI / 180; return [160 + r * Math.cos(t), 160 + r * Math.sin(t)]; };
+    function ringArc(a0, a1) { const [x0, y0] = ringPt(a0, 118), [x1, y1] = ringPt(a1, 118); return `M ${x0.toFixed(2)} ${y0.toFixed(2)} A 118 118 0 ${a1 - a0 > 180 ? 1 : 0} 1 ${x1.toFixed(2)} ${y1.toFixed(2)}`; }
+    function renderRing(m, s) {
+        ringLast = [m, s];
+        const pairs = {};
+        for (const l of m.legs || []) {
+            if (!isNum(l.quantity) || l.quantity <= 0) continue;
+            const p = pairs[l.symbol] || (pairs[l.symbol] = { symbol: l.symbol, notional: 0, upnl: 0, legs: [] });
+            p.notional += isNum(l.mark_price) ? l.quantity * l.mark_price : (l.notional || 0); p.upnl += l.unrealized_pnl_usd || 0; p.legs.push(l);
+        }
+        const list = Object.values(pairs), total = sum(list.map(p => p.notional)) || 1;
+        if (ringSel && !pairs[ringSel]) ringSel = null;
+        const GAP = 6, span = (360 - list.length * GAP) / total;
+        let a = 0, segs = '', badges = '';
+        list.forEach((p, i) => {
+            const a0 = a + GAP / 2, a1 = a0 + p.notional * span, mid = (a0 + a1) / 2; a = a1 + GAP / 2;
+            const sel = p.symbol === ringSel, [mx, my] = ringPt(a1 - 2, 118), [bx, by] = ringPt(mid, 150);
+            segs += `<path class="ring-seg${sel ? ' sel' : ''}" d="${ringArc(a0, a1)}" stroke="url(#rg${i % 5})" data-symbol="${esc(p.symbol)}"/>` +
+                `<circle class="ring-mk ${cls(p.upnl)}" cx="${mx.toFixed(1)}" cy="${my.toFixed(1)}" r="4"/>`;
+            badges += `<button type="button" class="ring-badge${sel ? ' on' : ''}" style="left:${(bx / 3.2).toFixed(1)}%;top:${(by / 3.2).toFixed(1)}%" data-symbol="${esc(p.symbol)}" aria-pressed="${sel}">${esc(p.symbol.replace(/USDT$/, ''))}</button>`;
+        });
+        $('ring-segs').innerHTML = segs; $('ring-badges').innerHTML = badges;
+        $('ring-state').textContent = s.paused ? 'Pausado' : (s.running ? 'Rodando' : 'Parado');
+        $('ring-state').className = 'ring-state ' + (s.paused ? 'warn' : (s.running ? 'ok' : 'bad'));
+        $('ring-stop').textContent = `stop em ${fmt.usd(m.portfolio_stop_equity)}`;
+        const c = $('ring-center'), sp = pairs[ringSel];
+        if (sp) {
+            const deep = sp.legs.reduce((x, y) => (y.level > x.level ? y : x));
+            c.innerHTML = `<span class="rc-l">${esc(sp.symbol.replace(/USDT$/, ''))}</span><b class="rc-v ${cls(sp.upnl)}">${fmt.usd(sp.upnl, { signed: true })}</b>` +
+                `<span class="rc-t">${sp.legs.map(l => `${esc(l.side)} L${l.level}`).join(' · ')}</span>` +
+                `<small class="rc-s">add ${fmt.price(deep.next_add_price)} · TP ${fmt.price(deep.tp_price)}</small>`;
+        } else {
+            const eq = s.last_balance, d = s.daily_pnl, pct = isNum(d) && isNum(eq) && eq - d > 0 ? d / (eq - d) * 100 : null;
+            c.innerHTML = `<span class="rc-l">Saldo</span><b class="rc-v">${fmt.usd(eq)}</b>` +
+                `<span class="rc-t ${cls(d)}">${fmt.usd(d, { signed: true })}${isNum(pct) ? ` (${fmt.pct(pct)})` : ''}</span>` + brlTag(eq);
+        }
+    }
+    $('ring-card').addEventListener('click', (e) => {
+        const t = e.target.closest('[data-symbol]');
+        if (t) ringSel = ringSel === t.dataset.symbol ? null : t.dataset.symbol;
+        else if (e.target.closest('.ring-center')) ringSel = null;
+        else return;
+        if (ringLast) renderRing(...ringLast);
+    });
 
     // Planilha de banca: linha da equity atual destacada, moedas da planilha com as do bot marcadas.
     function renderSheet(sh, botPairs) {
@@ -754,7 +803,7 @@
         renderForwardTest(ft);
         renderPerf(ft);
         renderPositions(pos);
-        renderMartingale(l.martingale);
+        renderMartingale(l.martingale, s);
         renderEngine(e, pos);
         renderHealth(h, s);
         renderRHist(ft.r_histogram);
