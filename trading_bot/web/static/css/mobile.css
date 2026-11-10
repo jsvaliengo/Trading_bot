@@ -1,37 +1,50 @@
-/* Celular (iPhone, ≤480px CSS). Só media queries: o desktop e o tablet ficam com o style.css.
-   Alvo: iPhone 17 Pro Max (440×956) e 375px. Sem scroll horizontal da página; toque ≥44px; fonte ≥12px. */
-@media (max-width: 480px) {
+/* Celular (iPhone, ≤600px CSS). Só media queries: o desktop e o tablet ficam com o style.css.
+   Alvo: iPhone 17 Pro Max (440×956) e 375px. Sem scroll horizontal da página; toque ≥44px; fonte base 14px.
+   Topo fixo compacto (estado + equity + hoje + ações) e barra inferior com atalhos para os cards. */
+@media (max-width: 600px) {
     html { -webkit-text-size-adjust:100%; }
-    body { overflow-x:hidden; }
+    body { font-size:14px; }
 
-    /* Topo: título / badges / câmbio / botões em linhas separadas; respeita o entalhe nas laterais. */
-    .top { gap:8px; padding:8px max(12px, env(safe-area-inset-right)) 8px max(12px, env(safe-area-inset-left)); }
-    .top-id { gap:8px; }
-    .top-title { white-space:normal; }
-    .fx { flex-basis:100%; font-size:12px; }
-    .top-ctrls { width:100%; margin-left:0; flex-wrap:wrap; gap:8px; }
-    .top-ctrls .btn { flex:1 1 auto; min-height:44px; padding:8px 10px; font-size:13px; white-space:nowrap; }
+    /* Topo fixo: linha 1 = estado/ambiente + tema + sair; linha 2 = hero (equity, hoje); linha 3 = ações. */
+    .top { gap:6px 8px; padding:6px max(12px, env(safe-area-inset-right)) 8px max(12px, env(safe-area-inset-left)); }
+    .top-id { width:100%; gap:8px; order:1; }
+    .top-title { font-size:13px; color:var(--text-muted); flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; }
+    .fx { flex-basis:100%; font-size:12px; gap:6px; }
+    .hero { display:flex; width:100%; gap:16px; order:2; }
+    .hero > span { flex:1; min-width:0; display:flex; flex-direction:column; }
+    .hero .tv { font-size:22px; }
+    .top-ctrls { width:100%; margin-left:0; gap:6px; order:3; }
+    .top-ctrls .btn { flex:1 1 0; min-height:44px; padding:8px 6px; font-size:13px; white-space:nowrap; }
     .top-ctrls .btn-icon { flex:0 0 44px; }
-    .banner { padding:8px max(12px, env(safe-area-inset-right)) 8px max(12px, env(safe-area-inset-left)); }
+    .top-ctrls form { display:contents; }
+    .banner { padding:8px max(12px, env(safe-area-inset-right)) 8px max(12px, env(safe-area-inset-left)); font-size:13px; }
+
+    /* Barra inferior fixa, acima do indicador de home. */
+    .tabbar { position:fixed; left:0; right:0; bottom:0; z-index:30; display:flex; background:var(--bg-app); border-top:1px solid var(--border);
+        padding:0 env(safe-area-inset-right) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left); }
+    .tabbar a { flex:1; display:flex; align-items:center; justify-content:center; min-height:50px; font-size:13px; font-weight:500; color:var(--text-dim); text-decoration:none; }
+    .tabbar a:active { color:var(--accent); }
 
     /* Layout: 1 coluna, cartões colados nas bordas seguras. */
-    .wrap { padding:10px max(12px, env(safe-area-inset-right)) 32px max(12px, env(safe-area-inset-left)); gap:10px; }
+    .wrap { padding:10px max(12px, env(safe-area-inset-right)) calc(66px + env(safe-area-inset-bottom, 0px)) max(12px, env(safe-area-inset-left)); gap:10px; }
     .card { padding:12px; }
-    details.card > summary { margin:-12px; padding:12px; gap:8px 10px; }
+    details.card > summary { margin:-12px; padding:12px; gap:8px 10px; min-height:48px; align-items:center; }
+    h2 { font-size:15px; }
     details.card > summary .cs { flex-basis:100%; margin-left:0; padding-left:22px; }
     .two { grid-template-columns:1fr; }
     .ch { gap:4px; }
 
-    /* Fonte mínima 12px (padrões de 11–11,5px no style.css). */
+    /* Fonte mínima 13px (padrões de 11–12,5px no style.css). */
     .tl, .tf, .cs, .brl, .legend, .badge, .env, .fx-pill, .side, .track-f, .empty,
     .kv thead th, .table thead th, .table td small, .pnl-wins small, .pr-pnl small, .pr-r small,
-    .hlist .hv small, .ruler-l, .pg-info, .btn-xs, .sheet-coins .side, .pnl-cal .wd, .pnl-cal .day small, small, .ci-plot text { font-size:12px; }
+    .hlist .hv small, .ruler-l, .pg-info, .btn-xs, .sheet-coins .side, .pnl-cal .wd, .pnl-cal .day small, small, .ci-plot text,
+    .kv, .kvl, .table, .hlist li, .tr-stats, .filters, .chip, .pnl-lines summary, .pnl-assets, .pnl-pct { font-size:13px; }
 
     /* Tiles de resumo: 2 colunas, rótulo pode quebrar. */
     .status { grid-template-columns:repeat(2, minmax(0,1fr)); }
     .tile { padding:10px 10px 8px; }
     .tl { white-space:normal; }
-    .tv { font-size:18px; } .tile-main .tv { font-size:20px; }
+    .tv { font-size:20px; } .tile-main .tv { font-size:22px; }
 
     /* Posições e escada: cada linha vira um cartão (símbolo + P&L / nível + qty / média / Fechar). */
     .prow { padding:12px 0; }
@@ -45,7 +58,8 @@
     .ruler-l { gap:4px 12px; }
 
     /* Controles de toque. */
-    .chip { padding:8px 12px; min-height:36px; }
+    .chip { padding:8px 12px; min-height:40px; }
+    .btn-xs { min-height:40px; }
     .pg-btn { width:44px; height:44px; }
     .filters label { display:flex; justify-content:space-between; align-items:center; width:100%; }
     .filters select { min-height:40px; }

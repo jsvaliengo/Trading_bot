@@ -66,6 +66,9 @@ button { font:inherit; color:inherit; }
 .brl { display:block; font-family:'IBM Plex Mono',ui-monospace,monospace; font-size:11px; font-weight:400; letter-spacing:0; color:var(--text-muted); line-height:1.3; }
 .pnl-lines summary .brl { display:inline; margin-left:6px; }
 .top-ctrls { display:flex; gap:6px; }
+/* hero (equity + hoje no topo fixo) e barra inferior existem só no celular: mobile.css liga os dois. */
+.hero, .tabbar { display:none; }
+.card { scroll-margin-top:calc(var(--top-h, 56px) + 8px); }
 .banner { padding:9px 22px; background:var(--warn-soft); color:var(--warn); border-bottom:1px solid var(--border); font-size:13px; font-weight:500; }
 .banner.bad { background:var(--bad-soft); color:var(--bad); }
 
@@ -278,7 +281,7 @@ details.card > :not(summary):first-of-type { margin-top:10px; }
     .filters { width:100%; }
     .kv thead th:last-child, #perf td:last-child { display:none; }
     .kv th, .kv td { white-space:normal; }
-    html, body { overflow-x:hidden; }
+    html { overflow-x:hidden; } /* só no html: overflow no body vira scroll container e quebra o sticky do topo */
 }
 
 /* Ganhos e Perdas de Futuros (estilo app da Binance) */

@@ -100,6 +100,10 @@
         d.addEventListener('toggle', () => { try { localStorage.setItem('tradingbot-open:' + d.id, d.open ? '1' : '0'); } catch (e) { /* idem */ } });
     });
 
+    // Celular: a barra inferior abre o card antes de rolar; --top-h é a altura do topo fixo (scroll-margin-top dos cards).
+    $$('.tabbar a').forEach(a => a.addEventListener('click', () => { const d = document.querySelector(a.getAttribute('href')); if (d) d.open = true; }));
+    if (window.ResizeObserver) new ResizeObserver(([e]) => document.documentElement.style.setProperty('--top-h', e.target.offsetHeight + 'px')).observe(document.querySelector('.top'));
+
     // ───────── Topo + status ─────────
     const BAR_MS = 4 * 3600e3;
     function renderTop(s, h, e) {
@@ -130,6 +134,8 @@
     function setTile(id, value, foot, k, usd) {
         const v = $(id); v.innerHTML = esc(value) + brlTag(usd); v.className = 'tv ' + (k || '');
         $(id + '-f').textContent = foot;
+        const hd = $('hd-' + id.slice(3)); // espelho no topo fixo do celular (hero)
+        if (hd) { hd.textContent = value; hd.className = 'tv ' + (k || ''); }
     }
     function renderStatus(s, ft, e, positions) {
         const eq = s.last_balance;

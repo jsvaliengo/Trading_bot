@@ -2,8 +2,15 @@
 <html lang="pt-BR">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="color-scheme" content="dark">
+    <meta name="theme-color" content="#0f1318">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Trader">
+    <link rel="apple-touch-icon" href="{{ url_for('static', filename='icon-180.png') }}">
+    <link rel="manifest" href="{{ url_for('static', filename='manifest.webmanifest') }}">
     <script>try{var t=localStorage.getItem('tradingbot-theme');if(t==="light")document.documentElement.setAttribute('data-theme',t)}catch(e){}</script>
     <title>Forward test · {{ environment|upper }}</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -22,6 +29,10 @@
         <span class="fx" id="fx-badge" hidden><b id="fx-rate"></b><span class="fx-pill" id="fx-at"></span></span>
     </div>
     <p class="top-meta" id="top-meta">—</p>
+    <div class="hero" aria-label="Resumo">
+        <span><span class="tl">Equity</span><b class="tv" id="hd-equity">—</b></span>
+        <span><span class="tl">Hoje</span><b class="tv" id="hd-today">—</b></span>
+    </div>
     <div class="top-ctrls">
         <button class="btn btn-quiet" id="btn-pause" data-action="pause" title="Pausar novas entradas">Pausar</button>
         <button class="btn btn-quiet" id="btn-resume" data-action="resume" title="Retomar entradas">Retomar</button>
@@ -354,6 +365,13 @@
         </details>
     </section>
 </main>
+
+<nav class="tabbar" aria-label="Seções">
+    <a href="#mg-card">Martingale</a>
+    <a href="#pnl-card">P&amp;L</a>
+    <a href="#sheet-card">Planilha</a>
+    <a href="#health-card">Saúde</a>
+</nav>
 
 <div class="modal" id="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="confirm-title" hidden>
     <div class="modal-card">
