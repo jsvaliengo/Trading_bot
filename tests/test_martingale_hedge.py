@@ -354,7 +354,7 @@ def _tp_closed_all(ex, r):
 
 @pytest.fixture
 def _one_slot_auto(monkeypatch):
-    # banca 100 → faixa 90–150 = 1 moeda; auto ligado, sem cooldown
+    # banca 80 → abaixo da 1ª faixa (90) mantém o nº atual de pares = 1 vaga; auto ligado, sem cooldown
     monkeypatch.setattr(config, "MARTINGALE_AUTO_PAIRS", True)
     monkeypatch.setattr(config, "MARTINGALE_PAIR_SWAP_COOLDOWN_MINUTES", 0)
 
@@ -368,7 +368,7 @@ def _runner(ex, pairs=("ADAUSDT",)):
 
 
 def test_swaps_red_pair_for_best_green_when_both_legs_are_flat(_one_slot_auto, caplog):
-    ex = _Ex(balance=100.0, min_notional=1.0)
+    ex = _Ex(balance=80.0, min_notional=1.0)
     bot, r = _runner(ex)
     _scored(r, BNB="green", ADA="red", TRX="yellow")
     caplog.set_level("INFO")
@@ -382,7 +382,7 @@ def test_swaps_red_pair_for_best_green_when_both_legs_are_flat(_one_slot_auto, c
 
 
 def test_never_swaps_while_one_leg_is_open_below_breakeven(_one_slot_auto):
-    ex = _Ex(balance=100.0, min_notional=1.0)
+    ex = _Ex(balance=80.0, min_notional=1.0)
     bot, r = _runner(ex)
     r.tick()                                                   # abre LONG e SHORT em ADA
     ex.positions = [p for p in ex.positions if p["side"] == "SHORT"]   # LONG fechada fora; SHORT segue aberta
@@ -394,7 +394,7 @@ def test_never_swaps_while_one_leg_is_open_below_breakeven(_one_slot_auto):
 
 
 def test_transient_empty_positions_read_does_not_swap(_one_slot_auto):
-    ex = _Ex(balance=100.0, min_notional=1.0)
+    ex = _Ex(balance=80.0, min_notional=1.0)
     bot, r = _runner(ex)
     r.tick()                                                   # ADA LONG+SHORT abertas (pernas locais nível 1)
     real = ex.positions
@@ -407,7 +407,7 @@ def test_transient_empty_positions_read_does_not_swap(_one_slot_auto):
 
 @pytest.mark.parametrize("current", ["green", "yellow"])
 def test_keeps_current_pair_when_green_or_yellow(_one_slot_auto, current):
-    ex = _Ex(balance=100.0, min_notional=1.0)
+    ex = _Ex(balance=80.0, min_notional=1.0)
     bot, r = _runner(ex)
     _scored(r, BNB="green", ADA=current)        # BNB tem número melhor, mas ADA não está vermelho
     r.tick()
@@ -415,7 +415,7 @@ def test_keeps_current_pair_when_green_or_yellow(_one_slot_auto, current):
 
 
 def test_keeps_current_pair_without_score(_one_slot_auto):
-    ex = _Ex(balance=100.0, min_notional=1.0)
+    ex = _Ex(balance=80.0, min_notional=1.0)
     bot, r = _runner(ex)
     r.tick()
     assert list(r.pairs) == ["ADAUSDT"]        # cache vazio (1ª rodada ainda não terminou)
@@ -427,7 +427,7 @@ def test_keeps_current_pair_without_score(_one_slot_auto):
 
 def test_swap_cooldown_blocks_ping_pong(_one_slot_auto, monkeypatch):
     monkeypatch.setattr(config, "MARTINGALE_PAIR_SWAP_COOLDOWN_MINUTES", 360)
-    ex = _Ex(balance=100.0, min_notional=1.0)
+    ex = _Ex(balance=80.0, min_notional=1.0)
     bot, r = _runner(ex)
     _scored(r, BNB="green", ADA="red")
     r.tick()
@@ -443,15 +443,15 @@ def test_swap_cooldown_blocks_ping_pong(_one_slot_auto, monkeypatch):
 
 
 def test_fills_slots_of_current_sheet_row_and_shrinks_when_row_drops(_one_slot_auto):
-    ex = _Ex(balance=300.0, min_notional=1.0)   # faixa 300 → 3 moedas
+    ex = _Ex(balance=1000.0, min_notional=1.0)  # faixa 1.000 → 6 moedas
     bot, r = _runner(ex)
-    _scored(r, TRX="green", BNB="yellow", ADA="red")
+    _scored(r, TRX="green", LINK="green", ETH="green", BNB="yellow", ADA="red")
     r.tick()
-    assert list(r.pairs) == ["TRXUSDT", "BNBUSDT"]   # ADA vermelho sai, TRX entra; 2ª vaga vai pro próximo (BNB)
+    assert list(r.pairs) == ["TRXUSDT", "LINKUSDT", "ETHUSDT", "BNBUSDT"]   # ADA vermelho sai; verdes antes do amarelo
     _tp_closed_all(ex, r)
-    ex.balance = 250.0                               # faixa 90–300 = 1 moeda (sem bater o stop de 20%): solta o pior zerado
+    ex.balance = 850.0                               # faixa 500 = 3 moedas (sem bater o stop de 20%): solta o pior zerado
     r.tick()
-    assert list(r.pairs) == ["TRXUSDT"]
+    assert list(r.pairs) == ["TRXUSDT", "LINKUSDT", "ETHUSDT"]
 
 
 def test_skips_candidates_already_in_slot_with_open_position_or_below_min_notional(_one_slot_auto):
@@ -467,7 +467,7 @@ def test_skips_candidates_already_in_slot_with_open_position_or_below_min_notion
 
 def _red_with_open_legs(pnl=(0.02, 0.01), **colors):
     """ADA vermelho com LONG+SHORT abertas e P&L não realizado dado por perna; BNB verde como candidato."""
-    ex = _Ex(balance=100.0, min_notional=1.0)
+    ex = _Ex(balance=80.0, min_notional=1.0)
     bot, r = _runner(ex)
     r.tick()                                                   # abre LONG e SHORT em ADA
     for p, u in zip(ex.positions, pnl):
@@ -529,14 +529,14 @@ def test_red_exit_keeps_pair_when_a_close_fails(_one_slot_auto):
 def test_pairs_persist_in_state_and_win_over_env_on_restart(_one_slot_auto):
     from trading_bot.core.bot_state_serde import BotStatePersistence
 
-    ex = _Ex(balance=100.0, min_notional=1.0)
+    ex = _Ex(balance=80.0, min_notional=1.0)
     bot, r = _runner(ex)
     _scored(r, BNB="green", ADA="red")
     r.tick()
     bot.kill_switch = None
     payload = BotStatePersistence(bot).build_payload()
     assert payload["martingale_pairs"] == ["BNBUSDT"]
-    bot2 = _bot(_Ex(balance=100.0, min_notional=1.0), pairs=("ADAUSDT",))
+    bot2 = _bot(_Ex(balance=80.0, min_notional=1.0), pairs=("ADAUSDT",))
     r2 = mg.MartingaleRunner(bot2)
     r2.saved_pairs = payload["martingale_pairs"]   # bot.load_state() guarda state['martingale_pairs'] aqui
     assert r2.start() and list(r2.pairs) == ["BNBUSDT"]
@@ -545,7 +545,7 @@ def test_pairs_persist_in_state_and_win_over_env_on_restart(_one_slot_auto):
 def test_auto_pairs_off_pins_env_pairs(monkeypatch):
     monkeypatch.setattr(config, "MARTINGALE_AUTO_PAIRS", False)
     monkeypatch.setattr(config, "MARTINGALE_PAIR_SWAP_COOLDOWN_MINUTES", 0)
-    ex = _Ex(balance=100.0, min_notional=1.0)
+    ex = _Ex(balance=80.0, min_notional=1.0)
     bot = _bot(ex)
     r = mg.MartingaleRunner(bot)
     r.saved_pairs = ["BNBUSDT"]
@@ -558,7 +558,7 @@ def test_auto_pairs_off_pins_env_pairs(monkeypatch):
 def test_dashboard_reads_scores_from_runner_cache(_one_slot_auto):
     from trading_bot.web import data as dashboard_data
 
-    bot, r = _runner(_Ex(balance=100.0, min_notional=1.0))
+    bot, r = _runner(_Ex(balance=80.0, min_notional=1.0))
     scores = _scored(r, ADA="green")
     assert dashboard_data._pair_scores(bot)["scores"] == scores
 
@@ -758,7 +758,7 @@ def test_draining_pair_frees_its_slot_immediately(_one_slot_auto, _drain_ada):
 
 
 def test_draining_pair_is_removed_once_flat_and_never_re_added(_one_slot_auto, _drain_ada, caplog):
-    ex = _Ex(balance=100.0, min_notional=0.5)                  # 1 vaga
+    ex = _Ex(balance=80.0, min_notional=0.5)                  # 1 vaga
     bot, r = _runner(ex, pairs=("ADAUSDT", "TRXUSDT"))
     r.drain = set(config.MARTINGALE_DRAIN_PAIRS)
     _scored(r, ADA="green", TRX="yellow")
