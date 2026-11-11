@@ -1,4 +1,5 @@
 import json
+import logging
 import sqlite3
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -322,6 +323,20 @@ def test_load_state_disabled_pairs_is_union_config_and_state(tmp_path, monkeypat
     disabled = set(config.get_disabled_pairs_set())
     # BNB do config sobrevive; RIVER do state é somado; BTC em ambos.
     assert {"BTCUSDT", "BNBUSDT", "RIVERUSDT"}.issubset(disabled)
+
+
+def test_load_state_martingale_nao_loga_pares_desabilitados(tmp_path, monkeypatch, caplog):
+    """Martingale não consulta DISABLED_PAIRS; a linha de startup confundia (BNB operando)."""
+    monkeypatch.setattr(config, "DISABLED_PAIRS", ["BNBUSDT"])
+    monkeypatch.setattr(config, "STRATEGY", "martingale_hedge")
+    bot = _make_light_bot()
+    state_file = tmp_path / "bot_state.json"
+    bot._state_file_path = str(state_file)
+    state_file.write_text(json.dumps({"daily_date": datetime.now(timezone.utc).strftime("%Y-%m-%d")}), encoding="utf-8")
+
+    with caplog.at_level(logging.INFO):
+        assert bot.load_state() is True
+    assert "Pares desabilitados" not in caplog.text
 
 
 def test_load_state_tolerates_missing_known_positions(tmp_path):
