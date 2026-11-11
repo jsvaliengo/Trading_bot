@@ -9,6 +9,7 @@ Demo só tem BTC/ETH/XRP: com ADA/TRX nos pares, use TRADING_BOT_MARTINGALE_PAIR
   .venv/bin/python scripts/bitget_smoke.py --order    # abre LONG no mínimo do 1º par e fecha em seguida
 """
 
+import math
 import sys
 from pathlib import Path
 
@@ -42,7 +43,9 @@ def main(send_order: bool) -> int:
     if not info or not ex.set_leverage(sym, config.MARTINGALE_LEVERAGE):
         print("Contrato/alavancagem falhou — abortando")
         return 1
-    qty = max(info["minQty"], info["minNotional"] / ex.get_symbol_price(sym))
+    # ceil no step: floor de 5/0.1773=28.2 ADA dá 28 → $4.96 < $5 (45110); o engine faz o mesmo
+    step = info["stepSize"]
+    qty = max(info["minQty"], math.ceil(info["minNotional"] / ex.get_symbol_price(sym) / step) * step)
     order = ex.place_market_order(symbol=sym, side="BUY", position_side="LONG", quantity=qty)
     print(f"abertura: {order}")
     if not order:
