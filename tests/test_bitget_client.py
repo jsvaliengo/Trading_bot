@@ -413,3 +413,10 @@ def test_config_validate_requires_bitget_credentials(monkeypatch, caplog):
         monkeypatch.setattr(config, k, "", raising=False)
     config.validate()
     assert "BITGET_API_KEY" in caplog.text
+
+
+def test_contracts_load_even_when_host_uptime_is_below_ttl(monkeypatch):
+    """Host recém-ligado: monotonic() < TTL. Sentinela 0.0 fazia o cache vazio parecer fresco (CI falhava)."""
+    monkeypatch.setattr(bg.time, "monotonic", lambda: 10.0)
+    conn = _make(monkeypatch)
+    assert {s["symbol"] for s in conn.get_exchange_info()["symbols"]} == {"ADAUSDT", "BNBUSDT"}

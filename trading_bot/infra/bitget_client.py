@@ -86,7 +86,7 @@ class BitgetConnection:
         self.session = requests.Session()
         self._lock = threading.Lock()
         self._contracts: Dict[str, Dict[str, Any]] = {}
-        self._contracts_ts = 0.0
+        self._contracts_ts = float("-inf")  # 0.0 parece "fresco" se o host subiu há < TTL
         self._realized_close_buffer: Dict[str, List[Dict[str, float]]] = {}
         self._daily_pnl_cache: Optional[Dict[str, Any]] = None
         self._cumulative_cache: Optional[Dict[str, Any]] = None
