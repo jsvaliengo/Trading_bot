@@ -68,6 +68,7 @@
     .filters label { display:flex; justify-content:space-between; align-items:center; width:100%; }
     .filters select { min-height:40px; }
     .modal-actions .btn { flex:1; min-height:44px; }
+    #chart-modal { padding:4px; } .chart-card { padding:8px; } #chart-frame { height:65vh; }
 
     /* Tabelas rolam dentro do próprio cartão, usando a borda do cartão. */
     .table-scroll { margin:0 -12px; padding:0 12px; -webkit-overflow-scrolling:touch; }

@@ -402,6 +402,13 @@
     </div>
 </div>
 
+<div class="modal" id="chart-modal" role="dialog" aria-modal="true" aria-labelledby="chart-title" hidden>
+    <div class="modal-card chart-card">
+        <div class="chart-head"><h3 id="chart-title"></h3><small class="dim">1m</small><button type="button" class="btn btn-quiet btn-xs" id="chart-close" aria-label="Fechar">✕</button></div>
+        <iframe id="chart-frame" title="Gráfico 1m" allowfullscreen></iframe>
+    </div>
+</div>
+
 <script src="https://unpkg.com/chart.js@4.4.1/dist/chart.umd.js"></script>
 <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 <script src="{{ url_for('static', filename='js/main.js') }}"></script>
