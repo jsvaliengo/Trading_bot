@@ -114,6 +114,15 @@ class TradingConfig:
     TESTNET_API_KEY: str = os.getenv("BINANCE_TESTNET_API_KEY", "")
     TESTNET_API_SECRET: str = os.getenv("BINANCE_TESTNET_API_SECRET", "")
 
+    # Exchange de execução: "binance" (default) ou "okx" (docs/OKX_PORT.md). Na OKX,
+    # OKX_DEMO=true (default) usa o demo trading (header x-simulated-trading) e exige
+    # chaves criadas em Demo trading; produção = OKX_DEMO=false.
+    EXCHANGE: str = _env_str("TRADING_BOT_EXCHANGE", "binance").lower()
+    OKX_API_KEY: str = os.getenv("OKX_API_KEY", "").strip()
+    OKX_API_SECRET: str = os.getenv("OKX_API_SECRET", "").strip()
+    OKX_PASSPHRASE: str = os.getenv("OKX_PASSPHRASE", "").strip()
+    OKX_DEMO: bool = _env_bool("OKX_DEMO", True)
+
     # Rede ativa: "testnet" ou "mainnet". Resolvida em __post_init__ com prioridade:
     # 1) env var TRADING_BOT_ENVIRONMENT
     # 2) runtime/active_environment.txt (persistência do comando /env no Telegram)
@@ -1635,7 +1644,15 @@ class TradingConfig:
                 "Use 'pullback', 'donchian_4h' ou 'martingale_hedge'."
             )
 
-        if not self.API_KEY or not self.API_SECRET:
+        if self.EXCHANGE not in {"binance", "okx"}:
+            errors.append(f"⚠️  ALERTA: EXCHANGE inválida ({self.EXCHANGE!r}). Use 'binance' ou 'okx'.")
+        elif self.EXCHANGE == "okx":
+            if not (self.OKX_API_KEY and self.OKX_API_SECRET and self.OKX_PASSPHRASE):
+                errors.append(
+                    "⚠️  ALERTA: Credenciais da OKX não configuradas. "
+                    "Defina OKX_API_KEY, OKX_API_SECRET e OKX_PASSPHRASE no .env."
+                )
+        elif not self.API_KEY or not self.API_SECRET:
             prefix = (self.ENVIRONMENT or "testnet").upper()
             errors.append(
                 f"⚠️  ALERTA: Credenciais da Binance não configuradas para {prefix}. "
