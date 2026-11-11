@@ -1,17 +1,22 @@
-# Porte para OKX (perpétuos USDT) — desenho e fase 1
+# Porte para outra exchange (perpétuos USDT) — OKX e Bitget
 
 Contexto: a Binance bloqueou a API de futuros para contas brasileiras. O bot roda a estratégia
 `martingale_hedge` (`trading_bot/core/martingale.py`) e toda a fala com a exchange passa pela fachada
-`BinanceConnection` (`trading_bot/infra/binance_client.py` + streams, ~3.000 linhas). O porte adiciona uma
-segunda fachada, `OkxConnection` (`trading_bot/infra/okx_client.py`), com **os mesmos nomes de método e os
-mesmos formatos de retorno**, escolhida por env. O caminho Binance não muda.
+`BinanceConnection` (`trading_bot/infra/binance_client.py` + streams, ~3.000 linhas). O porte adiciona
+fachadas alternativas com **os mesmos nomes de método e os mesmos formatos de retorno**, escolhidas por env:
+
+- `OkxConnection` (`trading_bot/infra/okx_client.py`) — desenho original, seções 1–6 abaixo.
+- `BitgetConnection` (`trading_bot/infra/bitget_client.py`) — **escolhida para produção** (seção 7): ordens em
+  moedas com passo fino, sem a distorção de contratos da OKX.
+
+O caminho Binance não muda.
 
 ## 1. Como a conexão é criada e injetada
 
 - `trading_bot/core/bot.py:211` (`TradingBot.__init__`) e `bot.py:1159` (troca de rede via `/env`) eram os
   dois únicos pontos que instanciavam `BinanceConnection()`. Agora chamam `create_exchange()`
-  (`trading_bot/infra/exchange.py`), que lê `config.EXCHANGE` e devolve `BinanceConnection()` ou
-  `OkxConnection()`.
+  (`trading_bot/infra/exchange.py`), que lê `config.EXCHANGE` (`binance` | `okx` | `bitget`) e devolve a
+  fachada correspondente.
 - Todo o resto do bot recebe `bot.exchange` (duck typing; vários callers usam `hasattr`). Scripts Binance-only
   (`scripts/test_connection.py`, `backfill_real_pnl.py`, `reconcile_phantom_trades.py`) seguem com
   `BinanceConnection` explícito — não foram tocados.
@@ -108,3 +113,43 @@ para OKX (tickers 24h, book), cooldown por código de erro OKX (`51xxx`), `bills
    planilha original for em UTC+8, trocar o mapa em `okx_client.BAR_MAP`.
 6. **Demo ≠ produção**: fills e liquidez do demo são sintéticos; o header `x-simulated-trading` em chaves de
    produção dá `50xxx`. Chave de produção precisa de permissão *Trade* e IP whitelist da VM.
+
+## 7. Bitget (futuros USDT-M, API v2 "classic") — `BitgetConnection`
+
+Mesmo subconjunto de métodos e formatos da seção 2; o que muda é a tabela de conversão. Conferido na doc
+pública (`/api-doc/contract/intro`) e em `GET /api/v2/mix/market/contracts` ao vivo em 11/11/26.
+
+| Conceito | Binance (interno) | Bitget v2 |
+|---|---|---|
+| Símbolo | `ADAUSDT` | `ADAUSDT` (igual). **Demo**: `SADASUSDT` + `productType=SUSDT-FUTURES` + `marginCoin=SUSDT` (prefixo encapsulado em `to_bitget`/`from_bitget`) |
+| Quantidade | moedas | **moedas** (`size`), floor no `sizeMultiplier` (ADA/TRX `1`, BNB `0.01`), mínimo `minTradeNum`; abaixo do mínimo por deriva de preço sobe para `minTradeNum` (mesmo shortcut da OKX) |
+| minNotional | `MIN_NOTIONAL.notional` | `minTradeUSDT` (= $5 em todos os contratos vistos) |
+| stepSize / tickSize | filtros | `sizeMultiplier` / `priceEndStep × 10^-pricePlace`; `quantityPrecision = volumePlace`, `pricePrecision = pricePlace`; extra `maxLeverage = maxLever` (ADA 75) |
+| Lado em hedge | `side` BUY/SELL + `positionSide` | **`side` = direção da POSIÇÃO** (`buy`=long, `sell`=short) e `tradeSide` = `open`/`close`. Fechar LONG é `side=buy, tradeSide=close` (não `sell`) |
+| Margem | cross | `marginMode=crossed` na ordem; `set_leverage` chama `set-margin-mode crossed` antes (falha com posição aberta → segue no modo atual, com warning) e `set-leverage {leverage}` sem `holdSide` |
+| Hedge mode | `set_hedge_mode` | `POST /account/set-position-mode {posMode: hedge_mode}` (idempotente; falha com posição aberta) |
+| Candles | asc Binance | `GET /market/candles` **já ascendente**, `[ts,o,h,l,c,baseVol,quoteVol]` (7 campos), `limit ≤ 1000` numa página (shortcut: sem paginação por `history-candles`); `1d` → `1Dutc` |
+| Ticker | `{price, time}` | `GET /market/ticker` → `lastPr`, `ts` |
+| Conta | wallet / available / upl | `GET /account/accounts` → item `marginCoin==USDT`: `wallet = accountEquity − unrealizedPL`, `available`, `margin_balance = accountEquity`, `total_initial_margin = crossedMargin` |
+| Posições | lista normalizada | `GET /position/all-position?productType&marginCoin` → `holdSide`, `total`, `openPriceAvg`, `markPrice`, `unrealizedPL`, `leverage` |
+| Fill da ordem | `avgPrice`, `executedQty` | `POST /order/place-order` → `orderId`; `GET /order/detail` (3×) → `priceAvg`, `baseVolume`, `state`, `totalProfits` (gross do close), `fee` |
+| Income | `REALIZED_PNL` / `COMMISSION` / `FUNDING_FEE` | `GET /account/bill` (90 dias; janelas de ≤30 dias, paginação `idLessThan=endId`): `businessType` `close_*` → `REALIZED_PNL=amount` + `COMMISSION=fee`; `open_*` → `COMMISSION=fee`; `contract_settle_fee` → `FUNDING_FEE=amount`; transferências ignoradas. Sem filtro de símbolo na API → filtrado aqui |
+| Fills (reconciler) | userTrades | `GET /order/fills` (3 meses) → `fillList`: `price`, `baseVolume`, `profit`, `totalFee` (abs), `tradeScope`; `positionSide` do `side` e BUY/SELL do `tradeSide` |
+| Taxas | `get_commission_rates` | do próprio contrato (`makerFeeRate 0.0002`, `takerFeeRate 0.0006`) — sem endpoint privado |
+| Funding | `get_funding_rate` | `GET /market/current-fund-rate` → `fundingRate`, `nextUpdate` |
+| Cancelar ordens | `cancel_open_orders` | `GET /order/orders-pending?symbol` → `POST /order/batch-cancel-orders {symbol, orderIdList}` |
+| Autenticação | HMAC | `ts ms + MÉTODO + path?query + body`, HMAC-SHA256 base64; headers `ACCESS-KEY/SIGN/TIMESTAMP/PASSPHRASE`, `locale`; sucesso = `code "00000"` |
+| Demo | — | header `paptrading: 1` + chave criada em *Demo trading* + `SUSDT-FUTURES`. **Só existem `SBTCSUSDT`, `SETHSUSDT`, `SXRPSUSDT`** — ADA/TRX/BNB não têm demo (`get_symbol_info` → `{}`) |
+
+Envs: `TRADING_BOT_EXCHANGE=bitget`, `BITGET_API_KEY`, `BITGET_API_SECRET`, `BITGET_PASSPHRASE`, `BITGET_DEMO`
+(default `true`). `config.validate()` cobra as três chaves. Smoke: `scripts/bitget_smoke.py` (ordem só com `--order`).
+
+Diferenças práticas vs OKX: (1) sem contratos — ADA/TRX a 1 moeda e BNB a 0,01 cabem na progressão da planilha
+com base ≥ $5 (`minTradeUSDT`); (2) `minNotional` fixo $5 em vez de derivado do preço; (3) demo cobre só 3
+moedas, então o teste de ponta a ponta com ADA/TRX só acontece em produção com ordem mínima.
+
+Riscos específicos: `close_position` usa ordem market `tradeSide=close` (não `flash-close-position`) para ter
+`orderId`/fill; se o close exceder a posição por ordens limit pendentes a Bitget ajusta a quantidade. Sinais de
+`amount`/`fee` nos bills e `totalFee` nos fills foram assumidos pela doc (fee negativo) — validar no 1º dia. O
+mapeamento de `businessType` ignora tipos sem `open`/`close` (ADL `adl_close_*` e liquidação `force_close_*`
+entram como realizado). Formato de candles do demo não foi testado ao vivo.

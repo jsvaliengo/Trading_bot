@@ -2,7 +2,7 @@
 CONEXÃO COM A OKX (perpétuos USDT-M, API v5)
 ============================================
 Adaptador com os MESMOS nomes de método e formatos de retorno da BinanceConnection
-(subconjunto do caminho martingale + dashboard + telegram; ver docs/OKX_PORT.md).
+(subconjunto do caminho martingale + dashboard + telegram; ver docs/EXCHANGE_PORT.md).
 
 Símbolos entram e saem no formato interno do bot (`ADAUSDT`); a tradução para
 `ADA-USDT-SWAP` e de moedas para contratos (`ctVal`/`lotSz`) fica só aqui.

@@ -114,14 +114,19 @@ class TradingConfig:
     TESTNET_API_KEY: str = os.getenv("BINANCE_TESTNET_API_KEY", "")
     TESTNET_API_SECRET: str = os.getenv("BINANCE_TESTNET_API_SECRET", "")
 
-    # Exchange de execução: "binance" (default) ou "okx" (docs/OKX_PORT.md). Na OKX,
-    # OKX_DEMO=true (default) usa o demo trading (header x-simulated-trading) e exige
-    # chaves criadas em Demo trading; produção = OKX_DEMO=false.
+    # Exchange de execução: "binance" (default), "okx" ou "bitget" (docs/EXCHANGE_PORT.md).
+    # *_DEMO=true (default) usa o demo trading da exchange (OKX: header x-simulated-trading;
+    # Bitget: header paptrading + SUSDT-FUTURES) e exige chaves criadas em Demo trading;
+    # produção = *_DEMO=false.
     EXCHANGE: str = _env_str("TRADING_BOT_EXCHANGE", "binance").lower()
     OKX_API_KEY: str = os.getenv("OKX_API_KEY", "").strip()
     OKX_API_SECRET: str = os.getenv("OKX_API_SECRET", "").strip()
     OKX_PASSPHRASE: str = os.getenv("OKX_PASSPHRASE", "").strip()
     OKX_DEMO: bool = _env_bool("OKX_DEMO", True)
+    BITGET_API_KEY: str = os.getenv("BITGET_API_KEY", "").strip()
+    BITGET_API_SECRET: str = os.getenv("BITGET_API_SECRET", "").strip()
+    BITGET_PASSPHRASE: str = os.getenv("BITGET_PASSPHRASE", "").strip()
+    BITGET_DEMO: bool = _env_bool("BITGET_DEMO", True)
 
     # Rede ativa: "testnet" ou "mainnet". Resolvida em __post_init__ com prioridade:
     # 1) env var TRADING_BOT_ENVIRONMENT
@@ -1644,8 +1649,14 @@ class TradingConfig:
                 "Use 'pullback', 'donchian_4h' ou 'martingale_hedge'."
             )
 
-        if self.EXCHANGE not in {"binance", "okx"}:
-            errors.append(f"⚠️  ALERTA: EXCHANGE inválida ({self.EXCHANGE!r}). Use 'binance' ou 'okx'.")
+        if self.EXCHANGE not in {"binance", "okx", "bitget"}:
+            errors.append(f"⚠️  ALERTA: EXCHANGE inválida ({self.EXCHANGE!r}). Use 'binance', 'okx' ou 'bitget'.")
+        elif self.EXCHANGE == "bitget":
+            if not (self.BITGET_API_KEY and self.BITGET_API_SECRET and self.BITGET_PASSPHRASE):
+                errors.append(
+                    "⚠️  ALERTA: Credenciais da Bitget não configuradas. "
+                    "Defina BITGET_API_KEY, BITGET_API_SECRET e BITGET_PASSPHRASE no .env."
+                )
         elif self.EXCHANGE == "okx":
             if not (self.OKX_API_KEY and self.OKX_API_SECRET and self.OKX_PASSPHRASE):
                 errors.append(
