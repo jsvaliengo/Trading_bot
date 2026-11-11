@@ -91,12 +91,14 @@ def score_pair(klines_1d: List[List[Any]], klines_4h: List[List[Any]], cfg=confi
 # Planilha CoinTech2u "Binance Estratégia Padrão": (rótulo da banca, banca mínima USDT,
 # estratégia, 1ª ordem long, 1ª ordem short, alavancagem, stop loss, double first, moedas).
 # Faixa = da banca mínima até a próxima linha; abaixo de 90 nenhuma.
+# Linhas 90–2.000 escaladas do original (1ª ordem 3, stop 180) pelo mínimo de $5 da Bitget:
+# 1ª ordem 5, stop 300 (× 5/3); banca mínima e moedas inalteradas.
 COINTECH2U_SHEET = [
-    ("90–150", 90, "Valiengo's Strategy", 3, 3, 20, 180, True, 1),
-    ("300", 300, "Valiengo's Strategy", 3, 3, 20, 180, True, 2),
-    ("500", 500, "Valiengo's Strategy", 3, 3, 20, 180, True, 3),
-    ("1.000", 1000, "Valiengo's Strategy", 3, 3, 20, 180, True, 6),
-    ("2.000", 2000, "Valiengo's Strategy", 3, 3, 20, 180, True, 9),
+    ("90–150", 90, "Valiengo's Strategy", 5, 5, 20, 300, True, 1),
+    ("300", 300, "Valiengo's Strategy", 5, 5, 20, 300, True, 2),
+    ("500", 500, "Valiengo's Strategy", 5, 5, 20, 300, True, 3),
+    ("1.000", 1000, "Valiengo's Strategy", 5, 5, 20, 300, True, 6),
+    ("2.000", 2000, "Valiengo's Strategy", 5, 5, 20, 300, True, 9),
     ("3.000", 3000, "Valiengo's Strategy", 10, 10, 20, 600, False, 9),
     ("4.000", 4000, "Valiengo's Strategy", 12, 12, 20, 720, False, 10),
     ("5.000", 5000, "Valiengo's Strategy", 15, 15, 20, 900, False, 11),

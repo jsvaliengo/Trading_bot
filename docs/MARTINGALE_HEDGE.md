@@ -179,6 +179,9 @@ intervalo mínimo entre adições (`MIN_ADD_INTERVAL_SECONDS`, 60 s); no restart
 
 Linha "banca 300 USDT" da planilha *Binance – Estratégia Padrão* do CoinTech2u: **Millionaire Strategy 9**,
 Long/Short 1st Order Size **3**, Leverage **20**, Stop Loss **180**, Double First LONG/SHORT **ON**, **2 moedas**.
+**Escala Bitget (2026-11-11):** a ordem mínima da Bitget é **$5 notional**, então as linhas 90–2.000 da
+`COINTECH2U_SHEET` foram escaladas × 5/3: 1ª ordem **5**, stop **300**; banca mínima e nº de moedas inalterados
+(linhas ≥ 3.000 já tinham 1ª ordem ≥ 5 e ficaram iguais). Os números abaixo (3/180) são a planilha original.
 Moedas verdes da planilha: ADAUSDT TRXUSDT ARBUSDT XRPUSDT APTUSDT FILUSDT SUSHIUSDT ATOMUSDT CFXUSDT 1INCHUSDT
 MASKUSDT THETAUSDT OPUSDT COMPUSDT CHZUSDT NEARUSDT SANDUSDT CRVUSDT DOTUSDT (vermelhas, evitar: NOTUSDT
 1000PEPEUSDT SNXUSDT SUIUSDT 1000SHIBUSDT DOGEUSDT APEUSDT SOLUSDT).
@@ -206,10 +209,10 @@ margem ($60 → $120) a opção seria inútil. Ainda assim, isto é inferência,
 TRADING_BOT_STRATEGY=martingale_hedge
 TRADING_BOT_MARTINGALE_PAIRS=ADAUSDT,TRXUSDT
 TRADING_BOT_MARTINGALE_LEVERAGE=20
-TRADING_BOT_MARTINGALE_FIRST_ORDER_USDT=3
-TRADING_BOT_MARTINGALE_FIRST_ORDER_IS_NOTIONAL=false   # premissa "margem"; true = ler como notional ($3)
+TRADING_BOT_MARTINGALE_FIRST_ORDER_USDT=5              # planilha escalada (Bitget mín. $5); original 3
+TRADING_BOT_MARTINGALE_FIRST_ORDER_IS_NOTIONAL=false   # premissa "margem"; true = ler como notional ($5)
 TRADING_BOT_MARTINGALE_DOUBLE_FIRST=true
-TRADING_BOT_MARTINGALE_STOP_LOSS_USDT=180              # 60% da banca: start() loga aviso
+TRADING_BOT_MARTINGALE_STOP_LOSS_USDT=300              # escalado de 180 (× 5/3); 100% da banca de $300: start() loga aviso
 TRADING_BOT_MARTINGALE_MAX_LEVELS=9
 TRADING_BOT_MARTINGALE_MULTIPLIER=2.0
 TRADING_BOT_MARTINGALE_STEP_PERCENT=1.5                # premissa (não achado)
@@ -257,6 +260,10 @@ $3.840) ou `MAX_LEVELS=5` (só 2 pernas profundas, $3.840); ou ler a planilha co
 no 9º fill (k=8), por $144. Margem da escada cheia: $1.536/20 = $76,80 por perna ≈ $307 nas 4 pernas — a banca
 inteira, sem folga para o P&L negativo que a escada carrega nesse ponto (liquidação antes do stop de $180 é
 possível). O stop de $180 = 60% da banca: o stop em % de hoje (20%) dispararia bem antes.
+
+**Planilha escalada (B = $5, 1ª ordem $10):** multiplique as duas tabelas por 5/3 — 9ª perna $1.280,
+acumulado $2.560/perna, 2 pernas $5.120 (cabe), 4 pernas $10.240 (estoura no 9º fill; no 8º, $5.120, cabe).
+Stop $300 = 100% da banca de $300 (e 3× uma banca de $100): na prática a liquidação chega antes do stop.
 
 minNotional: ADAUSDT/TRXUSDT têm $5 na Binance; a 1ª ordem ($6 notional ou $120 margem×lev) cumpre. Se uma
 moeda da lista exigir mais, `start()` sobe a base para cumprir (log ⚠️) em vez de pular o par.
