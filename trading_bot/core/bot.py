@@ -45,7 +45,7 @@ from ..observability.log_redaction import install_on_root_handlers
 from ..execution import ExecutionEngine
 from ..execution.engine import _below_min_trade_volume, _throttled_warning
 from ..infra.binance_streams import stale_kline_age_seconds
-from ..infra.binance_client import BinanceConnection
+from ..infra.exchange import create_exchange
 from ..observability import metrics
 from .strategy import HedgeStrategy, RangeScalpingStrategy, RiskManager, TechnicalAnalysis
 from ..services.kill_switch import KillSwitchMonitor
@@ -207,8 +207,8 @@ class TradingBot:
             )
         
         # Inicializa componentes
-        logger.info("🔌 Conectando à Binance...")
-        self.exchange = BinanceConnection()
+        logger.info(f"🔌 Conectando à exchange ({config.EXCHANGE})...")
+        self.exchange = create_exchange()
         
         logger.info("📊 Inicializando estratégia...")
         self.strategy = HedgeStrategy()
@@ -1156,7 +1156,7 @@ class TradingBot:
             # 5) Reset runtime state + reconecta exchange
             self._init_runtime_state()
             self.paused = True  # preserva pausa após reset
-            self.exchange = BinanceConnection()
+            self.exchange = create_exchange()
             self.risk_manager._real_daily_pnl_fn = (
                 lambda: self.exchange.get_daily_pnl_from_binance().get('total', 0.0)
             )
