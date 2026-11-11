@@ -330,3 +330,9 @@ def test_factory_picks_okx_by_env(monkeypatch):
     monkeypatch.setattr(config, "EXCHANGE", "okx", raising=False)
     monkeypatch.setattr(okx.OkxConnection, "__init__", lambda self: None)
     assert isinstance(factory.create_exchange(), okx.OkxConnection)
+
+
+def test_instruments_load_even_when_host_uptime_is_below_ttl(monkeypatch, conn):
+    """Host recém-ligado: monotonic() < TTL. Sentinela 0.0 fazia o cache vazio parecer fresco (CI falhava)."""
+    monkeypatch.setattr(okx.time, "monotonic", lambda: 10.0)
+    assert conn.get_exchange_info()["symbols"]
