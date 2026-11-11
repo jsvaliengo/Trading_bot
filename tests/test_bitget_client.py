@@ -297,6 +297,14 @@ def test_klines_daily_maps_to_utc_and_caps_limit(conn):
     assert conn.http.calls[-1]["query"]["granularity"] == "1Dutc" and conn.http.calls[-1]["query"]["limit"] == "1000"
 
 
+def test_klines_raw_unknown_symbol_40034_returns_empty_without_error_log(conn, caplog):
+    # símbolo no formato Binance (1000PEPEUSDT) não existe na Bitget: [] silencioso no scan de universo
+    conn.http.routes[("GET", "/api/v2/mix/market/candles")] = {"code": "40034", "msg": "Parameter 1000PEPEUSDT does not exist", "data": None}
+    with caplog.at_level("ERROR"):
+        assert conn.get_klines_raw("1000PEPEUSDT", "1d", limit=5) == []
+    assert not caplog.records
+
+
 def test_get_klines_drops_open_candle(conn, monkeypatch):
     now_ms = 1700008000000   # 1700003600000 fecha em 1700007199999 (fechada); 1700006400000 ainda aberta
     monkeypatch.setattr(bg.time, "time", lambda: now_ms / 1000)

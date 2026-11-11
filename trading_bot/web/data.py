@@ -17,7 +17,7 @@ import math
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-from ..core.config import config
+from ..core.config import config, exchange_label
 from ..core.donchian import r_multiple_now
 from ..core.equity import effective_equity, simulated_balance
 from ..core.martingale import STRATEGY_TYPE as MARTINGALE_STRATEGY
@@ -496,6 +496,7 @@ def collect_summary(bot) -> Dict[str, Any]:
         "paused": paused,
         "running": running,
         "environment": "testnet" if getattr(config, "USE_TESTNET", False) else "mainnet",
+        "exchange": exchange_label(config),
         "signal_data_source": "mainnet" if config.SIGNALS_FROM_MAINNET else config.ENVIRONMENT,
         "ai_mode": str(getattr(config, "AI_CONSULTIVE_MODE", "off") or "off"),
         "strategy": str(getattr(config, "STRATEGY", "pullback") or "pullback"),

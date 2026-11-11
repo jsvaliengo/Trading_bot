@@ -1840,5 +1840,21 @@ class TradingConfig:
         return len(errors) == 0
 
 
+_EXCHANGE_NAMES = {"okx": "OKX"}
+
+
+def exchange_label(cfg, with_network: bool = False) -> str:
+    """Nome da exchange para textos de UI ("Bitget"); with_network acrescenta a rede
+    ("Bitget demo", "Binance testnet"). Aceita qualquer objeto com EXCHANGE (ex.: mocks)."""
+    ex = getattr(cfg, "EXCHANGE", "binance")
+    ex = ex.lower() if isinstance(ex, str) and ex else "binance"
+    name = _EXCHANGE_NAMES.get(ex, ex.capitalize())
+    if not with_network:
+        return name
+    if ex == "binance":
+        return f"{name} {getattr(cfg, 'ENVIRONMENT', '') or 'testnet'}"
+    return f"{name} demo" if getattr(cfg, f"{ex.upper()}_DEMO", False) is True else name
+
+
 # Instância global de configuração
 config = TradingConfig()
