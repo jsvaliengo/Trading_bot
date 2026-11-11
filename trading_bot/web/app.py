@@ -20,7 +20,7 @@ from datetime import timedelta
 from flask import Flask, jsonify, redirect, render_template, request, session
 from flask_socketio import SocketIO
 
-from ..core.config import config
+from ..core.config import config, exchange_label
 from . import auth
 from .auth import login_required
 from .data import collect_history, collect_live, collect_snapshot, collect_summary
@@ -93,6 +93,7 @@ def _register_routes(app: Flask, socketio: SocketIO) -> None:
         return render_template(
             "dashboard.html",
             environment="testnet" if getattr(config, "USE_TESTNET", False) else "mainnet",
+            exchange_label=exchange_label(config, with_network=True),
             poll_interval=int(getattr(config, "DASHBOARD_POLL_INTERVAL_SECONDS", 5)),
             strategy=str(getattr(config, "STRATEGY", "pullback") or "pullback"),
             csrf_token=auth.csrf_token(),

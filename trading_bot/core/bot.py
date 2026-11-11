@@ -27,7 +27,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from .config import config
+from .config import config, exchange_label
 from .equity import effective_equity, simulated_balance
 from .bot_state_serde import BotStatePersistence
 from .scheduler import LoopScheduler, get_loop_timing_profile, timing_profile_changed
@@ -6065,7 +6065,7 @@ def main():
     print(f"   • Runtime: {config.RUNTIME_DIR}")
     print("   • Capital: DINÂMICO (saldo da carteira de futuros)")
     print(f"   • Alavancagem: {config.LEVERAGE}x")
-    print(f"   • Rede Binance: {config.ENVIRONMENT.upper()}{' (DINHEIRO REAL!)' if not config.USE_TESTNET else ' (dinheiro de teste)'}")
+    print(f"   • Rede: {exchange_label(config, with_network=True)} · {config.ENVIRONMENT.upper()}{' (DINHEIRO REAL!)' if not config.USE_TESTNET else ' (dinheiro de teste)'}")
     print(f"   • Pares: {', '.join(config.TRADING_PAIRS)}")
     print(f"   • Stop Loss: {config.STOP_LOSS_PERCENT}%")
     print(f"   • Take Profit: {config.TAKE_PROFIT_PERCENT}%")

@@ -221,6 +221,8 @@ class BitgetConnection:
             return [[int(k[0]), k[1], k[2], k[3], k[4], k[5], int(k[0]) + step_ms - 1, k[6], 0, "0", "0", "0"]
                     for k in rows]
         except Exception as e:
+            if isinstance(e, BitgetApiError) and e.code == "40034":  # símbolo não existe (ex.: 1000PEPEUSDT): sem log
+                return []
             logger.error(f"Erro ao obter klines raw de {symbol}: {e}")
             return []
 

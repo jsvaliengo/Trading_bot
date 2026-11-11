@@ -20,6 +20,7 @@
     const $$ = (sel) => Array.from(document.querySelectorAll(sel));
     const cssv = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
     const isNum = (v) => v !== null && v !== undefined && !isNaN(v);
+    const exchangeName = () => (state.live && state.live.summary && state.live.summary.exchange) || 'exchange';
     const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
     // sinal após arredondar a d casas: o que vira "0,00" na tela é zero (sem sinal, sem cor)
@@ -531,7 +532,7 @@
             items.push([dot(st) + 'Loop principal', `${rt.loop_errors || 0} erro${rt.loop_errors === 1 ? '' : 's'} desde o último relatório<small>${rt.last_error ? esc(rt.last_error) : 'sem erro registrado'} · ${rt.monitor_cycles || 0} ciclos</small>`]); }
         { const st = s.running ? 'ok' : 'bad'; bump(st);
             items.push([dot(st) + 'Processo', `${s.running ? 'rodando' : 'parado'} há ${fmt.ago(h.uptime_seconds)}<small>deploy ${h.deploy_sha || 'n/d'}${h.deploy_at ? ' · ' + fmt.dateTime(h.deploy_at) : ''}</small>`]); }
-        items.push([dot(conn === 'connected' ? 'ok' : conn === 'polling' ? 'warn' : 'bad') + 'Dashboard', `${connLabel()}<small>estado a cada ${REFRESH}s · histórico quando um trade fecha · P&L reconciliado com fills da Binance</small>`]);
+        items.push([dot(conn === 'connected' ? 'ok' : conn === 'polling' ? 'warn' : 'bad') + 'Dashboard', `${connLabel()}<small>estado a cada ${REFRESH}s · histórico quando um trade fecha · P&L reconciliado com fills da ${esc(s.exchange || 'exchange')}</small>`]);
         $('health-list').innerHTML = items.map(([l, v]) => `<li><span class="hl">${l}</span><span class="hv">${v}</span></li>`).join('');
         const b = $('hl-badge'); b.textContent = worst === 'ok' ? 'tudo ok' : worst === 'warn' ? 'atenção' : 'problema'; b.className = 'badge ' + worst;
     }
@@ -753,7 +754,7 @@
     }
     function renderPnlAssets(p) {
         const a = p.assets || {}, pal = palette(), el = $('pnl-assets-chart');
-        $('pnl-assets-sub').textContent = a.ok ? 'carteira de futuros USDT-M' : 'saldo indisponível (Binance não respondeu)';
+        $('pnl-assets-sub').textContent = a.ok ? 'carteira de futuros USDT-M' : `saldo indisponível (${esc(exchangeName())} não respondeu)`;
         $('pnl-assets-total').textContent = a.ok ? fmt.usd(a.total) : '—';
         $('pnl-assets-list').innerHTML = (a.items || []).map(i => `<li><i class="sw" style="background:${pal.warn}"></i>${esc(i.asset)} <b>${fmt.usd(i.balance)}</b> <small>${a.total ? fmt.pct(i.balance / a.total * 100, 1, false) : ''}</small></li>`).join('');
         if (!el || typeof Chart === 'undefined') return;
@@ -788,7 +789,7 @@
     const INCOME_LABEL = { REALIZED_PNL: 'P&L realizado', COMMISSION: 'Comissão', FUNDING_FEE: 'Funding', TRANSFER: 'Transferência' };
     function renderPnlIncome(p) {
         const tb = $('pnl-income').querySelector('tbody'), tot = p.income_totals || {};
-        $('pnl-income-totals').innerHTML = p.income_ok ? Object.keys(INCOME_LABEL).map(k => `<span>${INCOME_LABEL[k]} <b class="${cls(tot[k])}">${fmt.usd(tot[k] || 0, { signed: true })}</b></span>`).join('') : '<span class="warn">Income da Binance indisponível no momento; o restante da aba usa o banco local.</span>';
+        $('pnl-income-totals').innerHTML = p.income_ok ? Object.keys(INCOME_LABEL).map(k => `<span>${INCOME_LABEL[k]} <b class="${cls(tot[k])}">${fmt.usd(tot[k] || 0, { signed: true })}</b></span>`).join('') : `<span class="warn">Income da ${esc(exchangeName())} indisponível no momento; o restante da aba usa o banco local.</span>`;
         const rows = p.income || [];
         if (!rows.length) { tb.innerHTML = `<tr><td colspan="4" class="empty sans">${p.income_ok ? 'Nenhum lançamento no período.' : 'Sem dados.'}</td></tr>`; return; }
         tb.innerHTML = rows.slice(0, 300).map(i => `<tr><td><small>${fmt.dateTime(i.time)}</small></td><td class="sans">${esc(INCOME_LABEL[i.type] || i.type)}</td><td class="sans">${esc(i.symbol || '—')}</td><td class="r ${cls(i.amount)}">${fmt.usd(i.amount, { signed: true })}</td></tr>`).join('');

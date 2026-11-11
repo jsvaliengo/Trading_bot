@@ -19,6 +19,7 @@ from typing import Any, List, Optional
 import requests
 from requests.exceptions import RequestException
 
+from ..core.config import exchange_label
 from ..core.equity import effective_equity
 
 logger = logging.getLogger(__name__)
@@ -1425,7 +1426,7 @@ class TelegramCommandHandler:
 📈 <b>P&L NÃO REALIZADO:</b>
    <code>{self._format_usd_brl(unrealized, 2, True)}</code>
 
-📊 <b>P&L DO DIA (Binance):</b>
+📊 <b>P&L DO DIA ({exchange_label(self.config)}):</b>
    • Trades: <code>{self._format_usd_brl(daily_pnl['realized_pnl'], 2, True)}</code>
    • Funding: <code>{self._format_usd_brl(daily_pnl['funding_fee'], 2, True)}</code>
    • Comissões: <code>{self._format_usd_brl(daily_pnl['commission'], 2, True)}</code>
@@ -1974,7 +1975,7 @@ class TelegramCommandHandler:
 
             state_file = getattr(self.config, "STATE_FILE_NAME", "?")
             self.send_message(
-                f"🌐 <b>REDE BINANCE</b>\n\n"
+                f"🌐 <b>REDE {exchange_label(self.config).upper()}</b>\n\n"
                 f"• Ativa: <b>{current_label}</b>{' 💰' if current == 'mainnet' else ' 🧪'}\n"
                 f"• State: <code>{state_file}</code>\n"
                 f"• Posições abertas: <code>{open_count}</code>\n\n"
@@ -2227,7 +2228,7 @@ class TelegramCommandHandler:
 
     def cmd_help(self, args: list):
         """Mostra lista de comandos."""
-        message = """
+        message = f"""
 📚 <b>COMANDOS DISPONÍVEIS</b>
 ━━━━━━━━━━━━━━━━━━━━━
 
@@ -2273,7 +2274,7 @@ class TelegramCommandHandler:
 /closeall eu_sei_o_risco - Forçar fechamento em drawdown
 /rescore - Forçar rescore de pares agora
 
-<b>🌐 REDE BINANCE:</b>
+<b>🌐 REDE {exchange_label(self.config).upper()}:</b>
 /env - Ver rede ativa e credenciais
 /env testnet - Trocar para testnet
 /env mainnet confirmar - Trocar para mainnet

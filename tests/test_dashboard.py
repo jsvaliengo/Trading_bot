@@ -20,7 +20,7 @@ import pytest
 import re
 import requests
 
-from trading_bot.core.config import config as global_config
+from trading_bot.core.config import config as global_config, exchange_label
 from trading_bot.web import data as dashboard_data
 
 
@@ -555,6 +555,7 @@ def test_collect_summary_includes_kpis(monkeypatch):
     assert summary["paused"] is False
     assert summary["running"] is True
     assert summary["environment"] == "testnet"
+    assert summary["exchange"] == exchange_label(global_config)
 
 
 def test_collect_summary_uses_simulated_cap_in_testnet(monkeypatch):
