@@ -443,7 +443,7 @@ def test_swap_cooldown_blocks_ping_pong(_one_slot_auto, monkeypatch):
 
 
 def test_fills_slots_of_current_sheet_row_and_shrinks_when_row_drops(_one_slot_auto):
-    ex = _Ex(balance=300.0, min_notional=1.0)   # faixa 300 → 3 moedas
+    ex = _Ex(balance=300.0, min_notional=1.0)   # faixa 300 → 2 moedas
     bot, r = _runner(ex)
     _scored(r, TRX="green", BNB="yellow", ADA="red")
     r.tick()
@@ -455,7 +455,7 @@ def test_fills_slots_of_current_sheet_row_and_shrinks_when_row_drops(_one_slot_a
 
 
 def test_skips_candidates_already_in_slot_with_open_position_or_below_min_notional(_one_slot_auto):
-    ex = _Ex(balance=300.0, min_notional=0.5)   # faixa 300 → 3 vagas, 2 ocupadas
+    ex = _Ex(balance=300.0, min_notional=0.5)   # faixa 300 → 2 vagas, ambas ocupadas
     ex.min_notionals["ETHUSDT"] = 1000.0
     bot, r = _runner(ex, pairs=("ADAUSDT", "TRXUSDT"))
     ex.positions = [{"symbol": "BNBUSDT", "side": "LONG", "entry_price": 1.0, "quantity": 1.0, "unrealized_pnl": 0.0, "mark_price": 1.0}]
@@ -744,7 +744,7 @@ def test_draining_pair_neither_adds_nor_reopens_but_still_takes_profit(monkeypat
 
 
 def test_draining_pair_frees_its_slot_immediately(_one_slot_auto, _drain_ada):
-    ex = _Ex(balance=300.0, min_notional=1.0)                  # faixa 300 → 3 vagas
+    ex = _Ex(balance=300.0, min_notional=1.0)                  # faixa 300 → 2 vagas
     bot, r = _runner(ex, pairs=("ADAUSDT", "TRXUSDT"))
     r.drain = set(config.MARTINGALE_DRAIN_PAIRS)
     r.pairs["ADAUSDT"].legs["LONG"].level = 2                  # ADA com perna aberta

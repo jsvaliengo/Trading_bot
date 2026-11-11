@@ -965,7 +965,7 @@ def test_collect_martingale_sheet_row_for_equity(equity, expected):
     sheet = out["sheet"]
     assert sheet["current"] == expected
     assert [r[1] for r in sheet["rows"]] == [90, 300, 500, 1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000]
-    assert sheet["rows"][1][8] == 3 and sheet["rows"][8][6:9] == (1020, True, 11)
+    assert sheet["rows"][1][8] == 2 and sheet["rows"][8][6:9] == (1020, True, 11)
     assert sheet["rows"][12][3:9] == (28, 28, 20, 1680, True, 12)
     assert "ADA" in sheet["green"] and "AVAX" in sheet["green"] and "DOGE" in sheet["red"]
     assert {r[2] for r in sheet["rows"]} == {"Valiengo's Strategy"}
