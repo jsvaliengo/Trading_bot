@@ -294,6 +294,12 @@ details.card > :not(summary):first-of-type { margin-top:10px; }
 .modal-card h3 { font-size:16px; font-weight:600; margin-bottom:8px; }
 .modal-card p { color:var(--text-dim); margin-bottom:20px; }
 .modal-actions { display:flex; gap:10px; justify-content:flex-end; }
+.chart-card { width:min(960px,100%); padding:12px; }
+.chart-head { display:flex; align-items:center; gap:8px; margin-bottom:8px; }
+.chart-head h3 { margin:0; } .chart-head .btn { margin-left:auto; }
+#chart-frame { width:100%; height:min(520px,70vh); border:0; border-radius:6px; background:#000; }
+.sym-btn { all:unset; cursor:pointer; text-decoration:underline dotted; text-underline-offset:3px; }
+.sym-btn:hover, .sym-btn:focus-visible { color:var(--accent); }
 
 /* Responsivo */
 @media (max-width: 1180px) { .status { grid-template-columns:repeat(4, minmax(0,1fr)); } }

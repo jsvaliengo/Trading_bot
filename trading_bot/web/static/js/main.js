@@ -315,7 +315,7 @@
             const isD = p.strategy_type === 'donchian_4h';
             return `<div class="prow">
                 <div class="prow-top">
-                    <span class="psym">${esc(p.symbol)} <span class="side ${p.side === 'LONG' ? 'l' : 's'}">${esc(p.side)}</span>${isD ? '' : `<small class="dim">${esc(p.strategy_type)}</small>`}</span>
+                    <span class="psym"><button type="button" class="sym-btn" data-chart="${esc(p.symbol)}">${esc(p.symbol)}</button> <span class="side ${p.side === 'LONG' ? 'l' : 's'}">${esc(p.side)}</span>${isD ? '' : `<small class="dim">${esc(p.strategy_type)}</small>`}</span>
                     <span class="pr-pnl ${cls(p.unrealized_pnl_usd)}">${fmt.usd(p.unrealized_pnl_usd, { signed: true })}<small>${fmt.pct(p.unrealized_pnl_percent)}</small></span>
                     <span class="pr-r ${cls(p.r_now)}">${fmt.r(p.r_now)}<small>risco ${fmt.usd(p.risk_usd)}${isNum(p.trail_floor_r) ? ` · piso ${fmt.r(p.trail_floor_r)}` : ''}</small></span>
                     <span class="pr-meta">${fmt.price(p.quantity)} un · ${fmt.dur(age)}</span>
@@ -404,7 +404,7 @@
             const age = pos && pos.entry_time ? (Date.now() - new Date(pos.entry_time).getTime()) / 36e5 : null;
             return `<div class="prow">
             <div class="prow-top">
-                <span class="psym">${esc(l.symbol)} <span class="side ${l.side === 'LONG' ? 'l' : 's'}">${esc(l.side)}</span>${draining.has(l.symbol) ? ' <span class="badge warn">drenando</span>' : ''}</span>
+                <span class="psym"><button type="button" class="sym-btn" data-chart="${esc(l.symbol)}">${esc(l.symbol)}</button> <span class="side ${l.side === 'LONG' ? 'l' : 's'}">${esc(l.side)}</span>${draining.has(l.symbol) ? ' <span class="badge warn">drenando</span>' : ''}</span>
                 <span class="pr-pnl ${cls(l.unrealized_pnl_usd)}">${fmt.usd(l.unrealized_pnl_usd, { signed: true })}${pos ? `<small>${fmt.pct(pos.unrealized_pnl_percent)}</small>` : ''}</span>
                 <span class="pr-r">${l.level}/${l.max_levels}<small>nível</small></span>
                 <span class="pr-meta">${isNum(l.quantity) ? `${fmt.price(l.quantity)} un · ${fmt.usd(l.notional)}` : 'sem posição'}${age != null ? ` · ${fmt.dur(age)}` : ''}</span>
@@ -870,6 +870,21 @@
     $('confirm-ok').addEventListener('click', () => { const a = pending; closeModal(); if (a) a(); });
     modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !modal.hidden) closeModal(); });
+
+    // Gráfico 1m do par (TradingView embed). Demo/testnet não tem feed no TV: usa o símbolo perpétuo da exchange real.
+    const chart = $('chart-modal');
+    function openChart(sym) {
+        const ex = exchangeName().split(' ')[0].toUpperCase();
+        const tv = `${/^(BITGET|OKX|BINANCE)$/.test(ex) ? ex : 'BINANCE'}:${sym}.P`;
+        $('chart-title').textContent = sym;
+        $('chart-frame').src = `https://s.tradingview.com/widgetembed/?symbol=${encodeURIComponent(tv)}&interval=1&theme=dark&hide_top_toolbar=1&hide_side_toolbar=1&allow_symbol_change=0&save_image=0&locale=br`;
+        lastFocus = document.activeElement; chart.hidden = false; $('chart-close').focus();
+    }
+    function closeChart() { chart.hidden = true; $('chart-frame').src = 'about:blank'; if (lastFocus) lastFocus.focus(); }
+    document.addEventListener('click', (e) => { const b = e.target.closest('[data-chart]'); if (b) openChart(b.dataset.chart); });
+    $('chart-close').addEventListener('click', closeChart);
+    chart.addEventListener('click', (e) => { if (e.target === chart) closeChart(); });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !chart.hidden) closeChart(); });
     async function postControl(path, body) {
         try {
             const r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}), credentials: 'include' });
