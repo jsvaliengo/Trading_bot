@@ -111,14 +111,14 @@ def test_public_request_has_no_auth_headers_and_api_error_raises(conn):
 
 
 # ---- demo ----
-def test_demo_uses_paptrading_header_and_s_prefixed_symbols(monkeypatch):
+def test_demo_sends_paptrading_only_on_private_calls_and_keeps_prod_symbols(monkeypatch):
     c = _make(monkeypatch, demo=True)
     assert c.http.calls[-1]["headers"]["paptrading"] == "1"
-    assert c.http.calls[-1]["query"]["productType"] == "SUSDT-FUTURES"
-    assert c.to_bitget("ADAUSDT") == "SADASUSDT" and c.from_bitget("SADASUSDT") == "ADAUSDT"
-    assert c.to_bitget("SADASUSDT") == "SADASUSDT"
+    assert c.http.calls[-1]["query"]["productType"] == "USDT-FUTURES"
+    assert c.to_bitget("ADAUSDT") == "ADAUSDT" and c.from_bitget("ADAUSDT") == "ADAUSDT"
     c.get_symbol_ticker("BTCUSDT")
-    assert c.http.calls[-1]["query"] == {"symbol": "SBTCSUSDT", "productType": "SUSDT-FUTURES"}
+    assert "paptrading" not in c.http.calls[-1]["headers"]  # público com o header → vazio/40034 ao vivo
+    assert c.http.calls[-1]["query"] == {"symbol": "BTCUSDT", "productType": "USDT-FUTURES"}
 
 
 # ---- conversões ----
@@ -254,18 +254,17 @@ def test_qty_below_min_is_bumped_to_min_not_dropped(conn):
     assert _last_post(conn)["body"]["size"] == "0.01"
 
 
-def test_demo_order_uses_s_symbol_and_susdt_margin(monkeypatch):
+def test_demo_order_uses_prod_symbol_and_usdt_margin(monkeypatch):
     c = _make(monkeypatch, demo=True)
     c.http.routes[("GET", "/api/v2/mix/market/contracts")] = {"code": "00000", "data": [
-        {**ADA, "symbol": "SBTCSUSDT", "minTradeNum": "0.0001", "sizeMultiplier": "0.0001", "volumePlace": "4"}]}
-    c.http.routes[("GET", "/api/v2/mix/account/accounts")] = {"code": "00000", "data": [{**ACCOUNTS[0], "marginCoin": "SUSDT"}]}
+        {**ADA, "symbol": "BTCUSDT", "minTradeNum": "0.0001", "sizeMultiplier": "0.0001", "volumePlace": "4"}]}
     _order_routes(c, price_avg="100000", base_vol="0.0001")
     order = c.place_market_order(symbol="BTCUSDT", side="BUY", position_side="LONG", quantity=0.0001)
     body = _last_post(c)["body"]
-    assert body["symbol"] == "SBTCSUSDT" and body["productType"] == "SUSDT-FUTURES" and body["marginCoin"] == "SUSDT"
+    assert body["symbol"] == "BTCUSDT" and body["productType"] == "USDT-FUTURES" and body["marginCoin"] == "USDT"
+    assert _last_post(c)["headers"]["paptrading"] == "1"
     assert order["symbol"] == "BTCUSDT"
     assert c.get_account_balance() == 300.5
-    assert c.get_symbol_info("ADAUSDT") == {}   # demo só tem SBTC/SETH/SXRP
 
 
 def test_cancel_open_orders_batches_pending(conn):

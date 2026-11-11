@@ -116,7 +116,7 @@ class TradingConfig:
 
     # Exchange de execução: "binance" (default), "okx" ou "bitget" (docs/EXCHANGE_PORT.md).
     # *_DEMO=true (default) usa o demo trading da exchange (OKX: header x-simulated-trading;
-    # Bitget: header paptrading + SUSDT-FUTURES) e exige chaves criadas em Demo trading;
+    # Bitget: header paptrading) e exige chaves criadas em Demo trading;
     # produção = *_DEMO=false.
     EXCHANGE: str = _env_str("TRADING_BOT_EXCHANGE", "binance").lower()
     OKX_API_KEY: str = os.getenv("OKX_API_KEY", "").strip()

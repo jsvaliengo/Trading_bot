@@ -3,7 +3,7 @@ SMOKE TEST DA BITGET
 ====================
 Com BITGET_API_KEY/BITGET_API_SECRET/BITGET_PASSPHRASE (demo por padrão, BITGET_DEMO=true) no .env:
 lê saldo, contrato, preço e posições; ativa hedge mode. NÃO envia ordem sem --order.
-Demo só tem BTC/ETH/XRP (SBTCSUSDT…): com ADA/TRX nos pares, use BTCUSDT no demo.
+Demo só tem BTC/ETH/XRP: com ADA/TRX nos pares, use TRADING_BOT_MARTINGALE_PAIRS=BTCUSDT.
 
   .venv/bin/python scripts/bitget_smoke.py            # só leitura
   .venv/bin/python scripts/bitget_smoke.py --order    # abre LONG no mínimo do 1º par e fecha em seguida
@@ -30,7 +30,7 @@ def main(send_order: bool) -> int:
         if not info:
             print(f"{sym}: contrato não existe em {ex.product_type}")
             continue
-        print(f"{sym} ({ex.to_bitget(sym)}): preço {ex.get_symbol_price(sym)} | step {info['stepSize']} "
+        print(f"{sym}: preço {ex.get_symbol_price(sym)} | step {info['stepSize']} "
               f"minQty {info['minQty']} minNotional ${info['minNotional']:.2f} maxLev {info['maxLeverage']}x")
     for p in ex.get_open_positions():
         print(f"  posição {p['side']} {p['symbol']}: {p['quantity']} @ {p['entry_price']} (upl {p['unrealized_pnl']})")

@@ -121,7 +121,7 @@ pública (`/api-doc/contract/intro`) e em `GET /api/v2/mix/market/contracts` ao 
 
 | Conceito | Binance (interno) | Bitget v2 |
 |---|---|---|
-| Símbolo | `ADAUSDT` | `ADAUSDT` (igual). **Demo**: `SADASUSDT` + `productType=SUSDT-FUTURES` + `marginCoin=SUSDT` (prefixo encapsulado em `to_bitget`/`from_bitget`) |
+| Símbolo | `ADAUSDT` | `ADAUSDT` (igual, também no demo: com `paptrading: 1` a Bitget usa `USDT-FUTURES`/`USDT` e os símbolos normais; `SUSDT-FUTURES`/`SBTCSUSDT` só existem sem o header e respondem 40034/40778 com ele — verificado 11/11/26) |
 | Quantidade | moedas | **moedas** (`size`), floor no `sizeMultiplier` (ADA/TRX `1`, BNB `0.01`), mínimo `minTradeNum`; abaixo do mínimo por deriva de preço sobe para `minTradeNum` (mesmo shortcut da OKX) |
 | minNotional | `MIN_NOTIONAL.notional` | `minTradeUSDT` (= $5 em todos os contratos vistos) |
 | stepSize / tickSize | filtros | `sizeMultiplier` / `priceEndStep × 10^-pricePlace`; `quantityPrecision = volumePlace`, `pricePrecision = pricePlace`; extra `maxLeverage = maxLever` (ADA 75) |
@@ -139,7 +139,7 @@ pública (`/api-doc/contract/intro`) e em `GET /api/v2/mix/market/contracts` ao 
 | Funding | `get_funding_rate` | `GET /market/current-fund-rate` → `fundingRate`, `nextUpdate` |
 | Cancelar ordens | `cancel_open_orders` | `GET /order/orders-pending?symbol` → `POST /order/batch-cancel-orders {symbol, orderIdList}` |
 | Autenticação | HMAC | `ts ms + MÉTODO + path?query + body`, HMAC-SHA256 base64; headers `ACCESS-KEY/SIGN/TIMESTAMP/PASSPHRASE`, `locale`; sucesso = `code "00000"` |
-| Demo | — | header `paptrading: 1` + chave criada em *Demo trading* + `SUSDT-FUTURES`. **Só existem `SBTCSUSDT`, `SETHSUSDT`, `SXRPSUSDT`** — ADA/TRX/BNB não têm demo (`get_symbol_info` → `{}`) |
+| Demo | — | header `paptrading: 1` **só nas chamadas privadas** (nos públicos o header devolve corpo vazio/40034) + chave criada em *Demo trading*; mesmo `USDT-FUTURES`/`USDT`/símbolos da produção. Saldo demo precisa ser resgatado na UI (conta nova = 0 USDT) |
 
 Envs: `TRADING_BOT_EXCHANGE=bitget`, `BITGET_API_KEY`, `BITGET_API_SECRET`, `BITGET_PASSPHRASE`, `BITGET_DEMO`
 (default `true`). `config.validate()` cobra as três chaves. Smoke: `scripts/bitget_smoke.py` (ordem só com `--order`).

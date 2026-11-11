@@ -4,9 +4,10 @@ CONEXÃO COM A BITGET (futuros USDT-M, API v2 "classic")
 Adaptador com os MESMOS nomes de método e formatos de retorno da BinanceConnection
 (subconjunto do caminho martingale + dashboard + telegram; ver docs/EXCHANGE_PORT.md).
 
-Símbolo interno `ADAUSDT` É o símbolo da Bitget (sem conversão). Em demo trading a
-Bitget usa `productType=SUSDT-FUTURES`, símbolo `SADASUSDT` e margem `SUSDT`; esse
-prefixo fica encapsulado aqui. Quantidade em MOEDAS (passo `sizeMultiplier`), sem
+Símbolo interno `ADAUSDT` É o símbolo da Bitget (sem conversão), inclusive no demo:
+com o header `paptrading: 1` a Bitget usa `USDT-FUTURES`/`USDT` e os símbolos normais
+(verificado ao vivo em 11/11/26: `SUSDT-FUTURES`/`SBTCSUSDT` respondem 40034/40778 e
+o header zera os endpoints públicos). Quantidade em MOEDAS (passo `sizeMultiplier`), sem
 contratos. `requests` puro + HMAC-SHA256 base64 (sem dependência nova).
 """
 
@@ -80,8 +81,8 @@ class BitgetConnection:
         self.api_secret = str(getattr(config, "BITGET_API_SECRET", "") or "")
         self.passphrase = str(getattr(config, "BITGET_PASSPHRASE", "") or "")
         self.demo = bool(getattr(config, "BITGET_DEMO", True))
-        self.product_type = "SUSDT-FUTURES" if self.demo else "USDT-FUTURES"
-        self.margin_coin = "SUSDT" if self.demo else "USDT"
+        self.product_type = "USDT-FUTURES"
+        self.margin_coin = "USDT"
         self.session = requests.Session()
         self._lock = threading.Lock()
         self._contracts: Dict[str, Dict[str, Any]] = {}
@@ -89,23 +90,15 @@ class BitgetConnection:
         self._realized_close_buffer: Dict[str, List[Dict[str, float]]] = {}
         self._daily_pnl_cache: Optional[Dict[str, Any]] = None
         self._cumulative_cache: Optional[Dict[str, Any]] = None
-        logger.warning("🧪 Bitget em DEMO trading (paptrading, SUSDT-FUTURES)" if self.demo
+        logger.warning("🧪 Bitget em DEMO trading (header paptrading)" if self.demo
                        else "💰 ATENÇÃO: Bitget em PRODUÇÃO (dinheiro REAL)!")
         self._test_connection()
 
     # ---- símbolos ----
     def to_bitget(self, symbol: str) -> str:
-        """ADAUSDT → ADAUSDT (prod) | SADASUSDT (demo)."""
-        s = str(symbol).upper()
-        if self.demo and not s.endswith("SUSDT"):
-            return f"S{s[:-4]}SUSDT"
-        return s
+        return str(symbol).upper()
 
-    def from_bitget(self, symbol: str) -> str:
-        s = str(symbol).upper()
-        if self.demo and s.startswith("S") and s.endswith("SUSDT"):
-            return f"{s[1:-5]}USDT"
-        return s
+    from_bitget = to_bitget
 
     # ---- HTTP ----
     def _sign(self, ts: str, method: str, path_query: str, body: str) -> str:
@@ -121,8 +114,8 @@ class BitgetConnection:
             ts = str(int(time.time() * 1000))
             headers.update({"ACCESS-KEY": self.api_key, "ACCESS-PASSPHRASE": self.passphrase,
                             "ACCESS-TIMESTAMP": ts, "ACCESS-SIGN": self._sign(ts, method, path + query, raw_body)})
-        if self.demo:
-            headers["paptrading"] = "1"
+            if self.demo:  # só em chamadas privadas: nos endpoints públicos o header devolve vazio/40034
+                headers["paptrading"] = "1"
         attempts = 2 if method == "GET" else 1  # POST não repete: ordem pode ter entrado
         for attempt in range(1, attempts + 1):
             try:
