@@ -87,6 +87,25 @@ def tp_hit(price: float, side: str, target: float) -> bool:
     return price >= target if side == "LONG" else price <= target
 
 
+def breakeven_price(avg: float, side: str, fee_rate: float) -> float:
+    """Preço em que a perna sai no zero-a-zero líquido: média ± taker de ida e volta."""
+    f = 2.0 * fee_rate
+    return avg * (1 + f) if side == "LONG" else avg * (1 - f)
+
+
+def leg_stop_price(mark: Optional[float], side: str, room_usdt: Optional[float],
+                   qty_long: float, qty_short: float) -> Optional[float]:
+    """Preço em que o stop de portfólio dispara se SÓ este par andar (outros pares parados):
+    folga até o piso ÷ exposição líquida do par na direção que perde pra esta perna.
+    shortcut: aproximação — ignora fees e o P&L dos outros pares; None quando o hedge
+    cobre (a outra perna é maior), sem folga, ou se o preço cairia abaixo de zero."""
+    net = qty_long - qty_short if side == "LONG" else qty_short - qty_long
+    if not mark or net <= 0 or not room_usdt or room_usdt <= 0:
+        return None
+    px = mark - room_usdt / net if side == "LONG" else mark + room_usdt / net
+    return px if px > 0 else None
+
+
 def infer_level(notional: float, base: float, m: float, n: int, double_first: bool = False) -> int:
     """Fills já feitos numa perna encontrada na exchange sem estado (restart): menor
     k com B×S_k ≥ 90% do notional (tolera arredondamento de step/minNotional)."""
@@ -184,6 +203,9 @@ class MartingaleRunner:
         stop_eq = portfolio_stop_floor(self.peak, c.MARTINGALE_PORTFOLIO_STOP_PERCENT, c.MARTINGALE_STOP_LOSS_USDT)
         out["portfolio_stop_equity"] = stop_eq
         out["portfolio_stop_room_pct"] = (equity - stop_eq) / equity * 100.0 if equity else None
+        room = equity - stop_eq if equity else None
+        # cache do bot, não get_taker_fee_rate(): este método roda na thread do dashboard e o getter pode bater na API
+        fee = float((getattr(self.bot, "commission_rates", None) or {}).get("taker_rate", 0.0005))
         by_key = {f"{p.get('symbol')}_{p.get('side')}": p for p in positions}
         legs = []
         for sym, plan in list(self.pairs.items()):
@@ -192,10 +214,12 @@ class MartingaleRunner:
                 row: Dict[str, Any] = {"symbol": sym, "side": side, "level": leg.level, "max_levels": c.MARTINGALE_MAX_LEVELS,
                                        "avg_price": None, "quantity": None, "notional": None, "mark_price": None,
                                        "unrealized_pnl_usd": None, "next_add_price": None, "next_add_pct": None,
-                                       "tp_price": None, "tp_pct": None}
+                                       "tp_price": None, "tp_pct": None, "breakeven_price": None, "stop_price": None}
                 if pos is not None:
                     avg, qty = float(pos.get("entry_price") or 0), float(pos.get("quantity") or 0)
                     mark = float(pos.get("mark_price") or 0) or None
+                    other = by_key.get(f"{sym}_{'SHORT' if side == 'LONG' else 'LONG'}") or {}
+                    oqty = float(other.get("quantity") or 0)
                     level = leg.level or infer_level(avg * qty, self.base, c.MARTINGALE_MULTIPLIER, c.MARTINGALE_MAX_LEVELS,
                                                      c.MARTINGALE_DOUBLE_FIRST)
                     tp = tp_price(avg, side, c.MARTINGALE_TP_PERCENT) if avg else None
@@ -204,7 +228,9 @@ class MartingaleRunner:
                     row.update(level=level, avg_price=avg or None, quantity=qty or None,
                                notional=qty * (mark or avg) if qty else None, mark_price=mark,
                                unrealized_pnl_usd=pos.get("unrealized_pnl_usd"),
-                               next_add_price=nxt, next_add_pct=_pct_away(nxt, mark), tp_price=tp, tp_pct=_pct_away(tp, mark))
+                               next_add_price=nxt, next_add_pct=_pct_away(nxt, mark), tp_price=tp, tp_pct=_pct_away(tp, mark),
+                               breakeven_price=breakeven_price(avg, side, fee) if avg else None,
+                               stop_price=leg_stop_price(mark, side, room, *((qty, oqty) if side == "LONG" else (oqty, qty))))
                 legs.append(row)
         out["legs"] = legs
         return out
