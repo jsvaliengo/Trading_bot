@@ -1074,3 +1074,33 @@ def test_js_formatters_treat_rounded_zero_as_neutral():
     assert "const z = sgn(v, d), s = z < 0 ? '−' : (signed && z > 0 ? '+' : '')" in js
     assert "const cls = (v) => { const z = sgn(v); return z > 0 ? 'pos' : z < 0 ? 'neg' : ''; };" in js
     assert "v < 0 ? '−'" not in js.split("const cls")[0].split("const fmt")[1]
+
+
+def test_snapshot_martingale_legs_carry_exit_marks_in_price(monkeypatch):
+    """Barra de saída: cada perna traz alvo, empate (média ± taker ida e volta), próximo degrau
+    e stop (folga até o piso ÷ exposição líquida do par) em PREÇO, conferidos à mão."""
+    from trading_bot.core import martingale as mg
+    for k, v in dict(MARTINGALE_TP_PERCENT=1.0, MARTINGALE_STEP_PERCENT=2.0, MARTINGALE_MAX_LEVELS=9,
+                     MARTINGALE_STOP_LOSS_USDT=100.0, SIMULATED_BALANCE_USD=0.0).items():
+        monkeypatch.setattr(global_config, k, v, raising=False)
+    live = [{"symbol": "ADAUSDT", "side": "LONG", "entry_price": 0.174, "quantity": 2000.0, "mark_price": 0.17, "unrealized_pnl": -8.0},
+            {"symbol": "ADAUSDT", "side": "SHORT", "entry_price": 0.172, "quantity": 500.0, "mark_price": 0.17, "unrealized_pnl": 1.0}]
+    bot = _make_bot(last_known_balance=300.0,
+                    known_positions={f"ADAUSDT_{p['side']}": {k: p[k] for k in ("symbol", "side", "entry_price", "quantity")} for p in live})
+    bot.exchange = SimpleNamespace(get_open_positions=lambda **kw: live)
+    bot.commission_rates = {"taker_rate": 0.0005}
+    runner = mg.MartingaleRunner(bot)
+    runner.peak = 300.0
+    runner.pairs = {"ADAUSDT": mg.PairPlan("ADAUSDT", {}, {
+        "LONG": mg.Leg("ADAUSDT", "LONG", level=3, last_fill=0.17), "SHORT": mg.Leg("ADAUSDT", "SHORT", level=1, last_fill=0.172)})}
+    bot.martingale = runner
+    legs = {leg["side"]: leg for leg in dashboard_data.collect_snapshot(bot)["martingale"]["legs"]}
+    long, short = legs["LONG"], legs["SHORT"]
+    assert long["mark_price"] == 0.17 and long["avg_price"] == 0.174
+    assert long["tp_price"] == pytest.approx(0.17574)            # 0,174 × 1,01
+    assert long["breakeven_price"] == pytest.approx(0.174174)    # 0,174 × (1 + 2×0,0005)
+    assert long["next_add_price"] == pytest.approx(0.1666)       # último fill 0,170 × 0,98
+    assert long["stop_price"] == pytest.approx(0.17 - 100.0 / 1500.0)   # folga $100 (300−200) ÷ (2000−500) un
+    assert short["tp_price"] == pytest.approx(0.17028) and short["breakeven_price"] == pytest.approx(0.171828)
+    assert short["next_add_price"] == pytest.approx(0.17544)
+    assert short["stop_price"] is None                           # LONG maior: subida não leva ao piso

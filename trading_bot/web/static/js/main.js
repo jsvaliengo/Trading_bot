@@ -388,13 +388,27 @@
         renderRing(m, s);
         renderSheet(m.sheet, Object.keys(m.pairs || {}));
         const away = (px, pct) => isNum(px) ? `<b>${fmt.price(px)}</b>${isNum(pct) ? ` <small>(${fmt.pct(pct)})</small>` : ''}` : '<b>—</b>';
-        // Barra: 0% = TP, 100% = próxima adição; a mesma fração vale p/ LONG (preço caindo) e SHORT (subindo).
-        const addBar = (l) => {
-            if (l.level >= l.max_levels) return `<div class="addbar max"><span class="addbar-t"></span><small>nível máx.</small></div>`;
-            if (![l.mark_price, l.tp_price, l.next_add_price].every(isNum) || l.next_add_price === l.tp_price) return '';
-            const pct = Math.min(100, Math.max(0, (l.mark_price - l.tp_price) / (l.next_add_price - l.tp_price) * 100));
-            const dist = Math.abs(l.next_add_price - l.mark_price) / l.mark_price * 100;
-            return `<div class="addbar"><span class="addbar-t"><i style="width:${(100 - pct).toFixed(1)}%"></i></span><small>faltam ${fmt.pct(dist, 1, false)} p/ L${l.level + 1}</small></div>`;
+        // Barra de saída: stop ─ degrau N+1 ─ empate ─ alvo, ponteiro no preço atual (anda a cada poll);
+        // vermelho do stop ao empate, verde do empate ao alvo; rótulo = preço + P&L da perna naquele preço.
+        const mgRuler = (l) => {
+            const long = l.side === 'LONG', avg = l.avg_price, be = l.breakeven_price, tp = l.tp_price, st = l.stop_price, nx = l.next_add_price, mk = l.mark_price;
+            if (![avg, be, tp].every(isNum)) return '';
+            const pnlAt = (p) => fmt.usd((p - be) * l.quantity * (long ? 1 : -1), { signed: true });   // líquido: do empate (fees já descontadas)
+            const marks = [[st, 'stop', 'Stop'], [nx, 'add', `Degrau ${l.level + 1}`], [be, 'entry', 'Empate'], [tp, 'tp', 'Alvo']].filter(m => isNum(m[0]));
+            const vals = marks.map(m => m[0]).concat(isNum(mk) ? [mk] : []);
+            let lo = Math.min(...vals), hi = Math.max(...vals); const pad = (hi - lo) * 0.08 || avg * 0.01; lo -= pad; hi += pad;
+            const at = (v) => ((v - lo) / (hi - lo) * 100).toFixed(2) + '%';
+            const zone = (a, b, c) => `<div class="zone ${c}" style="left:${at(Math.min(a, b))};width:${(Math.abs(a - b) / (hi - lo) * 100).toFixed(2)}%"></div>`;
+            const worst = isNum(st) ? st : (long ? lo : hi);   // sem stop (hedge cobre): vermelho até a borda
+            return `<div class="ruler" aria-hidden="true">
+                <div class="line"></div>${zone(worst, be, 'neg')}${zone(be, tp, '')}
+                ${marks.map(([v, c, n]) => `<span class="mk ${c}" style="left:${at(v)}" title="${n} ${fmt.price(v)} (${pnlAt(v)})"></span>`).join('')}
+                ${isNum(mk) ? `<span class="mk mark" style="left:${at(mk)}" title="preço ${fmt.price(mk)}"></span>` : ''}
+            </div>
+            <div class="ruler-l">
+                ${marks.sort((a, b) => a[0] - b[0]).map(([v, , n]) => `<span>${n} <b>${fmt.price(v)}</b> <small>${pnlAt(v)}</small></span>`).join('')}
+                <span>preço <b>${fmt.price(mk)}</b></span>
+            </div>`;
         };
         const unreal = (positions || []).map(p => p.unrealized_pnl_usd).filter(isNum);
         $('legs-sum').textContent = unreal.length ? `não realizado ${fmt.usd(sum(unreal), { signed: true })}` : '';
@@ -411,12 +425,7 @@
                 <span class="pr-meta">média <b>${fmt.price(l.avg_price)}</b></span>
                 ${pos ? closeCell(pos) : ''}
             </div>
-            <div class="ruler-l">
-                <span>próx. adição @ ${l.level >= l.max_levels ? '<b>teto da escada</b>' : away(l.next_add_price, l.next_add_pct)}</span>
-                <span>TP @ ${away(l.tp_price, l.tp_pct)}</span>
-                <span>preço <b>${fmt.price(l.mark_price)}</b></span>
-            </div>
-            ${addBar(l)}
+            ${mgRuler(l) || `<div class="ruler-l"><span>próx. adição @ ${l.level >= l.max_levels ? '<b>teto da escada</b>' : away(l.next_add_price, l.next_add_pct)}</span><span>TP @ ${away(l.tp_price, l.tp_pct)}</span></div>`}
         </div>`; }).join('') || '<p class="empty">Nenhum par na escada (estratégia não iniciou ou nenhum par cabe na ordem base).</p>';
     }
 
