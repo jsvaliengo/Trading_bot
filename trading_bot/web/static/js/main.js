@@ -407,14 +407,28 @@
             const marks = [[st, 'stop', 'Stop'], [nx, 'add', `Degrau ${l.level + 1}`], [be, 'entry', 'Empate'], [tp, 'tp', 'Alvo']].filter(m => isNum(m[0]));
             const vals = marks.map(m => m[0]).concat(isNum(mk) ? [mk] : []);
             let lo = Math.min(...vals), hi = Math.max(...vals); const pad = (hi - lo) * 0.08 || avg * 0.01; lo -= pad; hi += pad;
-            const at = (v) => ((v - lo) / (hi - lo) * 100).toFixed(2) + '%';
+            const pct = (v) => (v - lo) / (hi - lo) * 100, at = (v) => pct(v).toFixed(2) + '%';
             const zone = (a, b, c) => `<div class="zone ${c}" style="left:${at(Math.min(a, b))};width:${(Math.abs(a - b) / (hi - lo) * 100).toFixed(2)}%"></div>`;
             const worst = isNum(st) ? st : (long ? lo : hi);   // sem stop (hedge cobre): vermelho até a borda
+            // Escala de ganho sobre o verde: mín (empate) → máx (alvo), preenchida até o preço quando ele está dentro.
+            const z0 = Math.min(be, tp), z1 = Math.max(be, tp), zw = pct(z1) - pct(z0), inside = isNum(mk) && mk >= z0 && mk <= z1;
+            const fillCut = inside ? (long ? `0 ${100 - (pct(mk) - pct(z0)) / zw * 100}% 0 0` : `0 0 0 ${(pct(mk) - pct(z0)) / zw * 100}%`) : '';
+            const gl = (v, txt, side) => `<span class="gl ${side}" style="${side === 'r' ? `right:${(100 - pct(v)).toFixed(2)}%` : `left:${at(v)}`}">${txt}</span>`;
+            const [mn, mx] = [`mín ${pnlAt(be)}`, `máx ${pnlAt(tp)}`];
+            const narrow = zw / 100 * $('mg-list').clientWidth < 190;   // faixa estreita (mobile): uma linha só, ancorada no lado com espaço
+            const gain = `<div class="gain" aria-hidden="true">
+                ${inside && !narrow ? gl(mk, `agora ${pnlAt(mk)}`, 'now') : ''}
+                <div class="gbar${long ? '' : ' rev'}" style="left:${at(z0)};width:${zw.toFixed(2)}%"></div>
+                ${inside ? `<div class="gbar gfill${long ? '' : ' rev'}" style="left:${at(z0)};width:${zw.toFixed(2)}%;clip-path:inset(${fillCut})"></div>` : ''}
+                ${narrow
+                    ? gl(pct(z0) < 50 ? z0 : z1, `0 → ${mx}${inside ? ` · agora ${pnlAt(mk)}` : ''}`, pct(z0) < 50 ? 'l' : 'r')
+                    : gl(z0, long ? mn : mx, 'l') + gl((z0 + z1) / 2, pnlAt((be + tp) / 2), 'c') + gl(z1, long ? mx : mn, 'r')}
+            </div>`;
             return `<div class="ruler" aria-hidden="true">
                 <div class="line"></div>${zone(worst, be, 'neg')}${zone(be, tp, '')}
                 ${marks.map(([v, c, n]) => `<span class="mk ${c}" style="left:${at(v)}" title="${n} ${fmt.price(v)} (${pnlAt(v)})"></span>`).join('')}
                 ${isNum(mk) ? `<span class="mk mark" style="left:${at(mk)}" title="preço ${fmt.price(mk)}"></span>` : ''}
-            </div>
+            </div>${gain}
             <div class="ruler-l">
                 ${marks.sort((a, b) => a[0] - b[0]).map(([v, , n]) => `<span>${n} <b>${fmt.price(v)}</b> <small>${pnlAt(v)}</small></span>`).join('')}
                 <span>preço <b>${fmt.price(mk)}</b></span>

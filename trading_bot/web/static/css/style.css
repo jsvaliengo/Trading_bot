@@ -236,6 +236,15 @@ details.card > :not(summary):first-of-type { margin-top:10px; }
 .ruler .mk.add { background:var(--warn); }
 .ruler .zone.neg { background:var(--bad); }
 .ruler .mk.mark { top:5px; width:12px; height:12px; border-radius:50%; background:var(--text); border:2px solid var(--bg-card); }
+/* Escala de ganho no verde: barra gradiente (claro → forte no sentido do alvo), preenchida até o preço; rótulos mín/meio/máx. */
+.gain { position:relative; height:34px; margin:0 2px; }
+.gain .gbar { position:absolute; top:12px; height:6px; border-radius:3px; opacity:.3; background:linear-gradient(to right, color-mix(in srgb, var(--good) 35%, transparent), var(--good)); }
+.gain .gbar.rev { background:linear-gradient(to left, color-mix(in srgb, var(--good) 35%, transparent), var(--good)); }
+.gain .gfill { opacity:1; }
+.gain .gl { position:absolute; top:20px; font-size:10.5px; color:var(--text-muted); white-space:nowrap; }
+.gain .gl.c { transform:translateX(-50%); color:var(--text-dim); }
+.gain .gl.now { top:0; transform:translateX(-50%); color:var(--good); font-weight:500; }
+.gain .gl.now::after { content:''; position:absolute; left:50%; top:11px; width:1px; height:5px; background:var(--good); }
 .ruler-l { display:flex; justify-content:space-between; gap:8px; font-size:11px; color:var(--text-muted); flex-wrap:wrap; margin-top:2px; }
 .ruler-l b { color:var(--text-dim); font-weight:500; }
 

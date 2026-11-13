@@ -60,6 +60,7 @@
     .pr-close { grid-column:1 / -1; }
     .pr-close .btn-xs { width:100%; min-height:44px; font-size:13px; }
     .ruler-l { gap:4px 12px; }
+    .gain { height:38px; } .gain .gl { font-size:13px; }
 
     /* Controles de toque. */
     .chip { padding:8px 12px; min-height:40px; }
