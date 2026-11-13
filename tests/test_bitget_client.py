@@ -367,6 +367,8 @@ def test_daily_pnl_sums(conn, monkeypatch):
     daily = conn.get_daily_pnl_from_binance()
     assert daily["realized_pnl"] == 0.35 and daily["funding_fee"] == -0.02 and daily["commission"] == pytest.approx(-0.02)
     assert daily["total"] == pytest.approx(0.31) and daily["income_count"] == 4
+    # o dashboard decompõe o total nessas três parcelas: têm que fechar com ele
+    assert daily["realized_pnl"] + daily["funding_fee"] + daily["commission"] == pytest.approx(daily["total"])
 
 
 def test_income_history_fail_open_or_raise(conn):

@@ -369,6 +369,7 @@ def _binance_summary(exchange, store) -> Dict[str, float]:
         # funding_fee é negativo quando paga, positivo quando recebe; commission sempre negativo.
         out["funding_fee"] = _safe_float(daily.get("funding_fee"))
         out["commission"] = _safe_float(daily.get("commission"))
+        out["realized_pnl"] = _safe_float(daily.get("realized_pnl"))
     except Exception:
         ok = False
     try:
@@ -432,6 +433,7 @@ def collect_summary(bot) -> Dict[str, Any]:
     binance_unrealized = 0.0
     binance_funding_fee = 0.0
     binance_commission = 0.0
+    binance_realized = 0.0
     binance_funding_total = 0.0
     binance_commission_total = 0.0
     wallet_balance = _safe_float(getattr(bot, "last_known_balance", 0.0) or 0.0)
@@ -441,6 +443,7 @@ def collect_summary(bot) -> Dict[str, Any]:
         binance_daily_realized = b.get("daily_realized", 0.0)
         binance_funding_fee = b.get("funding_fee", 0.0)
         binance_commission = b.get("commission", 0.0)
+        binance_realized = b.get("realized_pnl", 0.0)
         binance_funding_total = b.get("funding_total", 0.0)
         binance_commission_total = b.get("commission_total", 0.0)
         wallet_balance = b.get("wallet_balance", wallet_balance)
@@ -484,6 +487,9 @@ def collect_summary(bot) -> Dict[str, Any]:
         "unrealized_pnl": binance_unrealized,
         "funding_fee_today": binance_funding_fee,
         "commission_today": binance_commission,
+        # Parcelas que compõem daily_pnl (= soma das três) p/ o subtítulo do card.
+        "daily_pnl_breakdown": {"trades": binance_realized, "funding": binance_funding_fee,
+                                "commission": binance_commission},
         # Acumulado (todos os dias) — usado nos cards que não devem zerar diário.
         "funding_fee_total": binance_funding_total,
         "commission_total": binance_commission_total,

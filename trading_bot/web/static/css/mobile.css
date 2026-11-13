@@ -10,7 +10,7 @@
     .top-id { flex:1; min-width:0; gap:8px; order:1; }
     .clock { order:1; }
     .top-title { font-size:13px; color:var(--text-muted); flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; }
-    .fx { flex-basis:100%; font-size:12px; gap:6px; }
+    .fx { flex-basis:100%; font-size:12px; gap:6px; flex-wrap:wrap; }
     .hero { display:flex; width:100%; gap:16px; order:2; }
     /* com o anel na tela, o saldo/hoje vive no centro dele: o topo fixo encolhe para título + estado + ações */
     body:has(#ring-card:not([hidden])) .hero { display:none; }
@@ -39,7 +39,7 @@
     .ch { gap:4px; }
 
     /* Fonte mínima 13px (padrões de 11–12,5px no style.css). */
-    .tl, .tf, .cs, .brl, .legend, .badge, .env, .fx-pill, .side, .track-f, .empty,
+    .tl, .tf, .cs, .brl, .legend, .badge, .env, .fx-pill, .fx-toggle, .side, .track-f, .empty,
     .kv thead th, .table thead th, .table td small, .pnl-wins small, .pr-pnl small, .pr-r small,
     .hlist .hv small, .ruler-l, .pg-info, .btn-xs, .sheet-coins .side, .pnl-cal .wd, .pnl-cal .day small, small, .ci-plot text,
     .kv, .kvl, .table, .hlist li, .tr-stats, .filters, .chip, .pnl-lines summary, .pnl-assets, .pnl-pct { font-size:13px; }
