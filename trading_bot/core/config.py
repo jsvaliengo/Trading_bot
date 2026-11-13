@@ -1856,5 +1856,15 @@ def exchange_label(cfg, with_network: bool = False) -> str:
     return f"{name} demo" if getattr(cfg, f"{ex.upper()}_DEMO", False) is True else name
 
 
+def exchange_badge(cfg) -> str:
+    """Prefixo das mensagens do Telegram: 🧪 em testnet/demo, 🌐 com dinheiro real."""
+    label = exchange_label(cfg, with_network=True)
+    if label.startswith("Binance"):
+        real = str(getattr(cfg, "ENVIRONMENT", "")).lower() == "mainnet"
+    else:
+        real = not label.endswith(" demo")
+    return f"{'🌐' if real else '🧪'} <b>[{label}]</b>"
+
+
 # Instância global de configuração
 config = TradingConfig()

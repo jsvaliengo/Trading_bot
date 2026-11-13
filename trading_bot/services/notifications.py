@@ -56,14 +56,10 @@ class TelegramNotifier:
 
     @staticmethod
     def _apply_env_prefix(message: str) -> str:
-        """Prefixa mensagem com badge indicando a rede ativa (TESTNET ou MAINNET)."""
+        """Prefixa mensagem com badge da exchange/rede ativa (ex.: "🧪 [Bitget demo]")."""
         try:
-            from trading_bot.core.config import config
-            env = str(getattr(config, 'ENVIRONMENT', 'mainnet')).lower()
-            if env == 'testnet':
-                return f"🧪 <b>[TESTNET]</b>\n{message}"
-            if env == 'mainnet':
-                return f"🌐 <b>[MAINNET]</b>\n{message}"
+            from trading_bot.core.config import config, exchange_badge
+            return f"{exchange_badge(config)}\n{message}"
         except Exception:
             pass
         return message

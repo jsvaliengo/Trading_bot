@@ -195,7 +195,7 @@ class TradingBot:
         logger.info("🤖 INICIANDO BOT DE TRADING")
         logger.info("=" * 50)
         logger.info(
-            f"🌍 Ambiente: {config.APP_ENV} | Rede: {config.ENVIRONMENT.upper()} | Runtime: {config.RUNTIME_DIR}"
+            f"🌍 Ambiente: {config.APP_ENV} | Rede: {exchange_label(config, with_network=True)} | Runtime: {config.RUNTIME_DIR}"
         )
         
         # Valida configurações
@@ -3151,7 +3151,7 @@ class TradingBot:
                     f"🔁 <b>P&L reconciliado</b>\n"
                     f"{len(fabricated)} trade(s) corrigido(s) "
                     f"(Δ ${delta:+.2f}) — o bot havia gravado P&L "
-                    f"que divergia da Binance e ajustou sozinho.\n{lines}"
+                    f"que divergia da {exchange_label(config)} e ajustou sozinho.\n{lines}"
                 )
             except Exception:
                 pass
@@ -4458,11 +4458,11 @@ class TradingBot:
         logger.info(f"💰 {result}: ${pnl_net:.4f} | Motivo: {reason}")
         
         prov_tag = (
-            "⏳ <i>P&L provisório — Binance ainda não confirmou; "
+            f"⏳ <i>P&L provisório — {exchange_label(config)} ainda não confirmou; "
             "será reconciliado em instantes.</i>\n\n" if provisional else ""
         )
         self.telegram.send_message(
-            f"⚠️ <b>POSIÇÃO FECHADA PELA BINANCE</b>\n\n"
+            f"⚠️ <b>POSIÇÃO FECHADA PELA {exchange_label(config).upper()}</b>\n\n"
             f"{prov_tag}"
             f"📍 <b>Par:</b> {symbol.replace('USDT', '')}/USDT\n"
             f"📊 <b>Lado:</b> {side}\n"
