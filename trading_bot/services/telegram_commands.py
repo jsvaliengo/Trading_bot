@@ -19,7 +19,7 @@ from typing import Any, List, Optional
 import requests
 from requests.exceptions import RequestException
 
-from ..core.config import exchange_label
+from ..core.config import exchange_badge, exchange_label
 from ..core.equity import effective_equity
 
 logger = logging.getLogger(__name__)
@@ -89,15 +89,11 @@ class TelegramCommandHandler:
         self.config = config
     
     def _apply_env_prefix(self, text: str) -> str:
-        """Prefixa mensagem com badge indicando a rede ativa (TESTNET ou MAINNET)."""
+        """Prefixa mensagem com badge da exchange/rede ativa (ex.: "🧪 [Bitget demo]")."""
         try:
             if self.config is None:
                 return text
-            env = str(getattr(self.config, 'ENVIRONMENT', 'mainnet')).lower()
-            if env == 'testnet':
-                return f"🧪 <b>[TESTNET]</b>\n{text}"
-            if env == 'mainnet':
-                return f"🌐 <b>[MAINNET]</b>\n{text}"
+            return f"{exchange_badge(self.config)}\n{text}"
         except Exception:
             pass
         return text
@@ -1974,14 +1970,23 @@ class TelegramCommandHandler:
                 open_count = sum(1 for p in self.bot.positions.values() if p)
 
             state_file = getattr(self.config, "STATE_FILE_NAME", "?")
+            exchange = str(getattr(self.config, "EXCHANGE", "binance") or "binance").lower()
+            if exchange == "binance":
+                creds = (
+                    f"• Mainnet: {'✅' if has_mainnet else '❌'}\n"
+                    f"• Testnet: {'✅' if has_testnet else '❌'}\n\n"
+                )
+            else:
+                has_key = bool(getattr(self.config, f"{exchange.upper()}_API_KEY", ""))
+                creds = f"• {exchange_label(self.config)}: {'✅' if has_key else '❌'}\n\n"
             self.send_message(
                 f"🌐 <b>REDE {exchange_label(self.config).upper()}</b>\n\n"
-                f"• Ativa: <b>{current_label}</b>{' 💰' if current == 'mainnet' else ' 🧪'}\n"
+                f"• Ativa: <b>{exchange_label(self.config, with_network=True)}</b>"
+                f"{' 💰' if current == 'mainnet' else ' 🧪'}\n"
                 f"• State: <code>{state_file}</code>\n"
                 f"• Posições abertas: <code>{open_count}</code>\n\n"
                 f"<b>Credenciais configuradas:</b>\n"
-                f"• Mainnet: {'✅' if has_mainnet else '❌'}\n"
-                f"• Testnet: {'✅' if has_testnet else '❌'}\n\n"
+                f"{creds}"
                 f"<b>Uso:</b>\n"
                 f"<code>/env testnet</code>\n"
                 f"<code>/env mainnet confirmar</code>\n\n"
