@@ -110,6 +110,14 @@ def trading_day_start(now: Optional[datetime] = None) -> datetime:
     return local.replace(hour=0, minute=0, second=0, microsecond=0)
 
 
+def daily_pnl_start_ms(now: Optional[datetime] = None) -> int:
+    """Início da janela do P&L de hoje (ms): 00:00 do dia ou PNL_SINCE_UTC, o que vier depois."""
+    start = trading_day_start(now)
+    if config.PNL_SINCE_UTC:
+        start = max(start, datetime.fromisoformat(config.PNL_SINCE_UTC.replace("Z", "+00:00")))
+    return int(start.timestamp() * 1000)
+
+
 def trading_day(now: Optional[datetime] = None) -> str:
     return trading_day_start(now).strftime("%Y-%m-%d")
 

@@ -59,3 +59,20 @@ def test_brt_and_utc_windows_differ_by_three_hours(monkeypatch):
     # quando o "dia BRT" é o anterior → diferença de 21h). Ambos múltiplos de 3h.
     diff_h = abs(cap_brt["startTime"] - cap_utc["startTime"]) / 3_600_000
     assert diff_h in (3.0, 21.0)
+
+
+def test_pnl_since_floor_ignores_income_before_reset(monkeypatch):
+    # Reset de banca no meio do dia: income anterior ao piso não entra no "P&L de hoje".
+    conn, captured = _conn(monkeypatch, 0.0)
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    since_ms = now_ms - 3_600_000
+    records = [
+        {"incomeType": "REALIZED_PNL", "income": "36.0", "time": since_ms - 60_000},
+        {"incomeType": "REALIZED_PNL", "income": "1.5", "time": since_ms + 60_000},
+    ]
+    conn._api_call = lambda _n, _f, **kw: [r for r in records if r["time"] >= kw["startTime"]]
+    monkeypatch.setattr(config, "PNL_SINCE_UTC", datetime.fromtimestamp(since_ms / 1000, timezone.utc)
+                        .isoformat().replace("+00:00", "Z"), raising=False)
+    res = conn.get_daily_pnl_from_binance(force_refresh=True)
+    assert res["total"] == 1.5
+    assert res["income_count"] == 1
