@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from ..core.config import config
 from ..core.equity import simulated_balance
-from ..core.trade_store import trading_day
+from ..core.trade_store import pnl_since_ms, trading_day
 from .forward_test import parse_utc
 from .fx import usd_brl
 
@@ -168,6 +168,7 @@ def _income(exchange, day_from: str, day_to: str) -> Tuple[List[Dict[str, Any]],
     if exchange is None or not hasattr(exchange, "get_income_history"):
         return [], False
     start_ms, end_ms = _day_bounds_ms(day_from, day_to)
+    start_ms = max(start_ms, pnl_since_ms() or 0)  # reset de banca: lançamentos anteriores ficam de fora
     out: List[Dict[str, Any]] = []
     cursor = start_ms
     try:

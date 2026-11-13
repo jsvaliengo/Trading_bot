@@ -21,7 +21,7 @@ from ..core.config import config, exchange_label
 from ..core.donchian import r_multiple_now
 from ..core.equity import effective_equity, simulated_balance
 from ..core.martingale import STRATEGY_TYPE as MARTINGALE_STRATEGY
-from ..core.trade_store import trading_day_start
+from ..core.trade_store import pnl_since_ms, trading_day_start
 from ..services.martingale_pair_score import (COINTECH2U_GREEN, COINTECH2U_RED, COINTECH2U_SHEET, PairScoreCache,
                                               rank_pairs, rank_score, sheet_row_index)
 from . import forward_test as ft
@@ -376,7 +376,7 @@ def _binance_summary(exchange, store) -> Dict[str, float]:
         # (que recomeça no reset do DB). Âncora = 1º trade do trade_store.
         start_ms = store.first_trade_time_ms() if store is not None else None
         if start_ms is not None:
-            cum = exchange.get_cumulative_income_from_binance(start_ms=start_ms)
+            cum = exchange.get_cumulative_income_from_binance(start_ms=max(start_ms, pnl_since_ms() or 0))
             out["funding_total"] = _safe_float(cum.get("funding_fee"))
             out["commission_total"] = _safe_float(cum.get("commission"))
     except Exception:
