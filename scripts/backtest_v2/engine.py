@@ -55,6 +55,7 @@ class Trade:
     notional: float = 0.0
     pnl: float = 0.0
     equity_at_entry: float = 0.0
+    mfe_frac: float = 0.0
 
     @property
     def net_frac(self) -> float:
@@ -129,20 +130,136 @@ def simulate_trade(bars: Bars, sig_idx: int, side: int, params: dict, costs: Cos
     ratio = exit_px / entry
     gross = (ratio - 1.0) * side
     fee = costs.fee_rate * (1.0 + ratio)
-    fund = 0.0
-    if funding is not None and len(funding):
-        ft = funding[:, 0]
-        a = int(np.searchsorted(ft, entry_time, "right"))
-        b = int(np.searchsorted(ft, exit_time, "left"))
-        if b > a:
-            rates = funding[a:b, 1]
-            mp = funding[a:b, 2]
-            # preço no funding: markPrice se houver; senão abertura da barra que contém o instante
-            pos = np.clip(np.searchsorted(bars.open_time, ft[a:b], "right") - 1, 0, len(o) - 1)
-            px = np.where(np.isfinite(mp) & (mp > 0), mp, o[pos])
-            fund = float(np.sum(-side * rates * px / entry))
+    fund = _funding_frac(bars, funding, side, entry, entry_time, exit_time)
     return Trade(symbol, side, sig_idx, e, entry_time, float(entry), sl, tp, exit_idx, exit_time,
                  float(exit_px), reason, float(gross), float(fee), fund, dict(params))
+
+
+def _funding_frac(bars: Bars, funding: Optional[np.ndarray], side: int, entry: float,
+                  entry_time: int, exit_time: int) -> float:
+    if funding is None or not len(funding):
+        return 0.0
+    ft = funding[:, 0]
+    a = int(np.searchsorted(ft, entry_time, "right"))
+    b = int(np.searchsorted(ft, exit_time, "left"))
+    if b <= a:
+        return 0.0
+    rates = funding[a:b, 1]
+    mp = funding[a:b, 2]
+    # preço no funding: markPrice se houver; senão abertura da barra que contém o instante
+    pos = np.clip(np.searchsorted(bars.open_time, ft[a:b], "right") - 1, 0, len(bars.open) - 1)
+    px = np.where(np.isfinite(mp) & (mp > 0), mp, bars.open[pos])
+    return float(np.sum(-side * rates * px / entry))
+
+
+# ───────────────────────────── saídas do bot ao vivo ─────────────────────────────
+@dataclass(frozen=True)
+class LivePlan:
+    """Níveis de saída de um trade, calculados pelas funções do bot."""
+    sl: float
+    tp: Optional[float]
+    act_pct: Optional[float]      # trailing ATR: ativa com lucro >= act_pct
+    dist_pct: Optional[float]
+
+
+@dataclass(frozen=True)
+class TimeExit:
+    """Sai a mercado na abertura da barra fill+n_bars se o MFE ainda for < min_mfe_pct."""
+    n_bars: int
+    min_mfe_pct: float
+
+
+@dataclass(frozen=True)
+class MakerEntry:
+    """Limit no close da barra do sinal (± offset a favor). Só preenche se o preço
+    ATRAVESSAR o limite em `through_pct` dentro de k_bars; senão cancela."""
+    offset_pct: float
+    k_bars: int
+    fee_rate: float = 0.0002
+    through_pct: float = 0.01
+
+
+def maker_fill(bars: Bars, sig_idx: int, side: int, m: MakerEntry, end_idx: int):
+    """(barra do fill, preço) ou None. Gap além do limite na abertura → fill na abertura."""
+    limit = bars.close[sig_idx] * (1 - side * m.offset_pct / 100.0)
+    through = limit * (1 - side * m.through_pct / 100.0)
+    for j in range(sig_idx + 1, min(sig_idx + 1 + m.k_bars, end_idx)):
+        if (bars.low[j] < through) if side == LONG else (bars.high[j] > through):
+            o = bars.open[j]
+            return j, (min(limit, o) if side == LONG else max(limit, o))
+    return None
+
+
+def simulate_live_trade(bars: Bars, sig_idx: int, side: int, plan_fn, trail_fn, costs: Costs,
+                        end_idx: int, funding: Optional[np.ndarray] = None,
+                        time_exit: Optional[TimeExit] = None, maker: Optional[MakerEntry] = None,
+                        symbol: str = "") -> Optional[Trade]:
+    """Trade com as saídas do bot: SL/TP fixos + trailing ATR com piso de breakeven.
+
+    plan_fn(entry_fill) -> LivePlan; trail_fn(side, entry, peak, dist_pct) -> preço do
+    trailing stop (o `_trailing_stop_price` do bot). Ordem intrabar conservadora:
+    o extremo ADVERSO vem antes do favorável (LONG: O→L→H→C; SHORT: O→H→L→C),
+    o que generaliza o "SL primeiro" do simulate_trade e deixa o trailing disparar
+    no trecho H→C quando a barra devolve o pico. Stop (SL ou trailing) que
+    estava além do preço já no início do trecho preenche nesse preço (gap).
+    """
+    if maker is None:
+        e = sig_idx + 1
+        if e >= end_idx:
+            return None
+        entry = bars.open[e] * (1 + costs.entry_slip * side)
+        start_px, entry_fee = bars.open[e], costs.fee_rate
+    else:
+        f = maker_fill(bars, sig_idx, side, maker, end_idx)
+        if f is None:
+            return None
+        e, entry = f
+        start_px, entry_fee = entry, maker.fee_rate
+    plan = plan_fn(entry)
+    o, h, lw, c = bars.open, bars.high, bars.low, bars.close
+    sl, tp, act, dist = plan.sl, plan.tp, plan.act_pct, plan.dist_pct
+    peak = entry
+    armed = False
+    exit_idx, exit_px, reason = -1, 0.0, ""
+    for j in range(e, end_idx):
+        if time_exit is not None and j == e + time_exit.n_bars and side * (peak / entry - 1) * 100 < time_exit.min_mfe_pct:
+            exit_idx, exit_px, reason = j, o[j] * (1 - side * costs.exit_slip), "time"
+            break
+        p = start_px if j == e else o[j]
+        pts = (lw[j], h[j], c[j]) if side == LONG else (h[j], lw[j], c[j])
+        for q in pts:
+            if side * (q - p) < 0:                       # trecho adverso: stops
+                stop = trail_fn(side, entry, peak, dist) if armed else sl
+                if side * (q - stop) <= 0:
+                    px = p if side * (p - stop) <= 0 else stop
+                    reason = "trail" if armed else "sl"
+                    slip = costs.exit_slip + (costs.stop_slip if reason == "sl" else 0.0)
+                    exit_idx, exit_px = j, px * (1 - side * slip)
+                    break
+            elif side * (q - p) > 0:                     # trecho favorável: TP, pico, ativação
+                if tp is not None and side * (q - tp) >= 0:
+                    px = p if side * (p - tp) >= 0 else tp
+                    exit_idx, exit_px, reason = j, px * (1 - side * costs.exit_slip), "tp"
+                    break
+                if side * (q - peak) > 0:
+                    peak = q
+                if not armed and act is not None and side * (peak / entry - 1) * 100 >= act:
+                    armed = True
+            p = q
+        if exit_idx >= 0:
+            break
+    if exit_idx < 0:
+        exit_idx = end_idx - 1
+        exit_px = c[exit_idx] * (1 - side * costs.exit_slip)
+        reason = "eod"
+    entry_time = int(bars.open_time[e])
+    exit_time = int(bars.open_time[exit_idx]) if reason == "time" else int(bars.close_time[exit_idx])
+    ratio = exit_px / entry
+    tr = Trade(symbol, side, sig_idx, e, entry_time, float(entry), float(sl), tp, exit_idx, exit_time,
+               float(exit_px), reason, float((ratio - 1.0) * side), float(entry_fee + costs.fee_rate * ratio),
+               _funding_frac(bars, funding, side, entry, entry_time, exit_time))
+    tr.mfe_frac = float(side * (peak / entry - 1))
+    return tr
 
 
 # ───────────────────────────── portfólio ─────────────────────────────
@@ -155,6 +272,7 @@ class PortfolioConfig:
     max_pos_mult: float = 1.0        # teto do notional por posição (× equity) — trava de alavancagem
     max_gross_mult: float = 3.0      # teto da soma dos notionals abertos (× equity)
     max_concurrent: int = 6
+    sl_buffer: float = 1.0           # SLIPPAGE_BUFFER_MULT do bot: notional dimensionado contra sl × buffer
 
 
 @dataclass
@@ -184,7 +302,7 @@ def _param_for(time_ms: int, schedule: Sequence[tuple]) -> Optional[dict]:
 
 def run_portfolio(sym_data: Dict[str, SymbolData], schedule: Sequence[tuple], t_start: int, t_end: int,
                   costs: Costs, pcfg: PortfolioConfig, mtm_step_ms: int = 86_400_000,
-                  with_curve: bool = True) -> PortfolioResult:
+                  with_curve: bool = True, simulate=None) -> PortfolioResult:
     """Portfólio event-driven. Sinais com barra de sinal fechando em [t_start, t_end)
     (e cujo período tenha params no `schedule`) viram candidatos em ordem de
     tempo de entrada (empate: símbolo). Trades são simulados sob demanda e
@@ -235,11 +353,15 @@ def run_portfolio(sym_data: Dict[str, SymbolData], schedule: Sequence[tuple], t_
         flags = None
         if sd.signals.exit_long is not None:
             flags = sd.signals.exit_long if side == LONG else sd.signals.exit_short
-        tr = simulate_trade(sd.bars, i, side, params, costs, end_idx[sym], sd.funding, flags, sym)
+        if simulate is None:
+            tr = simulate_trade(sd.bars, i, side, params, costs, end_idx[sym], sd.funding, flags, sym)
+        else:
+            tr = simulate(sym, i, side, params, end_idx[sym])
         if tr is None:
             continue
-        if pcfg.sizing == "risk" and params.get("sl_pct"):
-            notional = equity * (pcfg.risk_pct / 100.0) / (params["sl_pct"] / 100.0)
+        sl_pct = params.get("sl_pct") or (abs(tr.sl / tr.entry_price - 1) * 100 if tr.sl else None)
+        if pcfg.sizing == "risk" and sl_pct:
+            notional = equity * (pcfg.risk_pct / 100.0) / (sl_pct * pcfg.sl_buffer / 100.0)
         else:
             notional = equity * pcfg.fraction
         notional = min(notional, equity * pcfg.max_pos_mult)

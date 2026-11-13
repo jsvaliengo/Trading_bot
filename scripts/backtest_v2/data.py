@@ -16,6 +16,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass
+from functools import cached_property
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -193,7 +194,7 @@ class Bars:
     close: np.ndarray
     volume: np.ndarray
 
-    @property
+    @cached_property            # lido 1x por candidato no portfólio: recalcular o array todo era o gargalo
     def close_time(self) -> np.ndarray:
         return self.open_time + tf_ms(self.tf) - 1
 
