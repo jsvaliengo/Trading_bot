@@ -1008,11 +1008,11 @@ class BinanceConnection:
 
         metrics.record_cache_miss("daily_pnl")
         try:
-            from ..core.trade_store import trading_day_start
+            from ..core.trade_store import daily_pnl_start_ms
 
             # Início do dia de trading (DAILY_PNL_TZ_OFFSET_HOURS; 0 = UTC). O app
             # da Binance mostra o realizado de hoje no fuso da conta (ex: -3).
-            start_timestamp = int(trading_day_start().timestamp() * 1000)
+            start_timestamp = daily_pnl_start_ms()
 
             income_list = self._api_call(
                 "futures_income_history_daily",

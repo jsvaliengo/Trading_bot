@@ -361,6 +361,9 @@ class TradingConfig:
     # Reinício do forward test (ISO 8601 UTC, ex. "2026-10-31T12:00:00+00:00"): trades
     # fechados antes ficam como histórico e não contam no critério. Vazio = sem reinício.
     FORWARD_TEST_RESTART_AT: str = _env_str("TRADING_BOT_FORWARD_TEST_RESTART_AT", "")
+    # Piso do P&L do dia (ISO 8601 UTC): income da exchange anterior a este instante é
+    # ignorado — reset de banca no meio do dia deixava o "Realizado hoje" com a fase antiga.
+    PNL_SINCE_UTC: str = _env_str("TRADING_BOT_PNL_SINCE_UTC", "")
     # Martingale/DCA com hedge estilo CoinTech2u (TRADING_BOT_STRATEGY=martingale_hedge).
     # Pesquisa: FAIL em 0/360 células (scripts/backtest_v2/MARTINGALE_RELATORIO.md). Só
     # testnet; ver docs/MARTINGALE_HEDGE.md. O stop de portfólio é obrigatório: a env

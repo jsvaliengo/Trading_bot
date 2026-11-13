@@ -360,11 +360,9 @@ def test_bills_split_in_30_day_windows_and_paginate(conn, monkeypatch):
 
 
 def test_daily_pnl_sums(conn, monkeypatch):
-    from datetime import datetime, timezone
-
     from trading_bot.core import trade_store
     monkeypatch.setattr(bg.time, "time", lambda: 1700000400.0)
-    monkeypatch.setattr(trade_store, "trading_day_start", lambda: datetime.fromtimestamp(1700000000, tz=timezone.utc))
+    monkeypatch.setattr(trade_store, "daily_pnl_start_ms", lambda: 1700000000000)
     conn.http.routes[("GET", "/api/v2/mix/account/bill")] = {"code": "00000", "data": {"bills": BILLS, "endId": "0"}}
     daily = conn.get_daily_pnl_from_binance()
     assert daily["realized_pnl"] == 0.35 and daily["funding_fee"] == -0.02 and daily["commission"] == pytest.approx(-0.02)

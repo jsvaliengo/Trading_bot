@@ -522,8 +522,8 @@ class OkxConnection:
             if not force_refresh and c and time.monotonic() - c["ts"] < 30.0:
                 return c["data"]
         try:
-            from ..core.trade_store import trading_day_start
-            s = self._sum_income(int(trading_day_start().timestamp() * 1000), 1000)
+            from ..core.trade_store import daily_pnl_start_ms
+            s = self._sum_income(daily_pnl_start_ms(), 1000)
             result = {**s, "total": s["realized_pnl"] + s["funding_fee"] + s["commission"]}
             with self._lock:
                 self._daily_pnl_cache = {"data": result, "ts": time.monotonic()}
