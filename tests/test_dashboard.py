@@ -858,6 +858,28 @@ def test_pnl_report_income_and_reference_from_binance(_brt):
     assert [r["pct"] for r in out["reference"]["BTCUSDT"]] == [0.0, 10.0]
 
 
+def test_pnl_report_income_floors_on_pnl_since(_brt, monkeypatch):
+    # Reset de banca no meio do período: a aba lista e soma só o que veio depois do piso.
+    from trading_bot.web.pnl_report import build_report
+
+    monkeypatch.setattr(global_config, "PNL_SINCE_UTC", "2026-11-03T12:00:00Z", raising=False)
+    income = [
+        {"time": 1793664000000, "incomeType": "REALIZED_PNL", "symbol": "ADAUSDT", "income": "50.9"},  # 03/11 00:00 UTC
+        {"time": 1793750400000, "incomeType": "REALIZED_PNL", "symbol": "BNBUSDT", "income": "1.5"},  # 04/11 00:00 UTC
+    ]
+    seen = []
+
+    def fake_income(**kw):
+        seen.append(kw["start_time"])
+        return [i for i in income if i["time"] >= kw["start_time"]]
+
+    ex = SimpleNamespace(get_income_history=fake_income, get_account_info=lambda: {}, market_client=None)
+    out = build_report(_pnl_bot(ex), "2026-11-01", "2026-11-07")
+    assert seen == [1793707200000]
+    assert [i["symbol"] for i in out["income"]] == ["BNBUSDT"]
+    assert out["income_totals"]["REALIZED_PNL"] == 1.5
+
+
 def test_pnl_report_route_requires_auth_and_ignores_bad_dates(_brt):
     from trading_bot.web.app import create_app
 
