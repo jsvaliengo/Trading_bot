@@ -25,14 +25,19 @@
 
     // sinal após arredondar a d casas: o que vira "0,00" na tela é zero (sem sinal, sem cor)
     const sgn = (v, d = 2) => Math.abs(v) < 0.5 * 10 ** -d ? 0 : Math.sign(v);
+    // Moeda principal dos valores monetários (USD ou BRL pelo botão do topo); sem cotação cai em USD.
+    const CUR_KEY = 'tradingbot-currency';
+    let currency = 'USD';
+    try { if (localStorage.getItem(CUR_KEY) === 'BRL') currency = 'BRL'; } catch (e) { /* storage bloqueado */ }
+    const fxRate = () => { const r = state.fx && state.fx.usd_brl; return isNum(r) ? r : null; };
+    const inBrl = () => currency === 'BRL' && fxRate() !== null;
     const fmt = {
-        usd(v, o = {}) {
-            if (!isNum(v)) return '—';
-            const s = sgn(v), sign = s < 0 ? '−' : (o.signed && s > 0 ? '+' : '');
-            return sign + '$' + Math.abs(Number(v)).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-        },
-        // equivalente em BRL pela cotação do payload (state.fx); '' sem cotação, aí o texto some
-        brl(usd) { const r = state.fx && state.fx.usd_brl; if (!isNum(usd) || !isNum(r)) return ''; return '≈ ' + (sgn(usd * r) < 0 ? '−' : '') + Math.abs(usd * r).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }); },
+        _usd(v, signed) { const s = sgn(v), sign = s < 0 ? '−' : (signed && s > 0 ? '+' : ''); return sign + '$' + Math.abs(Number(v)).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); },
+        _brl(usd, signed) { const b = usd * fxRate(), s = sgn(b), sign = s < 0 ? '−' : (signed && s > 0 ? '+' : ''); return sign + Math.abs(b).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }); },
+        // valor em USD formatado na moeda principal escolhida
+        money(v, o = {}) { if (!isNum(v)) return '—'; return inBrl() ? fmt._brl(v, o.signed) : fmt._usd(v, o.signed); },
+        // o mesmo valor na outra moeda ("≈ ..."); '' sem cotação, aí o texto some
+        moneyAlt(v) { if (!isNum(v) || fxRate() === null) return ''; return '≈ ' + (inBrl() ? fmt._usd(v) : fmt._brl(v)); },
         pct(v, d = 2, signed = true) { if (!isNum(v)) return '—'; const z = sgn(v, d), s = z < 0 ? '−' : (signed && z > 0 ? '+' : ''); return s + Math.abs(Number(v)).toFixed(d).replace('.', ',') + '%'; },
         num(v, d = 2) { if (!isNum(v)) return '—'; return Number(v).toLocaleString('pt-BR', { minimumFractionDigits: d, maximumFractionDigits: d }); },
         price(v) { if (!isNum(v)) return '—'; const a = Math.abs(v); const d = a >= 1000 ? 1 : a >= 10 ? 2 : a >= 1 ? 3 : a >= 0.01 ? 5 : 7; return Number(v).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d }); },
@@ -104,6 +109,7 @@
         $('top-meta').textContent = `sinais ${s.signal_data_source || '—'} · deploy ${(h && h.deploy_sha) || '—'} · no ar há ${h ? fmt.ago(h.uptime_seconds) : '—'} · ${connLabel()} · atualizado ${fmt.time(state.live.server_time)}`;
         const fx = state.fx || {}; $('fx-badge').hidden = !isNum(fx.usd_brl);
         if (isNum(fx.usd_brl)) { $('fx-rate').textContent = `US$ 1 = R$ ${fmt.num(fx.usd_brl)}`; $('fx-at').textContent = `câmbio ao vivo · ${fmt.dateTime(fx.fetched_at)}`; }
+        $('fx-toggle').textContent = currency === 'BRL' ? 'ver em US$' : 'ver em R$';
         $('btn-pause').disabled = !!s.paused; $('btn-resume').disabled = !s.paused;
         const banner = $('pause-banner');
         if (s.paused) {
@@ -119,7 +125,7 @@
             banner.className = 'banner bad'; banner.hidden = false;
         } else banner.hidden = true;
     }
-    const brlTag = (usd) => { const t = fmt.brl(usd); return t ? `<small class="brl">${t}</small>` : ''; };
+    const brlTag = (usd) => { const t = fmt.moneyAlt(usd); return t ? `<small class="brl">${t}</small>` : ''; };
     function setTile(id, value, foot, k, usd) {
         const v = $(id); v.innerHTML = esc(value) + brlTag(usd); v.className = 'tv ' + (k || '');
         $(id + '-f').textContent = foot;
@@ -128,20 +134,24 @@
     }
     function renderStatus(s, ft, e, positions) {
         const eq = s.last_balance;
-        setTile('st-equity', fmt.usd(eq), `pico ${fmt.usd(ft.peak_equity)} · capital ${fmt.usd(s.initial_capital)}`, '', eq);
+        setTile('st-equity', fmt.money(eq), `pico ${fmt.money(ft.peak_equity)} · capital ${fmt.money(s.initial_capital)}`, '', eq);
         const dd = ft.drawdown_pct, lim = ft.dd_limit_pct || 20;
-        setTile('st-dd', fmt.pct(dd, 2, false), isNum(ft.dd_room_usd) ? `${fmt.usd(ft.dd_room_usd)} de folga até ${lim}% (${fmt.usd(ft.dd_floor_equity)})` : 'sem pico registrado',
+        setTile('st-dd', fmt.pct(dd, 2, false), isNum(ft.dd_room_usd) ? `${fmt.money(ft.dd_room_usd)} de folga até ${lim}% (${fmt.money(ft.dd_floor_equity)})` : 'sem pico registrado',
             dd >= lim * 0.8 ? 'neg' : '');
         const max = e && e.params ? e.params.max_positions : null;
         const cap = e && e.params && isNum(eq) ? eq * (e.params.max_gross_mult || 3) : null;
         setTile('st-pos', max ? `${positions.length} / ${max}` : String(positions.length),
-            isNum(e && e.gross_notional) && cap ? `notional ${fmt.usd(e.gross_notional)} de ${fmt.usd(cap)} (${e.params.max_gross_mult}× equity)` : '—');
+            isNum(e && e.gross_notional) && cap ? `notional ${fmt.money(e.gross_notional)} de ${fmt.money(cap)} (${e.params.max_gross_mult}× equity)` : '—');
         setTile('st-bar', e && e.bar_close ? fmt.time(e.bar_close) : '—',
             e && e.last_bar_processed_at ? `processada ${fmt.dateTime(e.last_bar_processed_at)} ${fmt.tzLabel()}` : (e && e.bar_close ? 'ainda não processada' : 'motor Donchian inativo'));
         renderNext();
-        setTile('st-unreal', fmt.usd(s.unrealized_pnl, { signed: true }), `${positions.length} posição(ões) abertas`, cls(s.unrealized_pnl), s.unrealized_pnl);
-        setTile('st-today', fmt.usd(s.daily_pnl, { signed: true }), `${s.closed_trades_today ?? 0} fechado(s) hoje · funding ${fmt.usd(s.funding_fee_today, { signed: true })}`, cls(s.daily_pnl), s.daily_pnl);
-        setTile('st-net', fmt.usd(ft.net_usd, { signed: true }), `${ft.trades || 0} trades · taxas ${fmt.usd(-(ft.fees_usd || 0), { signed: true })} · funding ${fmt.usd(ft.funding_usd, { signed: true })}`, cls(ft.net_usd), ft.net_usd);
+        // uma linha por perna (4 maiores em módulo, "+N" pro resto): "BNB LONG +$0,00 · BNB SHORT −$0,04"
+        const legs = [...positions].sort((a, b) => Math.abs(b.unrealized_pnl_usd || 0) - Math.abs(a.unrealized_pnl_usd || 0));
+        const legTxt = legs.slice(0, 4).map(p => `${String(p.symbol || '').replace(/USDT$/, '')} ${p.side} ${fmt.money(p.unrealized_pnl_usd, { signed: true })}`).concat(legs.length > 4 ? [`+${legs.length - 4}`] : []).join(' · ');
+        setTile('st-unreal', fmt.money(s.unrealized_pnl, { signed: true }), legTxt || 'nenhuma posição aberta', cls(s.unrealized_pnl), s.unrealized_pnl);
+        const bd = s.daily_pnl_breakdown || {};
+        setTile('st-today', fmt.money(s.daily_pnl, { signed: true }), `trades ${fmt.money(bd.trades, { signed: true })} · funding ${fmt.money(bd.funding, { signed: true })} · comissão ${fmt.money(bd.commission, { signed: true })} · ${s.closed_trades_today ?? 0} fechado(s)`, cls(s.daily_pnl), s.daily_pnl);
+        setTile('st-net', fmt.money(ft.net_usd, { signed: true }), `${ft.trades || 0} trades · taxas ${fmt.money(-(ft.fees_usd || 0), { signed: true })} · funding ${fmt.money(ft.funding_usd, { signed: true })}`, cls(ft.net_usd), ft.net_usd);
     }
     function renderNext() {
         const e = state.live && state.live.engine;
@@ -166,9 +176,9 @@
         setMeter('m-days', d / td * 100, td, Math.floor(d));
         $('tr-days-f').textContent = `início ${fmt.dateTime(ft.start)} ${fmt.tzLabel()} · prazo mínimo ${fmt.date(ft.end_by_time)}` +
             (ft.restart ? ` · reinício (trailing R): ${ft.trades_before_restart ?? 0} trades anteriores fora do critério` : '');
-        const ex = $('tr-exp'); ex.textContent = fmt.usd(ft.expectancy_usd, { signed: true }) + (isNum(ft.avg_r) ? ` · ${fmt.r(ft.avg_r)}` : ''); ex.className = cls(ft.expectancy_usd || 0);
+        const ex = $('tr-exp'); ex.textContent = fmt.money(ft.expectancy_usd, { signed: true }) + (isNum(ft.avg_r) ? ` · ${fmt.r(ft.avg_r)}` : ''); ex.className = cls(ft.expectancy_usd || 0);
         const ci = ft.expectancy_ci95;
-        $('tr-exp-f').textContent = ci ? `IC 95% de ${fmt.usd(ci[0], { signed: true })} a ${fmt.usd(ci[1], { signed: true })} (bootstrap, ${tr} trades)` : `o intervalo de confiança aparece a partir de 5 trades (${tr} até agora)`;
+        $('tr-exp-f').textContent = ci ? `IC 95% de ${fmt.money(ci[0], { signed: true })} a ${fmt.money(ci[1], { signed: true })} (bootstrap, ${tr} trades)` : `o intervalo de confiança aparece a partir de 5 trades (${tr} até agora)`;
         const mdd = ft.max_drawdown_pct || 0, lim = ft.dd_limit_pct || 20;
         $('tr-dd').textContent = `${fmt.pct(mdd, 2, false)} / ${lim}%`;
         setMeter('m-dd', (ft.drawdown_pct || 0) / lim * 100, lim, ft.drawdown_pct || 0);
@@ -185,14 +195,14 @@
     function renderPerf(ft) {
         if (!ft || !ft.strategy) return;
         const vals = {
-            expectancy: fmt.usd(ft.expectancy_usd, { signed: true }) + (isNum(ft.expectancy_pct) ? ` (${fmt.pct(ft.expectancy_pct)} notional)` : ''),
+            expectancy: fmt.money(ft.expectancy_usd, { signed: true }) + (isNum(ft.expectancy_pct) ? ` (${fmt.pct(ft.expectancy_pct)} notional)` : ''),
             avg_r: fmt.r(ft.avg_r), profit_factor: isNum(ft.profit_factor) ? fmt.num(ft.profit_factor) : '—',
             sharpe: isNum(ft.sharpe) ? fmt.num(ft.sharpe) : `— (${ft.sharpe_days || 0}/20 dias)`,
             win_rate: fmt.pct(ft.win_rate, 0, false),
-            avg_win: isNum(ft.avg_win_usd) ? `${fmt.usd(ft.avg_win_usd, { signed: true })} (${fmt.pct(ft.avg_win_pct, 1)})` : '—',
-            avg_loss: isNum(ft.avg_loss_usd) ? `${fmt.usd(ft.avg_loss_usd, { signed: true })} (${fmt.pct(ft.avg_loss_pct, 1)})` : '—',
+            avg_win: isNum(ft.avg_win_usd) ? `${fmt.money(ft.avg_win_usd, { signed: true })} (${fmt.pct(ft.avg_win_pct, 1)})` : '—',
+            avg_loss: isNum(ft.avg_loss_usd) ? `${fmt.money(ft.avg_loss_usd, { signed: true })} (${fmt.pct(ft.avg_loss_pct, 1)})` : '—',
             trades_per_week: fmt.num(ft.trades_per_week, 1), max_drawdown_pct: fmt.pct(ft.max_drawdown_pct, 2, false),
-            costs: fmt.usd(-(ft.fees_usd || 0) + (ft.funding_usd || 0), { signed: true }),
+            costs: fmt.money(-(ft.fees_usd || 0) + (ft.funding_usd || 0), { signed: true }),
         };
         $$('#perf td[data-k]').forEach(td => { td.textContent = vals[td.dataset.k]; td.className = 'r ' + (td.dataset.k === 'expectancy' || td.dataset.k === 'avg_r' ? cls(td.dataset.k === 'expectancy' ? ft.expectancy_usd : ft.avg_r) : ''); });
         $('perf-sub').textContent = `${ft.trades} trades desde ${fmt.date(ft.start)}`;
@@ -212,10 +222,10 @@
         const x = (v) => L + (v - lo) / (hi - lo) * (W - L - R);
         const ticks = niceTicks(lo, hi, 5);
         let out = `<line class="axis" x1="${L}" x2="${W - R}" y1="${y}" y2="${y}"/>`;
-        out += ticks.map(t => `<line class="axis" x1="${x(t)}" x2="${x(t)}" y1="${y - 4}" y2="${y + 4}"/><text x="${x(t)}" y="${y + 20}" text-anchor="middle">${fmt.usd(t, { signed: true })}</text>`).join('');
+        out += ticks.map(t => `<line class="axis" x1="${x(t)}" x2="${x(t)}" y1="${y - 4}" y2="${y + 4}"/><text x="${x(t)}" y="${y + 20}" text-anchor="middle">${fmt.money(t, { signed: true })}</text>`).join('');
         const zRight = research == null || research >= 0;
         out += `<line class="zero" x1="${x(0)}" x2="${x(0)}" y1="${y - 30}" y2="${y + 8}"/><text class="strong" x="${x(0) + (zRight ? -6 : 6)}" y="${y - 36}" text-anchor="${zRight ? 'end' : 'start'}">zero</text>`;
-        if (research != null) out += `<line class="research" x1="${x(research)}" x2="${x(research)}" y1="${y - 30}" y2="${y + 8}"/><text x="${x(research) + (zRight ? 6 : -6)}" y="${y - 36}" text-anchor="${zRight ? 'start' : 'end'}">pesquisa ${fmt.usd(research, { signed: true })}</text>`;
+        if (research != null) out += `<line class="research" x1="${x(research)}" x2="${x(research)}" y1="${y - 30}" y2="${y + 8}"/><text x="${x(research) + (zRight ? 6 : -6)}" y="${y - 36}" text-anchor="${zRight ? 'start' : 'end'}">pesquisa ${fmt.money(research, { signed: true })}</text>`;
         if (ci) out += `<rect class="band" x="${x(ci[0])}" y="${y - 11}" width="${Math.max(2, x(ci[1]) - x(ci[0]))}" height="22" rx="3"/>`;
         out += `<circle class="mean" cx="${x(mean)}" cy="${y}" r="6"/>`;
         svg.innerHTML = out;
@@ -245,7 +255,7 @@
         const p = palette();
         const f = filterRange(hist || [], state.chartRange, ft && ft.start);
         const pts = f.map(s => ({ x: new Date(s.timestamp).getTime(), y: s.equity ?? s.balance })).filter(d => !isNaN(d.x) && d.y != null);
-        $('eq-sub').textContent = pts.length ? `${fmt.dateTime(f[0].timestamp)} → ${fmt.dateTime(f[f.length - 1].timestamp)} · ${fmt.usd(pts[0].y)} → ${fmt.usd(pts[pts.length - 1].y)}` : 'sem pontos nesta janela';
+        $('eq-sub').textContent = pts.length ? `${fmt.dateTime(f[0].timestamp)} → ${fmt.dateTime(f[f.length - 1].timestamp)} · ${fmt.money(pts[0].y)} → ${fmt.money(pts[pts.length - 1].y)}` : 'sem pontos nesta janela';
         const t0 = pts.length ? pts[0].x : 0, t1 = pts.length ? pts[pts.length - 1].x : 0;
         const marks = (trades || []).filter(t => t.exit_time && t.strategy_type === 'donchian_4h').map(t => {
             const x = new Date(t.exit_time).getTime(); if (isNaN(x) || x < t0 || x > t1) return null;
@@ -269,7 +279,7 @@
             options: { responsive: true, maintainAspectRatio: false, parsing: false, animation: false, interaction: { mode: 'nearest', intersect: false, axis: 'x' },
                 plugins: { legend: { display: false }, tooltip: { ...tt, callbacks: {
                     title: (items) => fmt.dateTime(items[0].parsed.x),
-                    label: (it) => it.raw.t ? `${it.raw.t.symbol} ${it.raw.t.side} ${fmt.usd(it.raw.t.pnl_net, { signed: true })} (${fmt.r(it.raw.t.r_multiple)})` : `equity ${fmt.usd(it.parsed.y)}`,
+                    label: (it) => it.raw.t ? `${it.raw.t.symbol} ${it.raw.t.side} ${fmt.money(it.raw.t.pnl_net, { signed: true })} (${fmt.r(it.raw.t.r_multiple)})` : `equity ${fmt.money(it.parsed.y)}`,
                 } } },
                 scales: { x: timeScale(p, false), y: { position: 'right', ticks: { color: p.mut, font: tickFont, maxTicksLimit: 5, callback: v => '$' + Number(v).toFixed(0) }, grid: { color: p.grid } } } },
         });
@@ -308,7 +318,7 @@
         const root = $('positions-list'); $('positions-count').textContent = positions.length;
         for (const s of closing) if (!positions.some(p => p.symbol === s)) closing.delete(s);   // símbolo já saiu: libera o botão numa reentrada
         const unreal = positions.map(p => p.unrealized_pnl_usd).filter(isNum), risk = positions.map(p => p.risk_usd).filter(isNum);
-        $('pos-sum').textContent = positions.length ? `não realizado ${fmt.usd(sum(unreal), { signed: true })} · risco inicial total ${fmt.usd(sum(risk))}` : '';
+        $('pos-sum').textContent = positions.length ? `não realizado ${fmt.money(sum(unreal), { signed: true })} · risco inicial total ${fmt.money(sum(risk))}` : '';
         if (!positions.length) { root.innerHTML = '<p class="empty">Nenhuma posição aberta. O motor entra só no fechamento de barra 4h com rompimento de 40 barras.</p>'; return; }
         root.innerHTML = positions.map(p => {
             const age = p.entry_time ? (Date.now() - new Date(p.entry_time).getTime()) / 36e5 : null;
@@ -316,8 +326,8 @@
             return `<div class="prow">
                 <div class="prow-top">
                     <span class="psym"><button type="button" class="sym-btn" data-chart="${esc(p.symbol)}">${esc(p.symbol)}</button> <span class="side ${p.side === 'LONG' ? 'l' : 's'}">${esc(p.side)}</span>${isD ? '' : `<small class="dim">${esc(p.strategy_type)}</small>`}</span>
-                    <span class="pr-pnl ${cls(p.unrealized_pnl_usd)}">${fmt.usd(p.unrealized_pnl_usd, { signed: true })}<small>${fmt.pct(p.unrealized_pnl_percent)}</small></span>
-                    <span class="pr-r ${cls(p.r_now)}">${fmt.r(p.r_now)}<small>risco ${fmt.usd(p.risk_usd)}${isNum(p.trail_floor_r) ? ` · piso ${fmt.r(p.trail_floor_r)}` : ''}</small></span>
+                    <span class="pr-pnl ${cls(p.unrealized_pnl_usd)}">${fmt.money(p.unrealized_pnl_usd, { signed: true })}<small>${fmt.pct(p.unrealized_pnl_percent)}</small></span>
+                    <span class="pr-r ${cls(p.r_now)}">${fmt.r(p.r_now)}<small>risco ${fmt.money(p.risk_usd)}${isNum(p.trail_floor_r) ? ` · piso ${fmt.r(p.trail_floor_r)}` : ''}</small></span>
                     <span class="pr-meta">${fmt.price(p.quantity)} un · ${fmt.dur(age)}</span>
                     ${closeCell(p)}
                 </div>
@@ -328,7 +338,7 @@
 
     // Fechar posição: o botão vira Confirmar/Cancelar inline; o próximo poll remove o card.
     const closing = new Set();
-    const closeCell = (p) => `<span class="pr-close" data-symbol="${esc(p.symbol)}" data-side="${esc(p.side)}" data-pnl="${esc(fmt.usd(p.unrealized_pnl_usd, { signed: true }))}">${
+    const closeCell = (p) => `<span class="pr-close" data-symbol="${esc(p.symbol)}" data-side="${esc(p.side)}" data-pnl="${esc(fmt.money(p.unrealized_pnl_usd, { signed: true }))}">${
         closing.has(p.symbol) ? '<small class="dim">fechando…</small>' : '<button type="button" class="btn btn-quiet btn-xs" data-close="ask">Fechar</button>'
     }</span>`;
     const onClose = async (e) => {
@@ -393,7 +403,7 @@
         const mgRuler = (l) => {
             const long = l.side === 'LONG', avg = l.avg_price, be = l.breakeven_price, tp = l.tp_price, st = l.stop_price, nx = l.next_add_price, mk = l.mark_price;
             if (![avg, be, tp].every(isNum)) return '';
-            const pnlAt = (p) => fmt.usd((p - be) * l.quantity * (long ? 1 : -1), { signed: true });   // líquido: do empate (fees já descontadas)
+            const pnlAt = (p) => fmt.money((p - be) * l.quantity * (long ? 1 : -1), { signed: true });   // líquido: do empate (fees já descontadas)
             const marks = [[st, 'stop', 'Stop'], [nx, 'add', `Degrau ${l.level + 1}`], [be, 'entry', 'Empate'], [tp, 'tp', 'Alvo']].filter(m => isNum(m[0]));
             const vals = marks.map(m => m[0]).concat(isNum(mk) ? [mk] : []);
             let lo = Math.min(...vals), hi = Math.max(...vals); const pad = (hi - lo) * 0.08 || avg * 0.01; lo -= pad; hi += pad;
@@ -411,7 +421,7 @@
             </div>`;
         };
         const unreal = (positions || []).map(p => p.unrealized_pnl_usd).filter(isNum);
-        $('legs-sum').textContent = unreal.length ? `não realizado ${fmt.usd(sum(unreal), { signed: true })}` : '';
+        $('legs-sum').textContent = unreal.length ? `não realizado ${fmt.money(sum(unreal), { signed: true })}` : '';
         const draining = new Set(m.draining || []);
         $('mg-list').innerHTML = (m.legs || []).map(l => {
             const pos = (positions || []).find(p => p.symbol === l.symbol && p.side === l.side);
@@ -419,9 +429,9 @@
             return `<div class="prow">
             <div class="prow-top">
                 <span class="psym"><button type="button" class="sym-btn" data-chart="${esc(l.symbol)}">${esc(l.symbol)}</button> <span class="side ${l.side === 'LONG' ? 'l' : 's'}">${esc(l.side)}</span>${draining.has(l.symbol) ? ' <span class="badge warn">drenando</span>' : ''}</span>
-                <span class="pr-pnl ${cls(l.unrealized_pnl_usd)}">${fmt.usd(l.unrealized_pnl_usd, { signed: true })}${pos ? `<small>${fmt.pct(pos.unrealized_pnl_percent)}</small>` : ''}</span>
+                <span class="pr-pnl ${cls(l.unrealized_pnl_usd)}">${fmt.money(l.unrealized_pnl_usd, { signed: true })}${pos ? `<small>${fmt.pct(pos.unrealized_pnl_percent)}</small>` : ''}</span>
                 <span class="pr-r">${l.level}/${l.max_levels}<small>nível</small></span>
-                <span class="pr-meta">${isNum(l.quantity) ? `${fmt.price(l.quantity)} un · ${fmt.usd(l.notional)}` : 'sem posição'}${age != null ? ` · ${fmt.dur(age)}` : ''}</span>
+                <span class="pr-meta">${isNum(l.quantity) ? `${fmt.price(l.quantity)} un · ${fmt.money(l.notional)}` : 'sem posição'}${age != null ? ` · ${fmt.dur(age)}` : ''}</span>
                 <span class="pr-meta">média <b>${fmt.price(l.avg_price)}</b></span>
                 ${pos ? closeCell(pos) : ''}
             </div>
@@ -456,18 +466,18 @@
         $('ring-segs').innerHTML = segs; $('ring-badges').innerHTML = badges;
         $('ring-state').textContent = s.paused ? 'Pausado' : (s.running ? 'Rodando' : 'Parado');
         $('ring-state').className = 'ring-state ' + (s.paused ? 'warn' : (s.running ? 'ok' : 'bad'));
-        $('ring-stop').textContent = `stop em ${fmt.usd(m.portfolio_stop_equity)}` + (isNum(m.portfolio_stop_room_pct) ? ` · faltam ${fmt.pct(m.portfolio_stop_room_pct, 1, false)}` : '');
+        $('ring-stop').textContent = `stop em ${fmt.money(m.portfolio_stop_equity)}` + (isNum(m.portfolio_stop_room_pct) ? ` · faltam ${fmt.pct(m.portfolio_stop_room_pct, 1, false)}` : '');
         $('ring-stop').className = 'cs ' + (isNum(m.portfolio_stop_room_pct) && m.portfolio_stop_room_pct < 5 ? 'warn' : '');
         const c = $('ring-center'), sp = pairs[ringSel];
         if (sp) {
             const deep = sp.legs.reduce((x, y) => (y.level > x.level ? y : x));
-            c.innerHTML = `<span class="rc-l">${esc(sp.symbol.replace(/USDT$/, ''))}</span><b class="rc-v ${cls(sp.upnl)}">${fmt.usd(sp.upnl, { signed: true })}</b>` +
+            c.innerHTML = `<span class="rc-l">${esc(sp.symbol.replace(/USDT$/, ''))}</span><b class="rc-v ${cls(sp.upnl)}">${fmt.money(sp.upnl, { signed: true })}</b>` +
                 `<span class="rc-t">${sp.legs.map(l => `${esc(l.side)} L${l.level}`).join(' · ')}</span>` +
                 `<small class="rc-s">add ${fmt.price(deep.next_add_price)} · TP ${fmt.price(deep.tp_price)}</small>`;
         } else {
             const eq = s.last_balance, d = s.daily_pnl, pct = isNum(d) && isNum(eq) && eq - d > 0 ? d / (eq - d) * 100 : null;
-            c.innerHTML = `<span class="rc-l">Saldo</span><b class="rc-v">${fmt.usd(eq)}</b>` +
-                `<span class="rc-t ${cls(d)}">${fmt.usd(d, { signed: true })}${isNum(pct) ? ` (${fmt.pct(pct)})` : ''}</span>` + brlTag(eq) +
+            c.innerHTML = `<span class="rc-l">Saldo</span><b class="rc-v">${fmt.money(eq)}</b>` +
+                `<span class="rc-t ${cls(d)}">${fmt.money(d, { signed: true })}${isNum(pct) ? ` (${fmt.pct(pct)})` : ''}</span>` + brlTag(eq) +
                 `<span class="rc-s rc-sub">${esc($('st-equity-f').textContent)}</span>`;
         }
     }
@@ -485,15 +495,15 @@
         const eq = state.live && state.live.summary && state.live.summary.last_balance;
         const cur = sh.current, rows = sh.rows || [], nxt = rows[cur == null ? 0 : cur + 1];
         // linha: [rótulo, banca mín., estratégia, 1ª long, 1ª short, alavancagem, stop, double first, moedas]
-        $('sheet-sub').textContent = `Banca ${fmt.usd(eq)} → ` + (cur == null ? 'abaixo da 1ª faixa (90 USDT)' : `faixa ${rows[cur][1]} USDT · ${rows[cur][8]} moeda(s)`)
+        $('sheet-sub').textContent = `Banca ${fmt.money(eq)} → ` + (cur == null ? 'abaixo da 1ª faixa (90 USDT)' : `faixa ${rows[cur][1]} USDT · ${rows[cur][8]} moeda(s)`)
             + (nxt ? ` · próxima faixa $${nxt[1]} (${nxt[8]} moedas)` : '');
         const pj = sh.projection, pace = $('sheet-pace');
         pace.hidden = !pj;
         if (pj) {
             const dias = `${pj.days_elapsed} dia${pj.days_elapsed === 1 ? '' : 's'}`;
-            pace.textContent = `Ritmo: ${fmt.usd(pj.avg_daily, { signed: true })}/dia (${pj.trades} trades em ${dias})`
+            pace.textContent = `Ritmo: ${fmt.money(pj.avg_daily, { signed: true })}/dia (${pj.trades} trades em ${dias})`
                 + (pj.next_bank == null ? '' : pj.eta_days == null ? ' · próxima faixa não alcançável neste ritmo'
-                    : ` · faltam ${fmt.usd(pj.gap)} p/ $${pj.next_bank} → ~${pj.eta_days} dias (≈ ${pj.eta_date.split('-').reverse().join('/')})`);
+                    : ` · faltam ${fmt.money(pj.gap)} p/ $${pj.next_bank} → ~${pj.eta_days} dias (≈ ${pj.eta_date.split('-').reverse().join('/')})`);
         }
         $('sheet-table').querySelector('tbody').innerHTML = rows.map((r, i) => `<tr class="${i === cur ? 'cur' : ''}">
             <td>${esc(r[0])}</td><td class="sans">${esc(r[2])}</td><td class="r">${r[3]}</td><td class="r">${r[4]}</td><td class="r">${r[5]}</td><td class="r">${Number(r[6]).toLocaleString('pt-BR')}</td><td class="sans">${r[7] ? 'ON' : 'OFF'}</td><td class="r">${r[8]}</td></tr>`).join('');
@@ -562,7 +572,7 @@
         const n = rows.length, net = sum(rows.map(t => t.pnl_net || 0)), wins = rows.filter(t => t.pnl_net > 0).length;
         const rs = rows.map(t => t.r_multiple).filter(isNum), costs = sum(rows.map(t => (t.fees || 0) + (t.funding || 0)));
         $('tr-sub').textContent = `${n} trade(s) no filtro`;
-        $('tr-stats').innerHTML = n ? `<span>líquido <b class="${cls(net)}">${fmt.usd(net, { signed: true })}</b></span><span>win rate <b>${fmt.pct(wins / n * 100, 0, false)}</b></span><span>R médio <b>${rs.length ? fmt.r(sum(rs) / rs.length) : '—'}</b></span><span>Σ R <b>${rs.length ? fmt.r(sum(rs)) : '—'}</b></span><span>custos <b>${fmt.usd(costs, { signed: true })}</b></span>` : '';
+        $('tr-stats').innerHTML = n ? `<span>líquido <b class="${cls(net)}">${fmt.money(net, { signed: true })}</b></span><span>win rate <b>${fmt.pct(wins / n * 100, 0, false)}</b></span><span>R médio <b>${rs.length ? fmt.r(sum(rs) / rs.length) : '—'}</b></span><span>Σ R <b>${rs.length ? fmt.r(sum(rs)) : '—'}</b></span><span>custos <b>${fmt.money(costs, { signed: true })}</b></span>` : '';
         const tb = $('trades-table').querySelector('tbody'), pager = $('trades-pager');
         if (!n) { tb.innerHTML = '<tr><td colspan="12" class="empty sans">Nenhum trade fechado neste filtro.</td></tr>'; pager.hidden = true; return; }
         const pages = Math.ceil(n / PAGE); state.page = Math.max(1, Math.min(state.page, pages));
@@ -579,8 +589,8 @@
                 <td class="r">${fmt.price(t.entry_price)}</td>
                 <td class="r">${fmt.price(t.exit_price)}</td>
                 <td class="r ${cls(r)}">${rbar}${fmt.r(r)}</td>
-                <td class="r ${cls(t.pnl_net)}">${fmt.usd(t.pnl_net, { signed: true })}</td>
-                <td class="r dim">${fmt.usd(-(t.fees || 0) + (t.funding || 0), { signed: true })}</td>
+                <td class="r ${cls(t.pnl_net)}">${fmt.money(t.pnl_net, { signed: true })}</td>
+                <td class="r dim">${fmt.money(-(t.fees || 0) + (t.funding || 0), { signed: true })}</td>
                 <td class="r">${fmt.dur(t.duration_hours)}</td>
                 <td class="r">${isNum(t.mfe_pct) ? fmt.pct(t.mfe_pct, 2, false) : '—'}</td>
                 <td class="r">${isNum(t.mae_pct) ? fmt.pct(t.mae_pct, 2, false) : '—'}</td>
@@ -627,7 +637,7 @@
         charts.mfe = new Chart(el, {
             type: 'scatter', data: { datasets: [ds] },
             options: { responsive: true, maintainAspectRatio: false, animation: false,
-                plugins: { legend: { display: false }, tooltip: { ...baseTooltip(p), callbacks: { title: (it) => it[0].raw.e.symbol, label: (it) => `MFE ${fmt.pct(it.raw.e.mfe, 2, false)} · MAE ${isNum(it.raw.e.mae) ? fmt.pct(it.raw.e.mae, 2, false) : 'n/d'} · ${fmt.r(it.raw.y)} (${fmt.usd(it.raw.e.pnl, { signed: true })})` } } },
+                plugins: { legend: { display: false }, tooltip: { ...baseTooltip(p), callbacks: { title: (it) => it[0].raw.e.symbol, label: (it) => `MFE ${fmt.pct(it.raw.e.mfe, 2, false)} · MAE ${isNum(it.raw.e.mae) ? fmt.pct(it.raw.e.mae, 2, false) : 'n/d'} · ${fmt.r(it.raw.y)} (${fmt.money(it.raw.e.pnl, { signed: true })})` } } },
                 scales: { x: { title: { display: true, text: 'MFE (% a favor)', color: p.mut, font: tickFont }, beginAtZero: true, ticks: { color: p.mut, font: tickFont, callback: v => v + '%' }, grid: { color: p.grid } },
                     y: { title: { display: true, text: 'R realizado', color: p.mut, font: tickFont }, ticks: { color: p.mut, font: tickFont, callback: v => v + 'R' }, grid: { color: p.grid } } } },
         });
@@ -649,7 +659,7 @@
             const future = d > end, before = key < startIso;
             const c = v ? cls(v.net) : '';
             const op = v ? (0.35 + 0.65 * Math.min(1, Math.abs(v.net) / maxAbs)).toFixed(2) : '';
-            html += `<i class="${c}${future || before ? ' future' : ''}" style="${op ? `opacity:${op}` : ''}" title="${fmt.day(key)}${v ? `: ${fmt.usd(v.net, { signed: true })} em ${v.trades} trade(s)` : ''}"></i>`;
+            html += `<i class="${c}${future || before ? ' future' : ''}" style="${op ? `opacity:${op}` : ''}" title="${fmt.day(key)}${v ? `: ${fmt.money(v.net, { signed: true })} em ${v.trades} trade(s)` : ''}"></i>`;
         }
         root.innerHTML = html;
         const n = (days || []).length, pos = (days || []).filter(d => d.net > 0).length;
@@ -663,7 +673,7 @@
         (days || []).forEach(d => { const k = key(d.day); const g = groups.get(k) || { net: 0, trades: 0, wins: 0 }; g.net += d.net; g.trades += d.trades; g.wins += d.wins; groups.set(k, g); });
         const label = (k) => state.agg === 'month' ? new Date(k + '-01T00:00:00Z').toLocaleDateString('pt-BR', { month: 'short', year: 'numeric', timeZone: 'UTC' }) : `semana de ${fmt.date(k)}`;
         $('cal-table').querySelector('tbody').innerHTML = [...groups.keys()].sort().reverse().map(k => { const g = groups.get(k);
-            return `<tr><th scope="row">${label(k)}</th><td class="r">${g.trades}</td><td class="r">${fmt.pct(g.wins / g.trades * 100, 0, false)}</td><td class="r ${cls(g.net)}">${fmt.usd(g.net, { signed: true })}</td></tr>`; }).join('')
+            return `<tr><th scope="row">${label(k)}</th><td class="r">${g.trades}</td><td class="r">${fmt.pct(g.wins / g.trades * 100, 0, false)}</td><td class="r ${cls(g.net)}">${fmt.money(g.net, { signed: true })}</td></tr>`; }).join('')
             || '<tr><td colspan="4" class="empty">sem trades fechados</td></tr>';
     }
 
@@ -688,19 +698,19 @@
         const t = p.totals || {};
         $('pnl-sub').textContent = `${fmt.day(p.from)} → ${fmt.day(p.to)} · ${t.trades || 0} trade(s) · dia de trading ${fmt.tzLabel()}`;
         const td = p.today_pnl || {};
-        const tv = $('pnl-today-usd'); tv.innerHTML = fmt.usd(td.usd, { signed: true }) + brlTag(td.usd); tv.className = 'tv ' + cls(td.usd);
+        const tv = $('pnl-today-usd'); tv.innerHTML = fmt.money(td.usd, { signed: true }) + brlTag(td.usd); tv.className = 'tv ' + cls(td.usd);
         const tp = $('pnl-today-pct'); tp.textContent = pctTxt(td); tp.className = 'pnl-pct ' + cls(td.usd);
         const w = p.windows || {};
-        [['7d', w.d7], ['30d', w.d30]].forEach(([k, v]) => { const b = $(`pnl-${k}-usd`); b.innerHTML = fmt.usd(v && v.usd, { signed: true }) + brlTag(v && v.usd); b.className = cls(v && v.usd); const s = $(`pnl-${k}-pct`); s.textContent = pctTxt(v); s.className = cls(v && v.usd); });
-        const all = $('pnl-all-usd'); all.innerHTML = fmt.usd(w.all && w.all.usd, { signed: true }) + brlTag(w.all && w.all.usd); all.className = cls(w.all && w.all.usd);
-        $('pnl-profit').innerHTML = fmt.usd(t.profit, { signed: true }) + brlTag(t.profit);
-        $('pnl-loss').innerHTML = fmt.usd(t.loss, { signed: true }) + brlTag(t.loss);
-        const net = $('pnl-net'); net.innerHTML = fmt.usd(t.net, { signed: true }) + (isNum(t.pct) ? ` (${fmt.pct(t.pct)})` : '') + brlTag(t.net); net.className = cls(t.net);
+        [['7d', w.d7], ['30d', w.d30]].forEach(([k, v]) => { const b = $(`pnl-${k}-usd`); b.innerHTML = fmt.money(v && v.usd, { signed: true }) + brlTag(v && v.usd); b.className = cls(v && v.usd); const s = $(`pnl-${k}-pct`); s.textContent = pctTxt(v); s.className = cls(v && v.usd); });
+        const all = $('pnl-all-usd'); all.innerHTML = fmt.money(w.all && w.all.usd, { signed: true }) + brlTag(w.all && w.all.usd); all.className = cls(w.all && w.all.usd);
+        $('pnl-profit').innerHTML = fmt.money(t.profit, { signed: true }) + brlTag(t.profit);
+        $('pnl-loss').innerHTML = fmt.money(t.loss, { signed: true }) + brlTag(t.loss);
+        const net = $('pnl-net'); net.innerHTML = fmt.money(t.net, { signed: true }) + (isNum(t.pct) ? ` (${fmt.pct(t.pct)})` : '') + brlTag(t.net); net.className = cls(t.net);
         $('pnl-more').innerHTML = [
             ['Trades', String(t.trades || 0)], ['Win rate', fmt.pct(t.win_rate, 0, false)],
-            ['Taxas', fmt.usd(-(t.fees || 0), { signed: true })], ['Funding', fmt.usd(t.funding, { signed: true })],
-            ['Maior ganho', fmt.usd(t.best, { signed: true })], ['Maior perda', fmt.usd(t.worst, { signed: true })],
-            ['Equity no início do período', fmt.usd(t.start_equity)], ['Fórmula do %', 'P&L ÷ (capital + realizado antes do período)'],
+            ['Taxas', fmt.money(-(t.fees || 0), { signed: true })], ['Funding', fmt.money(t.funding, { signed: true })],
+            ['Maior ganho', fmt.money(t.best, { signed: true })], ['Maior perda', fmt.money(t.worst, { signed: true })],
+            ['Equity no início do período', fmt.money(t.start_equity)], ['Fórmula do %', 'P&L ÷ (capital + realizado antes do período)'],
         ].map(([k, v]) => `<div><dt>${k}</dt><dd>${esc(v)}</dd></div>`).join('');
         if (pnlState.days === 'custom') { $('pnl-from').value = p.from; $('pnl-to').value = p.to; }
         if (!pnlState.month || pnlState.month < p.from.slice(0, 7) || pnlState.month > p.to.slice(0, 7)) pnlState.month = p.to.slice(0, 7);
@@ -718,7 +728,7 @@
             const key = `${pnlState.month}-${String(d).padStart(2, '0')}`, v = byDay.get(key);
             const out = key < p.from || key > p.to, future = key > p.today;
             const c = v ? (cls(v.net) || 'zero') : (out || future ? 'off' : 'zero');
-            html += `<span class="day ${c}" role="gridcell" title="${fmt.day(key)}${v ? `: ${fmt.usd(v.net, { signed: true })} em ${v.trades} trade(s)` : ''}"><small>${d}</small>${v ? `<b>${fmt.usd(v.net, { signed: true })}</b>` : (out || future ? '' : '<b>0</b>')}</span>`;
+            html += `<span class="day ${c}" role="gridcell" title="${fmt.day(key)}${v ? `: ${fmt.money(v.net, { signed: true })} em ${v.trades} trade(s)` : ''}"><small>${d}</small>${v ? `<b>${fmt.money(v.net, { signed: true })}</b>` : (out || future ? '' : '<b>0</b>')}</span>`;
         }
         $('pnl-cal').innerHTML = html;
     }
@@ -729,8 +739,8 @@
         const data = days.map(d => byDay.get(d) ?? 0), colors = data.map(v => v < 0 ? pal.bad : pal.good);
         if (charts.pnlBars) { charts.pnlBars.data.labels = days; charts.pnlBars.data.datasets[0].data = data; charts.pnlBars.data.datasets[0].backgroundColor = colors; charts.pnlBars.update('none'); return; }
         charts.pnlBars = new Chart(el, { type: 'bar', data: { labels: days, datasets: [{ data, backgroundColor: colors, borderRadius: 3, maxBarThickness: 28 }] },
-            options: { responsive: true, maintainAspectRatio: false, animation: false, plugins: { legend: { display: false }, tooltip: { ...baseTooltip(pal), callbacks: { title: (it) => fmt.day(it[0].label), label: (it) => fmt.usd(it.parsed.y, { signed: true }) } } },
-                scales: { x: { ticks: { color: pal.mut, font: tickFont, maxTicksLimit: 8, callback: mmdd }, grid: { display: false } }, y: { ticks: { color: pal.mut, font: tickFont, maxTicksLimit: 5, callback: v => fmt.usd(v, { signed: true }) }, grid: { color: pal.grid } } } } });
+            options: { responsive: true, maintainAspectRatio: false, animation: false, plugins: { legend: { display: false }, tooltip: { ...baseTooltip(pal), callbacks: { title: (it) => fmt.day(it[0].label), label: (it) => fmt.money(it.parsed.y, { signed: true }) } } },
+                scales: { x: { ticks: { color: pal.mut, font: tickFont, maxTicksLimit: 8, callback: mmdd }, grid: { display: false } }, y: { ticks: { color: pal.mut, font: tickFont, maxTicksLimit: 5, callback: v => fmt.money(v, { signed: true }) }, grid: { color: pal.grid } } } } });
     }
     // rótulo do eixo x lido da escala (não de um array fechado na criação: o período muda e os labels crescem)
     function mmdd(v) { return String(this.getLabelForValue(v)).slice(5); }
@@ -743,10 +753,10 @@
         const { pal, el, ok, days } = pnlBase(p, 'pnl-cum-chart'); if (!ok) return;
         const byDay = new Map((p.cumulative || []).map(c => [c.day, c.value]));
         let last = 0; const data = days.map(d => { if (byDay.has(d)) last = byDay.get(d); return last; });
-        const v = $('pnl-cum-val'); v.textContent = fmt.usd(last, { signed: true }) + ` em ${fmt.day(p.to)}`; v.className = 'pnl-val ' + cls(last);
+        const v = $('pnl-cum-val'); v.textContent = fmt.money(last, { signed: true }) + ` em ${fmt.day(p.to)}`; v.className = 'pnl-val ' + cls(last);
         const ds = { data, borderColor: last < 0 ? pal.bad : pal.good, backgroundColor: hexa(last < 0 ? pal.bad : pal.good, 0.12), fill: true, borderWidth: 2, pointRadius: 0, tension: 0.2 };
         if (charts.pnlCum) { charts.pnlCum.data.labels = days; charts.pnlCum.data.datasets = [ds]; charts.pnlCum.update('none'); return; }
-        charts.pnlCum = new Chart(el, { type: 'line', data: { labels: days, datasets: [ds] }, options: lineOpts(pal, v2 => fmt.usd(v2, { signed: true })) });
+        charts.pnlCum = new Chart(el, { type: 'line', data: { labels: days, datasets: [ds] }, options: lineOpts(pal, v2 => fmt.money(v2, { signed: true })) });
     }
     function renderPnlPct(p) {
         const { pal, el, ok, days } = pnlBase(p, 'pnl-pct-chart'); if (!ok) return;
@@ -764,13 +774,13 @@
     function renderPnlAssets(p) {
         const a = p.assets || {}, pal = palette(), el = $('pnl-assets-chart');
         $('pnl-assets-sub').textContent = a.ok ? 'carteira de futuros USDT-M' : `saldo indisponível (${esc(exchangeName())} não respondeu)`;
-        $('pnl-assets-total').textContent = a.ok ? fmt.usd(a.total) : '—';
-        $('pnl-assets-list').innerHTML = (a.items || []).map(i => `<li><i class="sw" style="background:${pal.warn}"></i>${esc(i.asset)} <b>${fmt.usd(i.balance)}</b> <small>${a.total ? fmt.pct(i.balance / a.total * 100, 1, false) : ''}</small></li>`).join('');
+        $('pnl-assets-total').textContent = a.ok ? fmt.money(a.total) : '—';
+        $('pnl-assets-list').innerHTML = (a.items || []).map(i => `<li><i class="sw" style="background:${pal.warn}"></i>${esc(i.asset)} <b>${fmt.money(i.balance)}</b> <small>${a.total ? fmt.pct(i.balance / a.total * 100, 1, false) : ''}</small></li>`).join('');
         if (!el || typeof Chart === 'undefined') return;
         const data = (a.items || []).map(i => i.balance), colors = [pal.warn, pal.ac, pal.good, pal.bad];
         if (charts.pnlAssets) { charts.pnlAssets.data.datasets[0].data = data.length ? data : [1]; charts.pnlAssets.update('none'); return; }
         charts.pnlAssets = new Chart(el, { type: 'doughnut', data: { labels: (a.items || []).map(i => i.asset), datasets: [{ data: data.length ? data : [1], backgroundColor: data.length ? colors : [pal.el], borderWidth: 0 }] },
-            options: { responsive: true, maintainAspectRatio: false, animation: false, cutout: '72%', plugins: { legend: { display: false }, tooltip: { ...baseTooltip(pal), callbacks: { label: (it) => `${it.label} ${fmt.usd(it.parsed)}` } } } } });
+            options: { responsive: true, maintainAspectRatio: false, animation: false, cutout: '72%', plugins: { legend: { display: false }, tooltip: { ...baseTooltip(pal), callbacks: { label: (it) => `${it.label} ${fmt.money(it.parsed)}` } } } } });
     }
     function renderPnlTrades(p) {
         const rows = p.trades || [], tb = $('pnl-trades').querySelector('tbody'), pager = $('pnl-pager');
@@ -783,8 +793,8 @@
             <td class="sans"><b>${esc(t.symbol)}</b></td>
             <td class="sans"><span class="side ${t.side === 'LONG' ? 'l' : 's'}">${esc(t.side)}</span></td>
             <td class="r">${fmt.price(t.qty)}</td><td class="r">${fmt.price(t.entry_price)}</td><td class="r">${fmt.price(t.exit_price)}</td>
-            <td class="r ${cls(t.pnl_net)}">${fmt.usd(t.pnl_net, { signed: true })}${brlTag(t.pnl_net)}</td>
-            <td class="r dim">${fmt.usd(-(t.fees || 0), { signed: true })}</td>
+            <td class="r ${cls(t.pnl_net)}">${fmt.money(t.pnl_net, { signed: true })}${brlTag(t.pnl_net)}</td>
+            <td class="r dim">${fmt.money(-(t.fees || 0), { signed: true })}</td>
             <td class="sans"><small title="${esc(t.close_reason)}">${esc(t.close_reason || '—')}</small></td></tr>`).join('');
     }
     function renderPnlSymbols(p) {
@@ -792,16 +802,16 @@
         if (!rows.length) { tb.innerHTML = '<tr><td colspan="6" class="empty sans">Nenhum trade fechado no período.</td></tr>'; return; }
         const max = Math.max(0.01, ...rows.map(r => Math.abs(r.net)));
         tb.innerHTML = rows.map(r => `<tr><td class="sans"><b>${esc(r.symbol)}</b></td><td class="r">${r.trades}</td><td class="r">${fmt.pct(r.win_rate, 0, false)}</td>
-            <td class="r ${cls(r.net)}"><span class="rbar"><i class="${r.net >= 0 ? 'pos' : 'neg'}" style="width:${(Math.abs(r.net) / max * 50).toFixed(1)}%"></i></span>${fmt.usd(r.net, { signed: true })}${brlTag(r.net)}</td>
-            <td class="r dim">${fmt.usd(-(r.fees || 0), { signed: true })}</td><td class="r dim">${fmt.usd(r.funding, { signed: true })}</td></tr>`).join('');
+            <td class="r ${cls(r.net)}"><span class="rbar"><i class="${r.net >= 0 ? 'pos' : 'neg'}" style="width:${(Math.abs(r.net) / max * 50).toFixed(1)}%"></i></span>${fmt.money(r.net, { signed: true })}${brlTag(r.net)}</td>
+            <td class="r dim">${fmt.money(-(r.fees || 0), { signed: true })}</td><td class="r dim">${fmt.money(r.funding, { signed: true })}</td></tr>`).join('');
     }
     const INCOME_LABEL = { REALIZED_PNL: 'P&L realizado', COMMISSION: 'Comissão', FUNDING_FEE: 'Funding', TRANSFER: 'Transferência' };
     function renderPnlIncome(p) {
         const tb = $('pnl-income').querySelector('tbody'), tot = p.income_totals || {};
-        $('pnl-income-totals').innerHTML = p.income_ok ? Object.keys(INCOME_LABEL).map(k => `<span>${INCOME_LABEL[k]} <b class="${cls(tot[k])}">${fmt.usd(tot[k] || 0, { signed: true })}</b></span>`).join('') : `<span class="warn">Income da ${esc(exchangeName())} indisponível no momento; o restante da aba usa o banco local.</span>`;
+        $('pnl-income-totals').innerHTML = p.income_ok ? Object.keys(INCOME_LABEL).map(k => `<span>${INCOME_LABEL[k]} <b class="${cls(tot[k])}">${fmt.money(tot[k] || 0, { signed: true })}</b></span>`).join('') : `<span class="warn">Income da ${esc(exchangeName())} indisponível no momento; o restante da aba usa o banco local.</span>`;
         const rows = p.income || [];
         if (!rows.length) { tb.innerHTML = `<tr><td colspan="4" class="empty sans">${p.income_ok ? 'Nenhum lançamento no período.' : 'Sem dados.'}</td></tr>`; return; }
-        tb.innerHTML = rows.slice(0, 300).map(i => `<tr><td><small>${fmt.dateTime(i.time)}</small></td><td class="sans">${esc(INCOME_LABEL[i.type] || i.type)}</td><td class="sans">${esc(i.symbol || '—')}</td><td class="r ${cls(i.amount)}">${fmt.usd(i.amount, { signed: true })}</td></tr>`).join('');
+        tb.innerHTML = rows.slice(0, 300).map(i => `<tr><td><small>${fmt.dateTime(i.time)}</small></td><td class="sans">${esc(INCOME_LABEL[i.type] || i.type)}</td><td class="sans">${esc(i.symbol || '—')}</td><td class="r ${cls(i.amount)}">${fmt.money(i.amount, { signed: true })}</td></tr>`).join('');
     }
     function initPnl() {
         $$('#pnl-ranges .chip').forEach(b => b.addEventListener('click', () => {
@@ -860,6 +870,13 @@
         } catch (err) { console.warn('histórico falhou:', err); }
         fetchPnl();   // trade fechou (ou passaram 2 min): a aba de P&L acompanha
     }
+    $('fx-toggle').addEventListener('click', () => {
+        currency = currency === 'BRL' ? 'USD' : 'BRL';
+        try { localStorage.setItem(CUR_KEY, currency); } catch (e) { /* storage bloqueado */ }
+        if (state.live) renderLive(state.live);
+        if (state.hist) renderHistory(state.hist);
+        if (state.pnl) renderPnl(state.pnl);
+    });
     function initChips() {
         $$('.chips .chip').forEach(b => b.addEventListener('click', () => {
             const group = b.parentElement;

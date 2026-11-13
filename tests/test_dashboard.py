@@ -558,6 +558,20 @@ def test_collect_summary_includes_kpis(monkeypatch):
     assert summary["exchange"] == exchange_label(global_config)
 
 
+def test_collect_summary_daily_pnl_breakdown(monkeypatch):
+    """Subtítulo do card "Realizado hoje": parcelas por tipo somam o total."""
+    monkeypatch.setattr(global_config, "SIMULATED_BALANCE_USD", 0.0, raising=False)
+    bot = _make_bot()
+    bot.exchange = SimpleNamespace(
+        get_daily_pnl_from_binance=lambda: {"total": 0.31, "realized_pnl": 0.35, "funding_fee": -0.02, "commission": -0.02},
+        get_account_info=lambda: {"wallet_balance": 120.0, "unrealized_pnl": 0.0},
+        get_open_positions=lambda: [],
+    )
+    summary = dashboard_data.collect_summary(bot)
+    assert summary["daily_pnl_breakdown"] == {"trades": 0.35, "funding": -0.02, "commission": -0.02}
+    assert sum(summary["daily_pnl_breakdown"].values()) == pytest.approx(summary["daily_pnl"])
+
+
 def test_collect_summary_uses_simulated_cap_in_testnet(monkeypatch):
     """Com SIMULATED_BALANCE_USD ativo, equity = cap + ACUMULADO + unrealized.
 
@@ -1088,11 +1102,11 @@ def test_live_and_pnl_report_expose_fx(_brt, monkeypatch):
 
 
 def test_js_formatters_treat_rounded_zero_as_neutral():
-    """fmt.usd/brl/pct/r e cls() derivam sinal/cor do valor ARREDONDADO: −0,001 vira "$0,00" sem sinal e sem classe."""
+    """fmt.money (USD/BRL)/pct/r e cls() derivam sinal/cor do valor ARREDONDADO: −0,001 vira "$0,00" sem sinal e sem classe."""
     js = open("trading_bot/web/static/js/main.js", encoding="utf-8").read()
     assert "const sgn = (v, d = 2) => Math.abs(v) < 0.5 * 10 ** -d ? 0 : Math.sign(v);" in js
-    assert "const s = sgn(v), sign = s < 0 ? '−' : (o.signed && s > 0 ? '+' : '');" in js
-    assert "(sgn(usd * r) < 0 ? '−' : '')" in js
+    assert "const s = sgn(v), sign = s < 0 ? '−' : (signed && s > 0 ? '+' : '');" in js
+    assert "const b = usd * fxRate(), s = sgn(b), sign = s < 0 ? '−' : (signed && s > 0 ? '+' : '')" in js
     assert "const z = sgn(v, d), s = z < 0 ? '−' : (signed && z > 0 ? '+' : '')" in js
     assert "const cls = (v) => { const z = sgn(v); return z > 0 ? 'pos' : z < 0 ? 'neg' : ''; };" in js
     assert "v < 0 ? '−'" not in js.split("const cls")[0].split("const fmt")[1]

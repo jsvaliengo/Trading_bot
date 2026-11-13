@@ -66,6 +66,8 @@ button { font:inherit; color:inherit; }
 .top-meta { margin-left:auto; font-size:12px; color:var(--text-muted); }
 .fx { display:inline-flex; align-items:center; gap:8px; font-size:12px; color:var(--text-dim); white-space:nowrap; }
 .fx b { font-family:'IBM Plex Mono',ui-monospace,monospace; font-weight:500; color:var(--text); }
+.fx-toggle { font:inherit; font-size:11px; padding:2px 8px; border-radius:999px; border:1px solid var(--border-strong); background:none; color:var(--text-dim); cursor:pointer; }
+.fx-toggle:hover { color:var(--text); border-color:var(--text-dim); }
 .fx-pill { font-size:11px; padding:2px 8px; border-radius:999px; background:var(--good-soft); color:var(--good); }
 /* equivalente em BRL embaixo do valor em USD (brlTag no main.js) */
 .brl { display:block; font-family:'IBM Plex Mono',ui-monospace,monospace; font-size:11px; font-weight:400; letter-spacing:0; color:var(--text-muted); line-height:1.3; }
