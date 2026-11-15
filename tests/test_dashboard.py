@@ -1140,3 +1140,20 @@ def test_snapshot_martingale_legs_carry_exit_marks_in_price(monkeypatch):
     assert short["tp_price"] == pytest.approx(0.17028) and short["breakeven_price"] == pytest.approx(0.171828)
     assert short["next_add_price"] == pytest.approx(0.17544)
     assert short["stop_price"] is None                           # LONG maior: subida não leva ao piso
+
+
+def test_max_drawdown_is_worst_floating_dd_since_reset(monkeypatch):
+    # Card "Drawdown do pico": pior (pico acumulado − equity), % sobre o pico, hora do fundo.
+    ts = [f"2026-11-14T0{i}:00:00+00:00" for i in range(5)]
+    pts = [{"timestamp": t, "equity": e} for t, e in zip(ts, [90, 95, 60, 80, 70])]
+    monkeypatch.setattr(global_config, "PNL_SINCE_UTC", "", raising=False)
+    out = dashboard_data.max_drawdown(pts)
+    assert out == {"usd": 35.0, "pct": pytest.approx(36.84, abs=0.01), "at": ts[2]}
+    assert dashboard_data.max_drawdown(pts[:2]) is None          # só subiu: sem drawdown
+    # piso do reset de banca: o pico de 95 (antes do reset) não conta
+    monkeypatch.setattr(global_config, "PNL_SINCE_UTC", "2026-11-14T03:00:00Z", raising=False)
+    assert dashboard_data.max_drawdown(pts) == {"usd": 10.0, "pct": 12.5, "at": ts[4]}
+    # a chave viaja no /api/history junto com a curva
+    assert "max_drawdown" in dashboard_data.collect_history(_make_bot())
+    html = open("trading_bot/web/templates/dashboard.html", encoding="utf-8").read()
+    assert 'id="st-dd-w"' in html

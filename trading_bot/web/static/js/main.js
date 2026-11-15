@@ -138,6 +138,8 @@
         const dd = ft.drawdown_pct, lim = ft.dd_limit_pct || 20;
         setTile('st-dd', fmt.pct(dd, 2, false), isNum(ft.dd_room_usd) ? `${fmt.money(ft.dd_room_usd)} de folga até ${lim}% (${fmt.money(ft.dd_floor_equity)})` : 'sem pico registrado',
             dd >= lim * 0.8 ? 'neg' : '');
+        const w = state.hist && state.hist.max_drawdown;   // pior drawdown flutuante desde o reset (histórico, 1×/min)
+        $('st-dd-w').textContent = w ? `pior: ${fmt.money(-w.usd, { signed: true })} (${fmt.pct(w.pct, 1, false)}) · ${fmt.dateTime(w.at)}` : 'pior: —';
         const max = e && e.params ? e.params.max_positions : null;
         const cap = e && e.params && isNum(eq) ? eq * (e.params.max_gross_mult || 3) : null;
         setTile('st-pos', max ? `${positions.length} / ${max}` : String(positions.length),
