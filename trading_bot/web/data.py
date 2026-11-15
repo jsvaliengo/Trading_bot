@@ -76,10 +76,12 @@ def collect_live(bot) -> Dict[str, Any]:
 def collect_history(bot) -> Dict[str, Any]:
     """O que muda só quando um trade fecha (pedido a cada minuto): trades,
     curva de equity e agregados do TradeStore."""
+    curve = _equity_curve(bot, limit=3000)   # 1 leitura: gráfico + pior drawdown
     return {
         "recent_trades": collect_recent_trades(bot, limit=300),
         "regime": collect_regime(bot),
-        "portfolio_history": collect_portfolio_history(bot, limit=3000),
+        "portfolio_history": downsample(curve, 600),
+        "max_drawdown": max_drawdown(curve),
         "daily_history": collect_daily_history(bot),
         "pnl_analysis": collect_pnl_analysis(bot),
         "pnl_by_symbol": collect_pnl_by_symbol(bot),
@@ -776,7 +778,31 @@ def _parse_ts(value: Any) -> Optional[datetime]:
 
 
 def collect_portfolio_history(bot, limit: int = 200) -> List[Dict[str, Any]]:
-    """Série de equity para o gráfico.
+    """Série de equity para o gráfico (≤ 600 pontos)."""
+    return downsample(_equity_curve(bot, limit), 600)
+
+
+def max_drawdown(points: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Pior drawdown flutuante da série de equity ({timestamp, equity}): maior
+    (pico acumulado − equity), `pct` sobre o pico, `at` = hora do fundo. Só pontos
+    após PNL_SINCE_UTC (reset de banca). None sem drawdown."""
+    since = pnl_since_ms()
+    peak = None
+    worst: Optional[Dict[str, Any]] = None
+    for p in points:
+        ts = _parse_ts(p.get("timestamp"))
+        if since and ts is not None and ts.timestamp() * 1000 < since:
+            continue
+        eq = _safe_float(p.get("equity"))
+        peak = eq if peak is None else max(peak, eq)
+        dd = peak - eq
+        if dd > 0 and (worst is None or dd > worst["usd"]):
+            worst = {"usd": round(dd, 2), "pct": round(dd / peak * 100, 2) if peak else 0.0, "at": p.get("timestamp")}
+    return worst
+
+
+def _equity_curve(bot, limit: int) -> List[Dict[str, Any]]:
+    """Série completa de equity ({timestamp, equity}), sem downsample.
 
     Equity de cada ponto = capital + realizado ACUMULADO até aquele instante +
     não-realizado do snapshot — derivado do MESMO realizado do SQLite que o card
@@ -827,7 +853,7 @@ def collect_portfolio_history(bot, limit: int = 200) -> List[Dict[str, Any]]:
         equity = effective_equity(config, wallet=balance, cumulative_realized=cum_realized, unrealized=unrealized)
         # só o que o gráfico usa: 600 pontos × 7 campos eram 127 KB por poll
         out.append({"timestamp": _iso(snap.get("timestamp")) or snap.get("timestamp"), "equity": round(equity, 4)})
-    return downsample(out, 600)
+    return out
 
 
 def downsample(points: List[Any], max_points: int) -> List[Any]:
