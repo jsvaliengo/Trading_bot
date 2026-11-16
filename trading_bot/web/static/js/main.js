@@ -407,11 +407,17 @@
             if (![avg, be, tp].every(isNum)) return '';
             const pnlAt = (p) => fmt.money((p - be) * l.quantity * (long ? 1 : -1), { signed: true });   // líquido: do empate (fees já descontadas)
             const marks = [[st, 'stop', 'Stop'], [nx, 'add', `Degrau ${l.level + 1}`], [be, 'entry', 'Empate'], [tp, 'tp', 'Alvo']].filter(m => isNum(m[0]));
-            const vals = marks.map(m => m[0]).concat(isNum(mk) ? [mk] : []);
-            let lo = Math.min(...vals), hi = Math.max(...vals); const pad = (hi - lo) * 0.08 || avg * 0.01; lo -= pad; hi += pad;
-            const pct = (v) => (v - lo) / (hi - lo) * 100, at = (v) => pct(v).toFixed(2) + '%';
-            const zone = (a, b, c) => `<div class="zone ${c}" style="left:${at(Math.min(a, b))};width:${(Math.abs(a - b) / (hi - lo) * 100).toFixed(2)}%"></div>`;
+            // Eixo: alvo → marco mais distante entre empate e degrau seguinte, + margem (maior de alvo→empate, 1 passo da escada).
+            // Stop/preço fora do eixo prendem na borda com seta em vez de esticar a escala (stop de portfólio pode estar a 6× do preço).
+            const far = isNum(nx) ? nx : be, margin = Math.max(Math.abs(tp - be), isNum(nx) ? Math.abs(avg - nx) : 0);
+            let lo = Math.min(tp, far), hi = Math.max(tp, far); if (long) lo -= margin; else hi += margin;
+            const pad = (hi - lo) * 0.08 || avg * 0.01; lo -= pad; hi += pad;
+            const clamp = (v) => Math.min(hi, Math.max(lo, v)), out = (v) => isNum(v) && (v < lo || v > hi) ? (v > hi ? 'r' : 'l') : '';
+            const pct = (v) => (clamp(v) - lo) / (hi - lo) * 100, at = (v) => pct(v).toFixed(2) + '%';
+            const zone = (a, b, c) => `<div class="zone ${c}" style="left:${at(Math.min(a, b))};width:${(Math.abs(clamp(a) - clamp(b)) / (hi - lo) * 100).toFixed(2)}%"></div>`;
             const worst = isNum(st) ? st : (long ? lo : hi);   // sem stop (hedge cobre): vermelho até a borda
+            const arrow = (v, txt) => out(v) === 'r' ? `${txt} →` : out(v) === 'l' ? `← ${txt}` : txt;
+            const edge = (v, txt) => out(v) ? `<span class="edge ${out(v)}">${arrow(v, txt)}</span>` : '';
             // Escala de ganho sobre o verde: mín (empate) → máx (alvo), preenchida até o preço quando ele está dentro.
             const z0 = Math.min(be, tp), z1 = Math.max(be, tp), zw = pct(z1) - pct(z0), inside = isNum(mk) && mk >= z0 && mk <= z1;
             const fillCut = inside ? (long ? `0 ${100 - (pct(mk) - pct(z0)) / zw * 100}% 0 0` : `0 0 0 ${(pct(mk) - pct(z0)) / zw * 100}%`) : '';
@@ -430,10 +436,11 @@
                 <div class="line"></div>${zone(worst, be, 'neg')}${zone(be, tp, '')}
                 ${marks.map(([v, c, n]) => `<span class="mk ${c}" style="left:${at(v)}" title="${n} ${fmt.price(v)} (${pnlAt(v)})"></span>`).join('')}
                 ${isNum(mk) ? `<span class="mk mark" style="left:${at(mk)}" title="preço ${fmt.price(mk)}"></span>` : ''}
+                ${isNum(st) ? edge(st, `Stop ${fmt.price(st)}`) : ''}${isNum(mk) && !(isNum(st) && out(st) === out(mk)) ? edge(mk, `preço ${fmt.price(mk)}`) : ''}
             </div>${gain}
             <div class="ruler-l">
-                ${marks.sort((a, b) => a[0] - b[0]).map(([v, , n]) => `<span>${n} <b>${fmt.price(v)}</b> <small>${pnlAt(v)}</small></span>`).join('')}
-                <span>preço <b>${fmt.price(mk)}</b></span>
+                ${marks.sort((a, b) => a[0] - b[0]).map(([v, , n]) => `<span>${arrow(v, n)} <b>${fmt.price(v)}</b> <small>${pnlAt(v)}</small></span>`).join('')}
+                <span>${arrow(mk, 'preço')} <b>${fmt.price(mk)}</b></span>
             </div>`;
         };
         const unreal = (positions || []).map(p => p.unrealized_pnl_usd).filter(isNum);
