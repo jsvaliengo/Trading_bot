@@ -236,6 +236,8 @@ details.card > :not(summary):first-of-type { margin-top:10px; }
 .ruler .mk.add { background:var(--warn); }
 .ruler .zone.neg { background:var(--bad); }
 .ruler .mk.mark { top:5px; width:12px; height:12px; border-radius:50%; background:var(--text); border:2px solid var(--bg-card); }
+.ruler .edge { position:absolute; top:-4px; font-size:10px; color:var(--text-muted); white-space:nowrap; background:var(--bg-card); padding:0 2px; }
+.ruler .edge.r { right:0; } .ruler .edge.l { left:0; }
 /* Escala de ganho no verde: barra gradiente (claro → forte no sentido do alvo), preenchida até o preço; rótulos mín/meio/máx. */
 .gain { position:relative; height:34px; margin:0 2px; }
 .gain .gbar { position:absolute; top:12px; height:6px; border-radius:3px; opacity:.3; background:linear-gradient(to right, color-mix(in srgb, var(--good) 35%, transparent), var(--good)); }
