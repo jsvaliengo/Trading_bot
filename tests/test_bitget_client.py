@@ -379,17 +379,56 @@ def test_income_history_fail_open_or_raise(conn):
 
 def test_account_trades_map_fills(conn):
     conn.http.routes[("GET", "/api/v2/mix/order/fills")] = {"code": "00000", "data": {"endId": "t1", "fillList": [
-        {"tradeId": "t2", "orderId": "o2", "price": "0.51", "baseVolume": "30", "profit": "0.3", "totalFee": "-0.01",
-         "side": "buy", "tradeSide": "close", "tradeScope": "taker", "cTime": "1700000200000", "feeCoin": "USDT"},
-        {"tradeId": "t1", "orderId": "o1", "price": "0.50", "baseVolume": "30", "profit": "0", "totalFee": "-0.01",
-         "side": "buy", "tradeSide": "open", "tradeScope": "maker", "cTime": "1700000100000", "feeCoin": "USDT"},
+        {"tradeId": "t2", "orderId": "o2", "price": "0.51", "baseVolume": "30", "profit": "0.3",
+         "feeDetail": [{"deduction": "no", "feeCoin": "USDT", "totalDeductionFee": "", "totalFee": "-0.01"}],
+         "side": "buy", "tradeSide": "close", "tradeScope": "taker", "cTime": "1700000200000"},
+        {"tradeId": "t1", "orderId": "o1", "price": "0.50", "baseVolume": "30", "profit": "0",
+         "feeDetail": [{"deduction": "no", "feeCoin": "USDT", "totalDeductionFee": "", "totalFee": "-0.006"},
+                       {"deduction": "yes", "feeCoin": "BGB", "totalDeductionFee": "0.1", "totalFee": "-0.004"}],
+         "side": "buy", "tradeSide": "open", "tradeScope": "maker", "cTime": "1700000100000"},
     ]}}
     rows = conn.get_account_trades("ADAUSDT", 1700000000000, 1700000300000)
     assert [r["id"] for r in rows] == ["t1", "t2"]
     assert rows[0]["side"] == "BUY" and rows[0]["positionSide"] == "LONG" and rows[0]["maker"] is True
+    assert rows[0]["commission"] == "0.01"  # soma das parcelas do feeDetail
     assert rows[1] == {"id": "t2", "orderId": "o2", "symbol": "ADAUSDT", "time": 1700000200000, "price": "0.51", "qty": "30",
                        "realizedPnl": "0.3", "commission": "0.01", "commissionAsset": "USDT", "side": "SELL",
                        "positionSide": "LONG", "maker": False}
+
+
+def test_account_trades_sem_fee_detail_fica_zero_sem_quebrar(conn):
+    conn.http.routes[("GET", "/api/v2/mix/order/fills")] = {"code": "00000", "data": {"endId": "t1", "fillList": [
+        {"tradeId": "t1", "orderId": "o1", "price": "0.50", "baseVolume": "30", "profit": "0",
+         "side": "buy", "tradeSide": "open", "cTime": "1700000100000"}]}}
+    rows = conn.get_account_trades("ADAUSDT", 1700000000000, 1700000300000)
+    assert rows[0]["commission"] == "0.0" and rows[0]["commissionAsset"] == "USDT"
+
+
+def test_reconciler_preenche_fees_do_trade_bitget_a_partir_dos_fills(conn):
+    """ADA 17/11/26: DB gravava fees=0 e pnl_net bruto; a taxa real (entrada + saída) vem do feeDetail."""
+    from types import SimpleNamespace
+    from trading_bot.services.pnl_reconciler import reconcile_recent_pnl
+
+    t0 = 1700000100000
+    conn.http.routes[("GET", "/api/v2/mix/order/fills")] = {"code": "00000", "data": {"endId": "1001", "fillList": [
+        {"tradeId": "1002", "orderId": "o2", "price": "0.1544", "baseVolume": "65", "profit": "0.0909",
+         "feeDetail": [{"feeCoin": "USDT", "totalFee": "-0.018"}],
+         "side": "buy", "tradeSide": "close", "tradeScope": "taker", "cTime": str(t0 + 60_000)},
+        {"tradeId": "1001", "orderId": "o1", "price": "0.1529", "baseVolume": "65", "profit": "0",
+         "feeDetail": [{"feeCoin": "USDT", "totalFee": "-0.018"}],
+         "side": "buy", "tradeSide": "open", "tradeScope": "taker", "cTime": str(t0)},
+    ]}}
+    conn.http.routes[("GET", "/api/v2/mix/account/bill")] = {"code": "00000", "data": {"bills": [], "endId": ""}}
+    iso = lambda ms: __import__("datetime").datetime.fromtimestamp(ms / 1000).isoformat()
+    trade = {"id": 1, "symbol": "ADAUSDT", "side": "LONG", "opened_at": iso(t0 + 2000), "exit_at": iso(t0 + 61_000),
+             "pnl_gross": 0.0975, "fees": 0.0, "funding": None, "pnl_net": 0.0975}
+    updates = []
+    store = SimpleNamespace(closed_trades_since=lambda lookback_hours=48.0: [dict(trade)],
+                            update_trade_pnl=lambda tid, **kw: updates.append(kw) or True)
+    res = reconcile_recent_pnl(SimpleNamespace(trade_store=store, exchange=conn))
+    assert res["corrected"] == 1
+    assert updates[0]["fees"] == pytest.approx(0.036)
+    assert updates[0]["pnl_net"] == pytest.approx(0.0909 - 0.036)
 
 
 def test_commission_and_funding_rate(conn):
