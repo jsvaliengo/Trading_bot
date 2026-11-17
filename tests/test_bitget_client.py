@@ -2,6 +2,7 @@
 posições em hedge, ordens LONG/SHORT abrir e fechar, symbol_info, candles, bills e fills."""
 
 import base64
+import datetime
 import hashlib
 import hmac
 import json
@@ -419,7 +420,8 @@ def test_reconciler_preenche_fees_do_trade_bitget_a_partir_dos_fills(conn):
          "side": "buy", "tradeSide": "open", "tradeScope": "taker", "cTime": str(t0)},
     ]}}
     conn.http.routes[("GET", "/api/v2/mix/account/bill")] = {"code": "00000", "data": {"bills": [], "endId": ""}}
-    iso = lambda ms: __import__("datetime").datetime.fromtimestamp(ms / 1000).isoformat()
+    def iso(ms):
+        return datetime.datetime.fromtimestamp(ms / 1000).isoformat()
     trade = {"id": 1, "symbol": "ADAUSDT", "side": "LONG", "opened_at": iso(t0 + 2000), "exit_at": iso(t0 + 61_000),
              "pnl_gross": 0.0975, "fees": 0.0, "funding": None, "pnl_net": 0.0975}
     updates = []
