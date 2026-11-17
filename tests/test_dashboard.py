@@ -1119,7 +1119,7 @@ def test_index_has_cointech2u_sheet_card_and_hidden_cards():
     client = app.test_client()
     _login(client)
     html = client.get("/").data.decode()
-    assert 'id="sheet-card" hidden' in html and "Planilha — Binance Estratégia Padrão" in html and "CoinTech2u" not in html
+    assert 'id="sheet-card" hidden' in html and "Planilha — Estratégia Padrão" in html and "CoinTech2u" not in html
     assert 'id="eng-card"' in html and 'id="trades-card"' in html
     for i in ("tile-last-bar", "tile-next-bar", "rdist-card", "cal-sub"):
         assert f'id="{i}"' in html
