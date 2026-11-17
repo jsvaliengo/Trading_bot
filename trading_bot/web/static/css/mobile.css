@@ -42,7 +42,7 @@
     .tl, .tf, .cs, .brl, .legend, .badge, .env, .fx-pill, .fx-toggle, .side, .track-f, .empty,
     .kv thead th, .table thead th, .table td small, .pnl-wins small, .pr-pnl small, .pr-r small,
     .hlist .hv small, .ruler-l, .pg-info, .btn-xs, .sheet-coins .side, .pnl-cal .wd, .pnl-cal .day small, small, .ci-plot text,
-    .kv, .kvl, .table, .hlist li, .tr-stats, .filters, .chip, .pnl-lines summary, .pnl-assets, .pnl-pct { font-size:13px; }
+    .kv, .kvl, .table, .hlist li, .tr-stats, .filters, .chip, .pnl-pct { font-size:13px; }
 
     /* Tiles de resumo: 2 colunas, rótulo pode quebrar. */
     .status { grid-template-columns:repeat(2, minmax(0,1fr)); }
@@ -78,16 +78,15 @@
     /* Gráficos com altura fixa (maintainAspectRatio:false no main.js). */
     .cv-eq { height:180px; } .cv-dd { height:60px; } .cv-r { height:180px; } .cv-pnl { height:180px; }
 
-    /* Ganhos e Perdas de Futuros. */
+    /* Análise do P&L de futuros. */
     .pnl-today .tv { font-size:24px; }
-    .pnl-wins { grid-template-columns:repeat(2, minmax(0,1fr)); gap:10px; }
+    .pnl-wins { grid-template-columns:repeat(2, minmax(0,1fr)); gap:10px; } .pnl-wins.pnl-two { grid-template-columns:1fr 1fr; }
     .pnl-wins div { flex-direction:column; align-items:flex-start; gap:0; }
     .pnl-wins b { font-size:15px; }
     .pnl-period { gap:8px; }
     .pnl-period .chips, .pnl-tabs { display:flex; flex-wrap:nowrap; overflow-x:auto; max-width:100%; -webkit-overflow-scrolling:touch; scrollbar-width:none; }
     .pnl-period .chips::-webkit-scrollbar, .pnl-tabs::-webkit-scrollbar { display:none; }
     .pnl-period .chip, .pnl-tabs .chip { flex:none; }
-    .pnl-lines summary { gap:4px 14px; }
     .pnl-cal { gap:2px; }
     .pnl-cal .day { min-height:38px; padding:3px 1px; }
     .pnl-cal .day b { font-size:12px; letter-spacing:-.03em; }
