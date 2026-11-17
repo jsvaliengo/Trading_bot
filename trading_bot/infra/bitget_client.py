@@ -559,10 +559,13 @@ class BitgetConnection:
             # hedge: side = direção da posição; tradeSide open/close diz se comprou ou vendeu de fato
             pos_side = "LONG" if str(r.get("side", "")).lower() == "buy" else "SHORT"
             closing = "close" in str(r.get("tradeSide", ""))
+            # A taxa vem em feeDetail[{feeCoin, totalFee}], não no topo do fill (fees=0 no DB, 17/11/26)
+            fee_det = r.get("feeDetail") or [r]
             out.append({"id": r.get("tradeId"), "orderId": r.get("orderId"), "symbol": symbol,
                         "time": int(r.get("cTime") or 0), "price": r.get("price"), "qty": r.get("baseVolume"),
-                        "realizedPnl": r.get("profit") or "0", "commission": str(abs(_f(r.get("totalFee")))),
-                        "commissionAsset": r.get("feeCoin", "USDT"),
+                        "realizedPnl": r.get("profit") or "0",
+                        "commission": str(abs(sum(_f(d.get("totalFee")) for d in fee_det))),
+                        "commissionAsset": fee_det[0].get("feeCoin") or "USDT",
                         "side": ("SELL" if closing else "BUY") if pos_side == "LONG" else ("BUY" if closing else "SELL"),
                         "positionSide": pos_side, "maker": r.get("tradeScope") == "maker"})
         return out
