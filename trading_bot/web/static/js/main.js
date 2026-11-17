@@ -453,7 +453,7 @@
             <div class="prow-top">
                 <span class="psym"><button type="button" class="sym-btn" data-chart="${esc(l.symbol)}">${esc(l.symbol)}</button> <span class="side ${l.side === 'LONG' ? 'l' : 's'}">${esc(l.side)}</span>${draining.has(l.symbol) ? ' <span class="badge warn">drenando</span>' : ''}</span>
                 <span class="pr-pnl ${cls(l.unrealized_pnl_usd)}">${fmt.money(l.unrealized_pnl_usd, { signed: true })}${pos ? `<small>${fmt.pct(pos.unrealized_pnl_percent)}</small>` : ''}</span>
-                <span class="pr-r">${l.level}/${l.max_levels}<small>nível</small></span>
+                <span class="pr-r">${l.level} de ${l.max_levels}<small>ordens</small></span>
                 <span class="pr-meta">${isNum(l.quantity) ? `${fmt.price(l.quantity)} un · ${fmt.money(l.notional)}` : 'sem posição'}${age != null ? ` · ${fmt.dur(age)}` : ''}</span>
                 <span class="pr-meta">média <b>${fmt.price(l.avg_price)}</b></span>
                 ${pos ? closeCell(pos) : ''}
