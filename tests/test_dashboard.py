@@ -786,7 +786,7 @@ def test_collect_forward_test_donchian_mantem_filtro_de_estrategia_e_janela(monk
     assert out["start"] == "2026-10-24T23:43:07+00:00"
 
 
-# ---------- /api/pnl_report: aba "Ganhos e Perdas de Futuros" ----------
+# ---------- /api/pnl_report: card "Análise do P&L de futuros" (réplica da Bitget) ----------
 
 
 _PNL_ROWS = [
@@ -826,7 +826,8 @@ def test_pnl_report_aggregates_period_in_trading_day(_brt):
     assert [(c["day"], c["value"]) for c in out["cumulative"]] == [("2026-11-02", 2.0), ("2026-11-05", -2.0)]
     assert [(s["symbol"], s["net"], s["trades"], s["win_rate"]) for s in out["by_symbol"]] == [("ETHUSDT", -4.0, 1, 0.0), ("ADAUSDT", 2.0, 2, 50.0)]
     assert [tr["symbol"] for tr in out["trades"]] == ["ETHUSDT", "ADAUSDT", "ADAUSDT"]  # saída desc
-    assert out["windows"]["all"]["usd"] == 8.0
+    # Análise de trading: N lucro / N perda, long : short, índice de P&L = 3 / |−5|
+    assert (t["losses"], t["long"], t["short"]) == (2, 2, 1) and t["profit_factor"] == pytest.approx(0.6)
 
 
 def test_pnl_report_without_exchange_or_store_is_empty_but_ok(_brt):
@@ -835,7 +836,8 @@ def test_pnl_report_without_exchange_or_store_is_empty_but_ok(_brt):
     out = build_report(SimpleNamespace(), None, None)
     assert out["totals"]["trades"] == 0 and out["daily"] == [] and out["trades"] == []
     assert out["income"] == [] and out["income_ok"] is False
-    assert out["reference"] == {"BTCUSDT": [], "BNBUSDT": []} and out["assets"]["ok"] is False
+    assert out["reference"] == {"BTCUSDT": []} and out["account"]["ok"] is False
+    assert out["series"] == [] and out["funding_daily"] == [] and out["totals"]["profit_factor"] is None
     assert out["from"] <= out["to"] == out["today"]
 
 
@@ -845,31 +847,39 @@ def test_pnl_report_income_failure_keeps_page_alive(_brt):
     def boom(**kw):
         raise RuntimeError("binance down")
 
-    ex = SimpleNamespace(get_income_history=boom, get_account_info=lambda: {"wallet_balance": 55.5}, market_client=None)
+    ex = SimpleNamespace(get_income_history=boom, get_account_info=lambda: {"wallet_balance": 55.5, "unrealized_pnl": -1.25})
     out = build_report(_pnl_bot(ex), "2026-11-01", "2026-11-07")
     assert out["income_ok"] is False and out["income"] == []
-    assert out["assets"] == {"ok": True, "items": [{"asset": "USDT", "balance": 55.5}], "total": 55.5}
+    assert out["account"] == {"ok": True, "equity": 54.25, "unrealized": -1.25}  # saldo = wallet + não realizado
 
 
 def test_pnl_report_income_and_reference_from_binance(_brt):
     from trading_bot.web import pnl_report
 
-    pnl_report._ref_cache.update(key=None)
+    pnl_report._memo.clear()
     income = [
         {"time": 1793664000000, "incomeType": "FUNDING_FEE", "symbol": "ADAUSDT", "income": "-0.01"},  # 03/11 00:00 UTC
         {"time": 1793664000000, "incomeType": "COMMISSION", "symbol": "ADAUSDT", "income": "-0.2"},
         {"time": 1700000000000, "incomeType": "TRANSFER", "symbol": "", "income": "100"},  # fora da janela
     ]
-    klines = [[1793491200000, 0, 0, 0, "100", 0], [1793577600000, 0, 0, 0, "110", 0]]
+    # 31/10 fica fora do período (o 1º dia dentro é a base do %); a vela aberta de hoje entra como qualquer outra
+    klines = [[1793404800000, 0, 0, 0, "90", 0], [1793491200000, 0, 0, 0, "100", 0], [1793577600000, 0, 0, 0, "110", 0]]
+    calls = []
     ex = SimpleNamespace(
         get_income_history=lambda **kw: income,
         get_account_info=lambda: {"wallet_balance": 10.0},
-        market_client=SimpleNamespace(futures_klines=lambda **kw: klines),
+        get_klines_raw=lambda sym, interval, limit: calls.append((sym, interval, limit)) or klines,
     )
     out = pnl_report.build_report(_pnl_bot(ex), "2026-11-01", "2026-11-07")
     assert out["income_ok"] is True and len(out["income"]) == 2
     assert out["income_totals"] == {"REALIZED_PNL": 0.0, "COMMISSION": -0.2, "FUNDING_FEE": -0.01, "TRANSFER": 0.0}
-    assert [r["pct"] for r in out["reference"]["BTCUSDT"]] == [0.0, 10.0]
+    assert calls == [("BTCUSDT", "1d", 8)]
+    assert [(r["day"], r["pct"]) for r in out["reference"]["BTCUSDT"]] == [("2026-11-01", 0.0), ("2026-11-02", 10.0)]
+    # funding por dia de trading (BRT): 03/11 00:00 UTC = 02/11 21:00 BRT
+    assert out["funding_daily"] == [{"day": "2026-11-02", "amount": -0.01}]
+    # cache de 30-60s: a mesma exchange no mesmo período não bate de novo na API
+    pnl_report.build_report(_pnl_bot(ex), "2026-11-01", "2026-11-07")
+    assert len(calls) == 1
 
 
 def test_pnl_report_income_floors_on_pnl_since(_brt, monkeypatch):
@@ -887,11 +897,39 @@ def test_pnl_report_income_floors_on_pnl_since(_brt, monkeypatch):
         seen.append(kw["start_time"])
         return [i for i in income if i["time"] >= kw["start_time"]]
 
-    ex = SimpleNamespace(get_income_history=fake_income, get_account_info=lambda: {}, market_client=None)
+    ex = SimpleNamespace(get_income_history=fake_income, get_account_info=lambda: {})
     out = build_report(_pnl_bot(ex), "2026-11-01", "2026-11-07")
     assert seen == [1793707200000]
     assert [i["symbol"] for i in out["income"]] == ["BNBUSDT"]
     assert out["income_totals"]["REALIZED_PNL"] == 1.5
+
+
+def test_pnl_report_series_last_snapshot_per_trading_day(_brt):
+    # "P&L total" / "Tendência de ativos": 1 ponto por dia de trading = último snapshot do dia,
+    # equity = wallet + não realizado (sem cap simulado), realizado acumulado só entra no testnet simulado.
+    from trading_bot.web.pnl_report import build_report
+
+    snaps = [
+        {"timestamp": "2026-11-02T10:00:00+00:00", "balance": 100.0, "pnl_unrealized": 1.0},
+        {"timestamp": "2026-11-02T23:00:00+00:00", "balance": 103.0, "pnl_unrealized": -0.5},   # 20:00 BRT: ainda 02/11, vence
+        {"timestamp": "2026-11-03T02:59:00+00:00", "balance": 104.0, "pnl_unrealized": 0.25},   # 23:59 BRT de 02/11 → vence
+        {"timestamp": "2026-11-05T12:00:00+00:00", "balance": 99.0, "pnl_unrealized": 0.0},
+        {"timestamp": "2026-10-20T12:00:00+00:00", "balance": 50.0, "pnl_unrealized": 0.0},     # fora do período
+    ]
+    asked = []
+    store = SimpleNamespace(closed_trades=lambda strategy_type=None, limit=2000: [dict(r) for r in _PNL_ROWS],
+                            recent_equity=lambda limit: asked.append(limit) or snaps)
+    out = build_report(SimpleNamespace(trade_store=store, initial_capital=100.0), "2026-11-01", "2026-11-07")
+    assert out["series"] == [{"day": "2026-11-02", "equity": 104.25, "unrealized": 0.25}, {"day": "2026-11-05", "equity": 99.0, "unrealized": 0.0}]
+    assert asked == [(7 + 2) * 144]
+
+
+def test_profit_factor_pure():
+    from trading_bot.web.pnl_report import profit_factor
+
+    assert profit_factor([3.0, -1.0, -4.0]) == pytest.approx(0.6)
+    assert profit_factor([3.0, 2.0]) is None and profit_factor([]) is None
+    assert profit_factor([-2.0]) == 0.0
 
 
 def test_pnl_report_route_requires_auth_and_ignores_bad_dates(_brt):
@@ -905,8 +943,8 @@ def test_pnl_report_route_requires_auth_and_ignores_bad_dates(_brt):
     r = client.get("/api/pnl_report?from=lixo&to=2026-11-07", headers=_basic_auth("admin", "secret"))
     assert r.status_code == 200
     body = r.get_json()
-    assert body["to"] == "2026-11-07" and body["from"] == "2026-11-01"
-    assert body["totals"]["trades"] == 3
+    assert body["to"] == "2026-11-07" and body["from"] == "2026-10-09"  # default 30d
+    assert body["totals"]["trades"] == 4  # 30d pega o trade de 20/10 também
 
 
 def test_pnl_report_days_preset_anchors_on_bot_trading_day(_brt):
@@ -914,7 +952,7 @@ def test_pnl_report_days_preset_anchors_on_bot_trading_day(_brt):
 
     out = build_report(_pnl_bot(), None, None, days="30")
     assert out["to"] == out["today"] and out["from"] == (__import__("datetime").date.fromisoformat(out["today"]) - __import__("datetime").timedelta(days=29)).isoformat()
-    assert build_report(_pnl_bot(), None, None, days="lixo")["from"] == (__import__("datetime").date.fromisoformat(out["today"]) - __import__("datetime").timedelta(days=6)).isoformat()
+    assert build_report(_pnl_bot(), None, None, days="lixo")["from"] == out["from"]  # default 30d
 
 
 # ---------- cotação USD/BRL (trading_bot/web/fx.py) ----------

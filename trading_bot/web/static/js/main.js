@@ -700,12 +700,12 @@
             || '<tr><td colspan="4" class="empty">sem trades fechados</td></tr>';
     }
 
-    // ───────── Ganhos e Perdas de Futuros (/api/pnl_report) ─────────
+    // ───────── Análise do P&L de futuros, réplica da tela da Bitget (/api/pnl_report) ─────────
     const PNL_PAGE = 20;
     const dayStr = (d) => d.toISOString().slice(0, 10);
     const addDays = (iso, n) => { const d = new Date(iso + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return dayStr(d); };
     const dayRange = (from, to) => { const out = []; for (let d = from; d <= to; d = addDays(d, 1)) out.push(d); return out; };
-    const pnlState = { days: 7, from: null, to: null, tab: 'overview', mode: 'calendar', month: null, page: 1, symDir: -1 };
+    const pnlState = { days: 30, from: null, to: null, tab: 'account', month: null, page: 1, symDir: -1 };
     // presets mandam só `days`: o servidor ancora no dia de trading dele (BRT), não na data do navegador
     const pnlQuery = () => pnlState.days === 'custom' ? (pnlState.from && pnlState.to ? `?from=${pnlState.from}&to=${pnlState.to}` : '') : `?days=${pnlState.days}`;
     async function fetchPnl() {
@@ -718,52 +718,66 @@
     }
     function pctTxt(w) { return isNum(w && w.pct) ? fmt.pct(w.pct) : '—'; }
     function renderPnl(p) {
-        const t = p.totals || {};
+        const t = p.totals || {}, w = p.windows || {}, a = p.account || {};
         $('pnl-sub').textContent = `${fmt.day(p.from)} → ${fmt.day(p.to)} · ${t.trades || 0} trade(s) · dia de trading ${fmt.tzLabel()}`;
-        const td = p.today_pnl || {};
-        const tv = $('pnl-today-usd'); tv.innerHTML = fmt.money(td.usd, { signed: true }) + brlTag(td.usd); tv.className = 'tv ' + cls(td.usd);
-        const tp = $('pnl-today-pct'); tp.textContent = pctTxt(td); tp.className = 'pnl-pct ' + cls(td.usd);
-        const w = p.windows || {};
-        [['7d', w.d7], ['30d', w.d30]].forEach(([k, v]) => { const b = $(`pnl-${k}-usd`); b.innerHTML = fmt.money(v && v.usd, { signed: true }) + brlTag(v && v.usd); b.className = cls(v && v.usd); const s = $(`pnl-${k}-pct`); s.textContent = pctTxt(v); s.className = cls(v && v.usd); });
-        const all = $('pnl-all-usd'); all.innerHTML = fmt.money(w.all && w.all.usd, { signed: true }) + brlTag(w.all && w.all.usd); all.className = cls(w.all && w.all.usd);
-        $('pnl-profit').innerHTML = fmt.money(t.profit, { signed: true }) + brlTag(t.profit);
-        $('pnl-loss').innerHTML = fmt.money(t.loss, { signed: true }) + brlTag(t.loss);
-        const net = $('pnl-net'); net.innerHTML = fmt.money(t.net, { signed: true }) + (isNum(t.pct) ? ` (${fmt.pct(t.pct)})` : '') + brlTag(t.net); net.className = cls(t.net);
-        $('pnl-more').innerHTML = [
-            ['Trades', String(t.trades || 0)], ['Win rate', fmt.pct(t.win_rate, 0, false)],
-            ['Taxas', fmt.money(-(t.fees || 0), { signed: true })], ['Funding', fmt.money(t.funding, { signed: true })],
-            ['Maior ganho', fmt.money(t.best, { signed: true })], ['Maior perda', fmt.money(t.worst, { signed: true })],
-            ['Equity no início do período', fmt.money(t.start_equity)], ['Fórmula do %', 'P&L ÷ (capital + realizado antes do período)'],
-        ].map(([k, v]) => `<div><dt>${k}</dt><dd>${esc(v)}</dd></div>`).join('');
+        // Análise da conta: saldo + hoje/7d/30d
+        $('pnl-equity').textContent = a.ok ? fmt.money(a.equity) : '—';
+        $('pnl-equity-alt').textContent = a.ok ? fmt.moneyAlt(a.equity) : `saldo indisponível (${exchangeName()} não respondeu)`;
+        [['today', p.today_pnl], ['7d', w.d7], ['30d', w.d30]].forEach(([k, v]) => {
+            const usd = v && v.usd, b = $(`pnl-${k}-usd`); b.innerHTML = fmt.money(usd, { signed: true }) + brlTag(usd); b.className = cls(usd);
+            const sm = $(`pnl-${k}-pct`); sm.textContent = pctTxt(v); sm.className = cls(usd);
+        });
+        // Análise de trading: realizado + taxa de ganho + extremos + lista
+        const real = $('pnl-real-usd'); real.textContent = fmt.money(t.net, { signed: true }); real.className = 'tv ' + cls(t.net);
+        $('pnl-real-alt').textContent = fmt.moneyAlt(t.net);
+        $('pnl-win-rate').textContent = fmt.pct(t.win_rate, 2, false);
+        $('pnl-best').textContent = fmt.money(t.best, { signed: true }); $('pnl-worst').textContent = fmt.money(t.worst, { signed: true });
+        const it = p.income_totals || {}, fees = p.income_ok ? it.COMMISSION : -(t.fees || 0), funding = p.income_ok ? it.FUNDING_FEE : t.funding;
+        $('pnl-stats').innerHTML = [
+            ['Número de trades encerrados', `${t.trades || 0} <small class="dim">(<span class="pos">${t.wins || 0} lucro</span> / <span class="neg">${t.losses || 0} perda</span>)</small>`],
+            ['Índice long/short', `${t.long || 0} : ${t.short || 0}`],
+            ['Índice de P&L', isNum(t.profit_factor) ? fmt.num(t.profit_factor) : '—'],
+            ['Taxa de transação', `<span class="${cls(fees)}">${fmt.money(fees, { signed: true })}</span>`],
+            ['Taxa de financiamento', `<span class="${cls(funding)}">${fmt.money(funding, { signed: true })}</span>`],
+        ].map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join('');
         if (pnlState.days === 'custom') { $('pnl-from').value = p.from; $('pnl-to').value = p.to; }
         if (!pnlState.month || pnlState.month < p.from.slice(0, 7) || pnlState.month > p.to.slice(0, 7)) pnlState.month = p.to.slice(0, 7);
-        renderPnlCalendar(p); renderPnlBars(p); renderPnlCum(p); renderPnlPct(p); renderPnlAssets(p);
+        renderPnlCalendar(p); renderPnlTotal(p); renderPnlRoi(p); renderPnlEquity(p);
+        renderPnlBars(p); renderPnlFunding(p);
         renderPnlTrades(p); renderPnlSymbols(p); renderPnlIncome(p);
     }
     function renderPnlCalendar(p) {
         const byDay = new Map((p.daily || []).map(d => [d.day, d]));
         const [y, m] = pnlState.month.split('-').map(Number);
-        $('pnl-cal-month').textContent = pnlState.month;
+        $('pnl-cal-month').textContent = new Date(Date.UTC(y, m - 1, 1)).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric', timeZone: 'UTC' });
         $('pnl-cal-prev').disabled = pnlState.month <= p.from.slice(0, 7); $('pnl-cal-next').disabled = pnlState.month >= p.to.slice(0, 7);
+        $('pnl-cal-sub').textContent = `realizado + funding − taxas · dia ${fmt.tzLabel()}`;
         const first = new Date(Date.UTC(y, m - 1, 1)), nDays = new Date(Date.UTC(y, m, 0)).getUTCDate();
-        let html = ['D', 'S', 'T', 'Q', 'Q', 'S', 'S'].map(d => `<span class="wd">${d}</span>`).join('') + '<i></i>'.repeat(first.getUTCDay());
+        let html = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'].map(d => `<span class="wd">${d}</span>`).join('') + '<i></i>'.repeat(first.getUTCDay());
         for (let d = 1; d <= nDays; d++) {
             const key = `${pnlState.month}-${String(d).padStart(2, '0')}`, v = byDay.get(key);
-            const out = key < p.from || key > p.to, future = key > p.today;
+            const out = key < p.from || key > p.to, future = key > p.today, today = key === p.today;
             const c = v ? (cls(v.net) || 'zero') : (out || future ? 'off' : 'zero');
-            html += `<span class="day ${c}" role="gridcell" title="${fmt.day(key)}${v ? `: ${fmt.money(v.net, { signed: true })} em ${v.trades} trade(s)` : ''}"><small>${d}</small>${v ? `<b>${fmt.money(v.net, { signed: true })}</b>` : (out || future ? '' : '<b>0</b>')}</span>`;
+            html += `<span class="day ${c}${today ? ' today' : ''}" role="gridcell" title="${fmt.day(key)}${v ? `: ${fmt.money(v.net, { signed: true })} em ${v.trades} trade(s)` : ''}"><small>${today ? 'Hoje' : d}</small>${v ? `<b>${fmt.money(v.net, { signed: true })}</b>` : (out || future ? '' : '<b>0,00</b>')}</span>`;
         }
         $('pnl-cal').innerHTML = html;
     }
     function pnlBase(p, id) { const pal = palette(); return { pal, el: $(id), ok: !!$(id) && typeof Chart !== 'undefined', days: dayRange(p.from, p.to) }; }
-    function renderPnlBars(p) {
-        const { pal, el, ok, days } = pnlBase(p, 'pnl-bars-chart'); if (!ok) return;
-        const byDay = new Map((p.daily || []).map(d => [d.day, d.net]));
+    // barras por dia (verde ≥ 0, vermelha < 0), reaproveitadas pelo realizado diário e pelo funding diário
+    function pnlBars(p, key, id, byDay) {
+        const { pal, el, ok, days } = pnlBase(p, id); if (!ok) return;
         const data = days.map(d => byDay.get(d) ?? 0), colors = data.map(v => v < 0 ? pal.bad : pal.good);
-        if (charts.pnlBars) { charts.pnlBars.data.labels = days; charts.pnlBars.data.datasets[0].data = data; charts.pnlBars.data.datasets[0].backgroundColor = colors; charts.pnlBars.update('none'); return; }
-        charts.pnlBars = new Chart(el, { type: 'bar', data: { labels: days, datasets: [{ data, backgroundColor: colors, borderRadius: 3, maxBarThickness: 28 }] },
+        if (charts[key]) { charts[key].data.labels = days; charts[key].data.datasets[0].data = data; charts[key].data.datasets[0].backgroundColor = colors; charts[key].update('none'); return; }
+        charts[key] = new Chart(el, { type: 'bar', data: { labels: days, datasets: [{ data, backgroundColor: colors, borderRadius: 3, maxBarThickness: 28 }] },
             options: { responsive: true, maintainAspectRatio: false, animation: false, plugins: { legend: { display: false }, tooltip: { ...baseTooltip(pal), callbacks: { title: (it) => fmt.day(it[0].label), label: (it) => fmt.money(it.parsed.y, { signed: true }) } } },
                 scales: { x: { ticks: { color: pal.mut, font: tickFont, maxTicksLimit: 8, callback: mmdd }, grid: { display: false } }, y: { ticks: { color: pal.mut, font: tickFont, maxTicksLimit: 5, callback: v => fmt.money(v, { signed: true }) }, grid: { color: pal.grid } } } } });
+    }
+    function renderPnlBars(p) { pnlBars(p, 'pnlBars', 'pnl-bars-chart', new Map((p.daily || []).map(d => [d.day, d.net]))); }
+    function renderPnlFunding(p) {
+        // income da exchange por dia; sem income, o funding atribuído a cada trade fechado (pelo dia da saída)
+        const src = p.income_ok ? p.funding_daily : (p.daily || []).map(d => ({ day: d.day, amount: d.funding }));
+        $('pnl-funding-sub').textContent = p.income_ok ? `income da ${exchangeName()}` : 'funding dos trades fechados (income indisponível)';
+        pnlBars(p, 'pnlFunding', 'pnl-funding-chart', new Map((src || []).map(d => [d.day, d.amount])));
     }
     // rótulo do eixo x lido da escala (não de um array fechado na criação: o período muda e os labels crescem)
     function mmdd(v) { return String(this.getLabelForValue(v)).slice(5); }
@@ -772,38 +786,41 @@
             plugins: { legend: { display: false }, tooltip: { ...baseTooltip(pal), displayColors: true, callbacks: { title: (it) => fmt.day(it[0].label), label: (it) => `${it.dataset.label || ''} ${fmtY(it.parsed.y)}`.trim() } } },
             scales: { x: { ticks: { color: pal.mut, font: tickFont, maxTicksLimit: 6, callback: mmdd }, grid: { display: false } }, y: { position: 'right', ticks: { color: pal.mut, font: tickFont, maxTicksLimit: 5, callback: fmtY }, grid: { color: pal.grid } } } };
     }
-    function renderPnlCum(p) {
-        const { pal, el, ok, days } = pnlBase(p, 'pnl-cum-chart'); if (!ok) return;
-        const byDay = new Map((p.cumulative || []).map(c => [c.day, c.value]));
-        let last = 0; const data = days.map(d => { if (byDay.has(d)) last = byDay.get(d); return last; });
-        const v = $('pnl-cum-val'); v.textContent = fmt.money(last, { signed: true }) + ` em ${fmt.day(p.to)}`; v.className = 'pnl-val ' + cls(last);
-        const ds = { data, borderColor: last < 0 ? pal.bad : pal.good, backgroundColor: hexa(last < 0 ? pal.bad : pal.good, 0.12), fill: true, borderWidth: 2, pointRadius: 0, tension: 0.2 };
-        if (charts.pnlCum) { charts.pnlCum.data.labels = days; charts.pnlCum.data.datasets = [ds]; charts.pnlCum.update('none'); return; }
-        charts.pnlCum = new Chart(el, { type: 'line', data: { labels: days, datasets: [ds] }, options: lineOpts(pal, v2 => fmt.money(v2, { signed: true })) });
+    // série por dia com o último valor carregado pra frente (dia sem trade/snapshot repete o anterior)
+    const carry = (days, map, init = null) => { let last = init; return days.map(d => { if (map.has(d)) last = map.get(d); return last; }); };
+    const lastOf = (a) => { for (let i = a.length - 1; i >= 0; i--) if (isNum(a[i])) return a[i]; return null; };
+    const lineDs = (label, data, color, w = 1.5) => ({ label, data, borderColor: color, borderWidth: w, pointRadius: 0, tension: 0.2, spanGaps: true });
+    function pnlLines(p, key, id, dss, fmtY) {
+        const { pal, el, ok, days } = pnlBase(p, id); if (!ok) return;
+        if (charts[key]) { charts[key].data.labels = days; charts[key].data.datasets = dss; charts[key].update('none'); return; }
+        charts[key] = new Chart(el, { type: 'line', data: { labels: days, datasets: dss }, options: lineOpts(pal, fmtY) });
     }
-    function renderPnlPct(p) {
-        const { pal, el, ok, days } = pnlBase(p, 'pnl-pct-chart'); if (!ok) return;
-        const eq = p.totals && p.totals.start_equity;
-        const byDay = new Map((p.cumulative || []).map(c => [c.day, c.value]));
-        let last = 0; const bot = days.map(d => { if (byDay.has(d)) last = byDay.get(d); return eq > 0 ? last / eq * 100 : null; });
-        const ref = (sym) => { const m = new Map(((p.reference || {})[sym] || []).map(r => [r.day, r.pct])); let l = null; return days.map(d => { if (m.has(d)) l = m.get(d); return l; }); };
-        const series = [['Bot', bot, pal.warn], ['BTCUSDT PERP', ref('BTCUSDT'), pal.ac], ['BNBUSDT PERP', ref('BNBUSDT'), hexa(pal.ac, 0.55)]];
-        const dss = series.map(([label, data, color]) => ({ label, data, borderColor: color, borderWidth: label === 'Bot' ? 2 : 1.5, pointRadius: 0, tension: 0.2, spanGaps: true }));
-        const lastOf = (a) => { for (let i = a.length - 1; i >= 0; i--) if (isNum(a[i])) return a[i]; return null; };
-        $('pnl-pct-legend').innerHTML = series.map(([label, data, color]) => `<i class="sw" style="background:${color}"></i>${label === 'Bot' ? '% de G&amp;P Cum.' : `% de Preço de Referência de ${label} Cum.`} <b class="${cls(lastOf(data))}">${fmt.pct(lastOf(data))}</b>`).join('');
-        if (charts.pnlPct) { charts.pnlPct.data.labels = days; charts.pnlPct.data.datasets = dss; charts.pnlPct.update('none'); return; }
-        charts.pnlPct = new Chart(el, { type: 'line', data: { labels: days, datasets: dss }, options: lineOpts(pal, v => fmt.pct(v)) });
+    function renderPnlTotal(p) {
+        const pal = palette(), days = dayRange(p.from, p.to);
+        const realized = carry(days, new Map((p.cumulative || []).map(c => [c.day, c.value])), 0);
+        const unreal = carry(days, new Map((p.series || []).map(s => [s.day, s.unrealized])));
+        const total = days.map((d, i) => isNum(unreal[i]) ? realized[i] + unreal[i] : null);
+        // hoje: o não realizado ao vivo da conta vale mais que o último snapshot (até 10 min atrás)
+        const liveUnreal = p.account && p.account.ok ? p.account.unrealized : lastOf(unreal);
+        const series = [['P&L total', total, pal.warn, 2], ['P&L realizado', realized, pal.good], ['P&L não realizado', unreal, pal.ac]];
+        [['pnl-tot-total', lastOf(realized) + (liveUnreal || 0)], ['pnl-tot-real', lastOf(realized)], ['pnl-tot-unreal', liveUnreal]].forEach(([id, v]) => { const el = $(id); el.textContent = fmt.money(v, { signed: true }); el.className = cls(v); });
+        $('pnl-total-legend').innerHTML = series.map(([label, , color]) => `<i class="sw" style="background:${color}"></i>${label}`).join('');
+        pnlLines(p, 'pnlTotal', 'pnl-total-chart', series.map(([l, d, c, w]) => lineDs(l, d, c, w)), v => fmt.money(v, { signed: true }));
     }
-    function renderPnlAssets(p) {
-        const a = p.assets || {}, pal = palette(), el = $('pnl-assets-chart');
-        $('pnl-assets-sub').textContent = a.ok ? 'carteira de futuros USDT-M' : `saldo indisponível (${esc(exchangeName())} não respondeu)`;
-        $('pnl-assets-total').textContent = a.ok ? fmt.money(a.total) : '—';
-        $('pnl-assets-list').innerHTML = (a.items || []).map(i => `<li><i class="sw" style="background:${pal.warn}"></i>${esc(i.asset)} <b>${fmt.money(i.balance)}</b> <small>${a.total ? fmt.pct(i.balance / a.total * 100, 1, false) : ''}</small></li>`).join('');
-        if (!el || typeof Chart === 'undefined') return;
-        const data = (a.items || []).map(i => i.balance), colors = [pal.warn, pal.ac, pal.good, pal.bad];
-        if (charts.pnlAssets) { charts.pnlAssets.data.datasets[0].data = data.length ? data : [1]; charts.pnlAssets.update('none'); return; }
-        charts.pnlAssets = new Chart(el, { type: 'doughnut', data: { labels: (a.items || []).map(i => i.asset), datasets: [{ data: data.length ? data : [1], backgroundColor: data.length ? colors : [pal.el], borderWidth: 0 }] },
-            options: { responsive: true, maintainAspectRatio: false, animation: false, cutout: '72%', plugins: { legend: { display: false }, tooltip: { ...baseTooltip(pal), callbacks: { label: (it) => `${it.label} ${fmt.money(it.parsed)}` } } } } });
+    function renderPnlRoi(p) {
+        const pal = palette(), days = dayRange(p.from, p.to), eq = p.totals && p.totals.start_equity;
+        const roi = carry(days, new Map((p.cumulative || []).map(c => [c.day, c.value])), 0).map(v => eq > 0 ? v / eq * 100 : null);
+        const btc = carry(days, new Map(((p.reference || {}).BTCUSDT || []).map(r => [r.day, r.pct])));
+        [['pnl-roi', lastOf(roi)], ['pnl-roi-btc', lastOf(btc)]].forEach(([id, v]) => { const el = $(id); el.textContent = fmt.pct(v); el.className = cls(v); });
+        pnlLines(p, 'pnlRoi', 'pnl-roi-chart', [lineDs('ROI', roi, pal.warn, 2), lineDs('BTC', btc, pal.ac)], v => fmt.pct(v));
+    }
+    function renderPnlEquity(p) {
+        const pal = palette(), days = dayRange(p.from, p.to);
+        const eq = carry(days, new Map((p.series || []).map(s => [s.day, s.equity])));
+        const n = (p.series || []).length;
+        $('pnl-equity-sub').textContent = n ? `${n} dia(s) com snapshot` : 'sem snapshots de equity no período';
+        const ds = { ...lineDs('Equity', eq, pal.ac, 2), fill: true, backgroundColor: hexa(pal.ac, 0.12) };
+        pnlLines(p, 'pnlEquity', 'pnl-equity-chart', [ds], v => fmt.money(v));
     }
     function renderPnlTrades(p) {
         const rows = p.trades || [], tb = $('pnl-trades').querySelector('tbody'), pager = $('pnl-pager');
@@ -844,7 +861,6 @@
         }));
         $('pnl-custom').addEventListener('submit', (e) => { e.preventDefault(); pnlState.from = $('pnl-from').value; pnlState.to = $('pnl-to').value; pnlState.page = 1; pnlState.month = null; fetchPnl(); });
         $$('#pnl-tabs .chip').forEach(b => b.addEventListener('click', () => { pnlState.tab = b.dataset.tab; $$('.pnl-tab').forEach(t => { t.hidden = t.dataset.tab !== pnlState.tab; }); Object.values(charts).forEach(c => c.resize()); }));
-        $$('#pnl-daily-mode .chip').forEach(b => b.addEventListener('click', () => { pnlState.mode = b.dataset.mode; $('pnl-cal-wrap').hidden = pnlState.mode !== 'calendar'; $('pnl-bars-wrap').hidden = pnlState.mode !== 'bars'; if (charts.pnlBars) charts.pnlBars.resize(); }));
         const shiftMonth = (n) => { const [y, m] = pnlState.month.split('-').map(Number); pnlState.month = dayStr(new Date(Date.UTC(y, m - 1 + n, 1))).slice(0, 7); renderPnlCalendar(state.pnl); };
         $('pnl-cal-prev').addEventListener('click', () => shiftMonth(-1)); $('pnl-cal-next').addEventListener('click', () => shiftMonth(1));
         $('pnl-prev').addEventListener('click', () => { pnlState.page--; renderPnlTrades(state.pnl); }); $('pnl-next').addEventListener('click', () => { pnlState.page++; renderPnlTrades(state.pnl); });

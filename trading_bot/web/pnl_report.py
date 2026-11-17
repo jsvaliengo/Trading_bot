@@ -1,10 +1,11 @@
 """
-Relatório "Ganhos e Perdas de Futuros" (aba estilo app da Binance) — /api/pnl_report.
+Relatório "Análise do P&L de futuros" (réplica da tela da Bitget) — /api/pnl_report.
 
-Fonte de verdade dos trades: TradeStore (SQLite). Income (funding/comissão/
-transferências) e referências BTC/BNB vêm da Binance e podem falhar: aí voltam
-vazios com flag, a página nunca quebra. O "dia" é o dia de trading do bot
-(DAILY_PNL_TZ_OFFSET_HOURS), o mesmo do card "Realizado hoje".
+Fonte de verdade: TradeStore (trades fechados + snapshots de portfolio_history) e
+income da exchange (funding/comissão). Saldo, income e referência BTC vêm da
+exchange com cache de 30-60s e podem falhar: aí voltam vazios com flag, a página
+nunca quebra. O "dia" é o dia de trading do bot (DAILY_PNL_TZ_OFFSET_HOURS), o
+mesmo do card "Realizado hoje" — a Bitget usa UTC+0.
 """
 
 from __future__ import annotations
@@ -14,12 +15,12 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..core.config import config
-from ..core.equity import simulated_balance
+from ..core.equity import effective_equity, simulated_balance
 from ..core.trade_store import pnl_since_ms, trading_day
 from .forward_test import parse_utc
 from .fx import usd_brl
 
-REFERENCE_SYMBOLS = ("BTCUSDT", "BNBUSDT")
+REFERENCE_SYMBOLS = ("BTCUSDT",)
 INCOME_TYPES = ("REALIZED_PNL", "COMMISSION", "FUNDING_FEE", "TRANSFER")
 
 
@@ -58,13 +59,13 @@ def _day_bounds_ms(day_from: str, day_to: str) -> Tuple[int, int]:
 
 
 def build_report(bot, day_from: Optional[str], day_to: Optional[str], days: Any = None) -> Dict[str, Any]:
-    """Período = [day_from, day_to] em dias de trading; sem day_from, os últimos `days` (default 7) até day_to."""
+    """Período = [day_from, day_to] em dias de trading; sem day_from, os últimos `days` (default 30) até day_to."""
     today = trading_day()
     day_to = _valid_day(day_to) or today
     try:
-        span = max(1, min(int(days or 7), 3660))
+        span = max(1, min(int(days or 30), 3660))
     except (TypeError, ValueError):
-        span = 7
+        span = 30
     day_from = _valid_day(day_from) or _shift(day_to, -(span - 1))
     if day_from > day_to:
         day_from, day_to = day_to, day_from
@@ -100,15 +101,18 @@ def build_report(bot, day_from: Optional[str], day_to: Optional[str], days: Any 
         cumulative.append({"day": d["day"], "value": round(running, 4)})
 
     exchange = getattr(bot, "exchange", None)
-    income, income_ok = _income(exchange, day_from, day_to)
+    account = dict(_cached(("account",), exchange, 30.0, lambda: _account(exchange)))
+    if account["ok"]:  # mesma fórmula do card SALDO: testnet simulado soma o realizado do DB ao cap
+        account["equity"] = round(effective_equity(config, wallet=account.pop("wallet"), cumulative_realized=sum(_f(r["pnl_net"]) for r in rows),
+                                                   unrealized=account["unrealized"]), 4)
+    income, income_ok = _cached(("income", day_from, day_to), exchange, 30.0, lambda: _income(exchange, day_from, day_to))
     income_totals = {t: round(sum(i["amount"] for i in income if i["type"] == t), 4) for t in INCOME_TYPES}
 
     return {
         "from": day_from, "to": day_to, "today": today,
         "tz_offset_hours": float(getattr(config, "DAILY_PNL_TZ_OFFSET_HOURS", 0.0) or 0.0),
         "today_pnl": window(today, today),
-        "windows": {"d7": window(_shift(today, -6), today), "d30": window(_shift(today, -29), today),
-                    "all": {"usd": round(sum(_f(r["pnl_net"]) for r in rows), 4)}},
+        "windows": {"d7": window(_shift(today, -6), today), "d30": window(_shift(today, -29), today)},
         "totals": totals,
         "daily": daily,
         "cumulative": cumulative,
@@ -116,9 +120,11 @@ def build_report(bot, day_from: Optional[str], day_to: Optional[str], days: Any 
         "trades": [{k: r.get(k) for k in ("exit_at", "symbol", "side", "qty", "entry_price", "exit_price",
                                            "pnl_net", "fees", "funding", "close_reason", "strategy_type")}
                    for r in sorted(period, key=lambda r: str(r["exit_at"]), reverse=True)],
+        "funding_daily": _funding_daily(income),
+        "series": _daily_snapshots(store, rows, day_from, day_to),
         "income": income, "income_totals": income_totals, "income_ok": income_ok,
-        "reference": _reference(exchange, day_from, day_to),
-        "assets": _assets(exchange),
+        "reference": _cached(("ref", day_from, day_to), exchange, 60.0, lambda: _reference(exchange, day_from, day_to)),
+        "account": account,
         "fx": usd_brl(),
     }
 
@@ -129,12 +135,20 @@ def _aggregate(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     losses = [p for p in pnls if p < 0]
     return {
         "profit": round(sum(wins), 4), "loss": round(sum(losses), 4), "net": round(sum(pnls), 4),
-        "trades": len(pnls), "wins": len(wins),
+        "trades": len(pnls), "wins": len(wins), "losses": len(pnls) - len(wins),
+        "long": sum(1 for r in rows if r.get("side") == "LONG"), "short": sum(1 for r in rows if r.get("side") == "SHORT"),
         "win_rate": round(len(wins) / len(pnls) * 100.0, 2) if pnls else 0.0,
+        "profit_factor": profit_factor(pnls),
         "fees": round(sum(_f(r.get("fees")) for r in rows), 4),
         "funding": round(sum(_f(r.get("funding")) for r in rows), 4),
         "best": round(max(pnls), 4) if pnls else None, "worst": round(min(pnls), 4) if pnls else None,
     }
+
+
+def profit_factor(pnls: List[float]) -> Optional[float]:
+    """Σ lucros / |Σ perdas| ("Índice de P&L" da Bitget); None sem perda (divisão por zero)."""
+    gain, loss = sum(p for p in pnls if p > 0), -sum(p for p in pnls if p < 0)
+    return round(gain / loss, 4) if loss > 0 else None
 
 
 def _group(rows: List[Dict[str, Any]], key: str) -> List[Dict[str, Any]]:
@@ -163,8 +177,64 @@ def _by_symbol(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return sorted(_group(rows, "symbol"), key=lambda s: abs(s["net"]), reverse=True)
 
 
+def _funding_daily(income: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Funding do income somado por dia de trading (barras "Taxas de financiamento diárias")."""
+    by_day: Dict[str, float] = {}
+    for i in income:
+        if i["type"] == "FUNDING_FEE":
+            day = trading_day(datetime.fromisoformat(i["time"]))
+            by_day[day] = by_day.get(day, 0.0) + i["amount"]
+    return [{"day": d, "amount": round(v, 4)} for d, v in sorted(by_day.items())]
+
+
+def _daily_snapshots(store, rows: List[Dict[str, Any]], day_from: str, day_to: str) -> List[Dict[str, Any]]:
+    """Último snapshot de portfolio_history de cada dia de trading do período:
+    {day, equity, unrealized}. Equity pela MESMA fórmula do card SALDO (effective_equity)."""
+    if store is None or not hasattr(store, "recent_equity"):
+        return []
+    try:
+        # shortcut: assume ≤144 snapshots/dia (1 a cada 10 min) + 2 dias de folga pro fuso; subir se o intervalo do snapshot cair
+        snaps = store.recent_equity((len(_days_between(day_from, day_to)) + 2) * 144) or []
+    except Exception:
+        return []
+    closed = sorted((parse_utc(r["exit_at"]), _f(r["pnl_net"])) for r in rows)
+    realized, i = 0.0, 0   # snapshots em ordem cronológica: o realizado acumulado avança com um ponteiro
+    out: Dict[str, Dict[str, Any]] = {}
+    for snap in snaps:
+        ts = parse_utc(snap.get("timestamp"))
+        if ts is None:
+            continue
+        while i < len(closed) and closed[i][0] <= ts:
+            realized += closed[i][1]
+            i += 1
+        day = trading_day(ts)
+        if not day_from <= day <= day_to:
+            continue
+        unreal = _f(snap.get("pnl_unrealized"))
+        equity = effective_equity(config, wallet=_f(snap.get("balance")), cumulative_realized=realized, unrealized=unreal)
+        out[day] = {"day": day, "equity": round(equity, 4), "unrealized": round(unreal, 4)}  # o último do dia vence
+    return [out[d] for d in sorted(out)]
+
+
+def _days_between(day_from: str, day_to: str) -> List[str]:
+    return [_shift(day_from, i) for i in range((_day(day_to) - _day(day_from)).days + 1)]
+
+
+_memo: Dict[Any, Tuple[float, Any, Any]] = {}
+
+
+def _cached(key: Tuple, exchange, ttl: float, fn):
+    """Cache leve das chamadas à exchange; guarda a referência da exchange (não vaza entre instâncias)."""
+    hit = _memo.get(key)
+    if hit and hit[1] is exchange and time.monotonic() - hit[0] < ttl:
+        return hit[2]
+    data = fn()
+    _memo[key] = (time.monotonic(), exchange, data)
+    return data
+
+
 def _income(exchange, day_from: str, day_to: str) -> Tuple[List[Dict[str, Any]], bool]:
-    """Income history da Binance no período (paginado por startTime). ([], False) em falha."""
+    """Income history da exchange no período (paginado por startTime). ([], False) em falha."""
     if exchange is None or not hasattr(exchange, "get_income_history"):
         return [], False
     start_ms, end_ms = _day_bounds_ms(day_from, day_to)
@@ -192,42 +262,32 @@ def _income(exchange, day_from: str, day_to: str) -> Tuple[List[Dict[str, Any]],
     return out, True
 
 
-_ref_cache: Dict[str, Any] = {"key": None, "at": 0.0, "data": {}}
-_REF_TTL = 60.0
-
-
 def _reference(exchange, day_from: str, day_to: str) -> Dict[str, List[Dict[str, Any]]]:
-    """Variação % acumulada do fechamento diário (klines 1d da fonte de sinal, mainnet
-    com SIGNALS_FROM_MAINNET) desde o 1º dia do período. Cache de 60s por período."""
-    key = f"{day_from}:{day_to}"
-    if _ref_cache["key"] == key and time.monotonic() - _ref_cache["at"] < _REF_TTL:
-        return _ref_cache["data"]
-    client = getattr(exchange, "market_client", None)
+    """Variação % acumulada do fechamento diário do BTC desde o 1º dia do período
+    ("Histórico de variação do BTC"). {sym: []} sem exchange ou em falha."""
     out: Dict[str, List[Dict[str, Any]]] = {s: [] for s in REFERENCE_SYMBOLS}
-    if client is None or not hasattr(client, "futures_klines"):
+    if exchange is None or not hasattr(exchange, "get_klines_raw"):
         return out
     # shortcut: candle diário em UTC (dia de trading do bot é BRT); diferença de 3h aceitável para referência
-    start_ms = int(_day(day_from).timestamp() * 1000)
-    end_ms = int((_day(day_to) + timedelta(days=1)).timestamp() * 1000) - 1
+    n = len(_days_between(day_from, day_to))
     for sym in REFERENCE_SYMBOLS:
         try:
-            klines = client.futures_klines(symbol=sym, interval="1d", startTime=start_ms, endTime=end_ms, limit=1000) or []
+            klines = exchange.get_klines_raw(sym, "1d", limit=min(1000, n + 1)) or []
         except Exception:
             continue
+        klines = [k for k in klines if day_from <= datetime.fromtimestamp(int(k[0]) / 1000, tz=timezone.utc).strftime("%Y-%m-%d") <= day_to]
         base = _f(klines[0][4]) if klines else 0.0
         out[sym] = [{"day": datetime.fromtimestamp(int(k[0]) / 1000, tz=timezone.utc).strftime("%Y-%m-%d"),
                      "pct": round((_f(k[4]) / base - 1.0) * 100.0, 4)} for k in klines if base > 0]
-    _ref_cache.update(key=key, at=time.monotonic(), data=out)
     return out
 
 
-def _assets(exchange) -> Dict[str, Any]:
-    """Composição da carteira de futuros. shortcut: só USDT (o bot só opera USDT-M)."""
+def _account(exchange) -> Dict[str, Any]:
+    """Saldo (equity USDT) e não realizado da conta de futuros, como o cabeçalho da Bitget."""
     if exchange is None or not hasattr(exchange, "get_account_info"):
-        return {"ok": False, "items": [], "total": 0.0}
+        return {"ok": False, "equity": None, "unrealized": 0.0}
     try:
         info = exchange.get_account_info() or {}
-        wallet = _f(info.get("wallet_balance"))
-        return {"ok": True, "items": [{"asset": "USDT", "balance": round(wallet, 4)}], "total": round(wallet, 4)}
+        return {"ok": True, "wallet": _f(info.get("wallet_balance")), "unrealized": round(_f(info.get("unrealized_pnl")), 4)}
     except Exception:
-        return {"ok": False, "items": [], "total": 0.0}
+        return {"ok": False, "equity": None, "unrealized": 0.0}
