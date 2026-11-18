@@ -682,7 +682,7 @@
             const future = d > end, before = key < startIso;
             const c = v ? cls(v.net) : '';
             const op = v ? (0.35 + 0.65 * Math.min(1, Math.abs(v.net) / maxAbs)).toFixed(2) : '';
-            html += `<i class="${c}${future || before ? ' future' : ''}" style="${op ? `opacity:${op}` : ''}" title="${fmt.day(key)}${v ? `: ${fmt.money(v.net, { signed: true })} · ${tradesOf.get(key) || 0} trade(s)` : ''}"></i>`;
+            html += `<i class="${c}${future || before ? ' future' : ''}" style="${op ? `opacity:${op}` : ''}" title="${fmt.day(key)}${v ? `: ${fmt.money(v.net, { signed: true })} em ${v.trades} trade(s)` : ''}"></i>`;
         }
         root.innerHTML = html;
         const n = (days || []).length, pos = (days || []).filter(d => d.net > 0).length;
