@@ -843,6 +843,9 @@ class TelegramCommandHandler:
             # do Saldo acima e do /portfolio). Agora o rótulo "Total" é fiel.
             pnl_display = cumulative_realized
             pnl_emoji = "🟢" if pnl_display >= 0 else "🔴"
+            runner = getattr(self.bot, "martingale", None)
+            leverage = self.config.MARTINGALE_LEVERAGE if runner else self.config.LEVERAGE
+            n_pairs = len(runner.pairs) if runner else len(self.config.TRADING_PAIRS)
             
             message = f"""
 📊 <b>STATUS DO BOT</b>
@@ -862,8 +865,8 @@ class TelegramCommandHandler:
 📍 <b>POSIÇÕES:</b> {len(positions)} abertas
 
 ⚙️ <b>CONFIG:</b>
-   • Alavancagem: <code>{self.config.LEVERAGE}x</code>
-   • Moedas: <code>{len(self.config.TRADING_PAIRS)}</code>
+   • Alavancagem: <code>{leverage}x</code>
+   • Moedas: <code>{n_pairs}</code>
    • Sentimento: <code>{"ON" if getattr(self.bot, "sentiment_mode_enabled", False) else "OFF"}</code>
    • Inversão: <code>{"ON" if getattr(self.bot, "invert_signals", False) else "OFF"}</code>
 ━━━━━━━━━━━━━━━━━━━━━

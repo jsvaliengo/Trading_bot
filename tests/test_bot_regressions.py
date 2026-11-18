@@ -2203,6 +2203,7 @@ def test_check_for_deposit_updates_capital_and_refreshes_snapshot(monkeypatch):
     telegram_messages = []
 
     bot.initial_capital = 200.0
+    bot.start_time = datetime.fromtimestamp(1)
     bot.last_transfer_check_ts_ms = 1_000
     bot.processed_transfer_ids = []
     bot.telegram = SimpleNamespace(
@@ -2236,6 +2237,58 @@ def test_check_for_deposit_updates_capital_and_refreshes_snapshot(monkeypatch):
     assert len(bot.portfolio_history) == 1
     assert bot.portfolio_history[0]["balance"] == 300.0
     assert telegram_messages
+
+
+def test_check_for_deposit_catches_late_bill_and_ignores_pre_start_transfer(monkeypatch):
+    # Bitget: bill do depósito aparece horas depois do cTime; sem ids processados o bot
+    # relê desde o start_time. O depósito de antes do start já está no initial_capital.
+    bot = _make_light_bot()
+    bot.initial_capital = 91.0
+    bot.start_time = datetime.fromtimestamp(100)
+    bot.last_transfer_check_ts_ms = 500_000   # último check já passou do cTime do depósito
+    bot.processed_transfer_ids = []
+    bot.telegram = SimpleNamespace(send_message=lambda message: True)
+    bot.save_state = lambda: True
+    bot.take_portfolio_snapshot = lambda: None
+    calls = []
+
+    def income(**kwargs):
+        calls.append(kwargs)
+        return [
+            {"time": 50_000, "asset": "USDT", "income": "91.0", "tranId": "initial"},
+            {"time": 300_000, "asset": "USDT", "income": "59.0", "tranId": "late"},
+        ]
+
+    bot.exchange = SimpleNamespace(get_income_history=income)
+    monkeypatch.setattr(config, "CAPITAL_TRANSFER_DETECTION_ENABLED", True)
+    monkeypatch.setattr(config, "CAPITAL_TRANSFER_MIN_ABS_USDT", 1.0)
+    monkeypatch.setattr(config, "USE_BINANCE_STRATEGY", False)
+
+    assert bot.check_for_deposit() is True
+    assert bot.initial_capital == 150.0
+    assert bot.processed_transfer_ids == ["tranId:late"]
+    assert calls[0]["start_time"] == 100_000
+    # Segundo check: dedupe por tranId, janela de 24h.
+    assert bot.check_for_deposit() is False
+    assert bot.initial_capital == 150.0
+    assert calls[1]["start_time"] == bot.last_transfer_check_ts_ms - 24 * 3_600_000
+
+
+def test_daily_loss_limit_does_not_close_under_martingale(monkeypatch):
+    from trading_bot.core.trade_store import trading_day_start
+
+    bot = _make_light_bot()
+    bot.martingale = SimpleNamespace(pairs={})
+    monkeypatch.setattr(config, "USE_DAILY_TARGETS", True)
+    monkeypatch.setattr(config, "DAILY_LOSS_LIMIT", 100.0)
+    bot.last_daily_reset = trading_day_start().date()
+    bot.daily_realized_pnl = -500.0
+    bot._close_all_positions_daily_target = MagicMock()
+    bot.telegram = SimpleNamespace(send_message=MagicMock())
+
+    assert bot.check_daily_targets() is False
+    bot._close_all_positions_daily_target.assert_not_called()
+    bot.telegram.send_message.assert_not_called()
 
 
 def test_sort_binance_coins_by_score_uses_dynamic_binance_universe(monkeypatch):
