@@ -53,6 +53,7 @@ TOKEN = ENV.get("TELEGRAM_TOKEN", "")
 CHAT = ENV.get("TELEGRAM_CHAT_ID", "")
 APP_ENV = ENV.get("TRADING_BOT_ENV", "prod") or "prod"
 NET = ENV.get("TRADING_BOT_ENVIRONMENT", "testnet") or "testnet"
+BADGE = (ENV.get("TRADING_BOT_EXCHANGE", "binance") or "binance").capitalize()
 LOG_PATH = ROOT / "runtime" / f"trading_bot.{APP_ENV}.{NET}.log"
 
 
@@ -101,7 +102,7 @@ def save_state(state: dict) -> None:
 
 def main() -> int:
     if "--test" in sys.argv:
-        send_telegram(f"🩺 <b>Heartbeat ativo</b> [{NET.upper()}]\nMonitorando o bot — você será avisado se ele cair ou travar.")
+        send_telegram(f"🩺 <b>Heartbeat ativo</b> [{BADGE}]\nMonitorando o bot — você será avisado se ele cair ou travar.")
         print("heartbeat: mensagem de teste enviada.")
         return 0
 
@@ -120,13 +121,13 @@ def main() -> int:
         renotify = (now - last_alert) >= RENOTIFY_MINUTES * 60.0
         if transition or renotify:
             send_telegram(
-                f"🔴 <b>BOT CAIU</b> [{NET.upper()}]\n"
+                f"🔴 <b>BOT CAIU</b> [{BADGE}]\n"
                 f"⚠️ {reason}\n"
                 f"Verifique a VM (oci-bot)."
             )
             last_alert = now
     elif not was_healthy:
-        send_telegram(f"🟢 <b>BOT RECUPERADO</b> [{NET.upper()}]\nVoltou a ciclar normalmente.")
+        send_telegram(f"🟢 <b>BOT RECUPERADO</b> [{BADGE}]\nVoltou a ciclar normalmente.")
 
     save_state({"healthy": healthy, "last_alert_ts": last_alert, "ts": now})
     print(f"heartbeat: {'OK' if healthy else 'DOWN'} | proc={alive} log_age={age:.1f}min net={NET}")

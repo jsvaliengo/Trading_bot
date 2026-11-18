@@ -476,10 +476,10 @@ class MartingaleRunner:
             for leg in plan.legs.values():
                 leg.reset()
         self.bot.paused = True
-        self.peak = equity       # próximo ciclo (se um humano retomar) mede do zero
+        peak, self.peak = self.peak, equity       # próximo ciclo (se um humano retomar) mede do zero
         self.bot.telegram.send_message(
-            f"🛑 <b>MARTINGALE — STOP DE PORTFÓLIO</b>\nEquity ${equity:.2f} caiu ${self.peak - equity:.2f} "
-            f"do pico ${self.peak:.2f}. {len(positions) - len(failed)} posição(ões) fechadas a mercado"
+            f"🛑 <b>MARTINGALE — STOP DE PORTFÓLIO</b>\nEquity ${equity:.2f} caiu ${peak - equity:.2f} "
+            f"do pico ${peak:.2f}. {len(positions) - len(failed)} posição(ões) fechadas a mercado"
             + (f", {len(failed)} FALHARAM ({', '.join(p['symbol'] + ' ' + p['side'] for p in failed)}) — verifique na exchange"
                if failed else "")
             + ".\nBot PAUSADO: retome com /resume só depois de decidir se continua."
