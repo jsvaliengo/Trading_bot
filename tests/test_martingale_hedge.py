@@ -205,7 +205,8 @@ def test_portfolio_stop_closes_everything_pauses_and_does_not_restart():
     r.tick()
     assert sorted(bot.closed) == [("ADAUSDT", "LONG", "Stop de portfólio"), ("ADAUSDT", "SHORT", "Stop de portfólio")]
     assert bot.paused and r.stops == 1 and ex.positions == []
-    assert "STOP DE PORTFÓLIO" in bot.telegram.send_message.call_args.args[0]
+    msg = bot.telegram.send_message.call_args.args[0]
+    assert "STOP DE PORTFÓLIO" in msg and "caiu $60.00 do pico $300.00" in msg
     r.tick()
     assert len(ex.orders) == 2                 # pausado: não reabre sozinho
 
