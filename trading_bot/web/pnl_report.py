@@ -5,9 +5,9 @@ Fonte de verdade: TradeStore (trades fechados + snapshots de portfolio_history) 
 income da exchange (funding/comissão). Saldo, income e referência BTC vêm da
 exchange com cache de 30-60s e podem falhar: aí voltam vazios com flag, a página
 nunca quebra. O "dia" aqui é o dia UTC+0 (como na Bitget), NÃO o dia de trading
-do bot do card "Realizado hoje". A aba "Análise da conta" segue a definição da
-Bitget: P&L do dia = equity no fim do dia − equity no fim do dia anterior −
-transferências (depósito/saque não é lucro); inclui o não realizado.
+do bot do card "Realizado hoje". A aba "Análise da conta" soma o extrato da conta
+como o app da Bitget: P&L do dia = realizado + taxas + funding dos lançamentos do dia
+UTC (transferência não é lucro; o não realizado em aberto não entra).
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from .fx import usd_brl
 
 REFERENCE_SYMBOLS = ("BTCUSDT",)
 INCOME_TYPES = ("REALIZED_PNL", "COMMISSION", "FUNDING_FEE", "TRANSFER")
-PNL_INCOME = INCOME_TYPES[:3]  # o que a Bitget soma no "P&L" de um dia sem snapshot (transferência não é lucro)
+PNL_INCOME = INCOME_TYPES[:3]  # o que a Bitget soma no "P&L" do dia (transferência não é lucro)
 
 
 def _f(v: Any) -> float:
@@ -114,7 +114,7 @@ def build_report(bot, day_from: Optional[str], day_to: Optional[str], days: Any 
     points = _daily_snapshots(store, rows, wide_from, wide_to)
     if account["ok"]:  # hoje: equity ao vivo vale mais que o último snapshot (até 10 min atrás)
         points = points[:1] + [p for p in points[1:] if p["day"] != today] + [{"day": today, "equity": account["equity"], "unrealized": account["unrealized"], "at": _ms(now)}]
-    calendar = _account_daily(points, wide_income, wide_from, wide_to)
+    calendar = _account_daily(wide_income, wide_from, wide_to)
     account_window = _account_window(calendar, points)
     cumulative, running = [], 0.0
     for d in calendar:
@@ -205,34 +205,13 @@ def _funding_daily(income: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return [{"day": d, "amount": round(v, 4)} for d, v in sorted(_income_by_day(income, ("FUNDING_FEE",)).items())]
 
 
-def _account_daily(points: List[Dict[str, Any]], income: List[Dict[str, Any]], day_from: str, day_to: str) -> List[Dict[str, Any]]:
-    """P&L da conta por dia UTC, como a "Análise da conta" da Bitget: equity no fim do dia −
-    equity no fim do dia anterior − transferências entre os dois pontos. Dia sem snapshot (bot
-    parado) cai no income do dia (realizado + taxas + funding); o que aconteceu antes do 1º
-    snapshot entra pelo income também. `source` diz qual regra o dia usou."""
+def _account_daily(income: List[Dict[str, Any]], day_from: str, day_to: str) -> List[Dict[str, Any]]:
+    """P&L da conta por dia UTC, como a "Análise da conta" da Bitget: soma dos lançamentos do
+    extrato do dia (realizado + taxas + funding; transferência fica de fora). Dia sem lançamento = 0."""
     pnl_income = _income_by_day(income, PNL_INCOME)
-    at = {id(i): _ms(datetime.fromisoformat(i["time"])) for i in income}
-    transfers = [(at[id(i)], i["amount"]) for i in income if i["type"] == "TRANSFER"]
-    by_day = {p["day"]: p for p in points}  # o último do dia vence; points[0] é o 1º snapshot (baseline)
-    prev = points[0] if points else None
-    # income do dia do 1º snapshot ocorrido antes dele: fora do Δ, entra por fora
-    carry = sum(i["amount"] for i in income if i["type"] in PNL_INCOME and prev and i["time"][:10] == prev["day"] and at[id(i)] < prev["at"])
     since = pnl_since_ms()
-    out = []
-    for day in _days_between(day_from, day_to):
-        if since and _ms(_day(day) + timedelta(days=1)) <= since:
-            continue  # reset de banca: nada antes do piso
-        p = by_day.get(day)
-        if p is None or prev is None:
-            net = pnl_income.get(day, 0.0)
-            if prev is not None and day > prev["day"]:
-                carry -= net  # dia sem snapshot depois do 1º: o próximo Δ inclui esse income, não conta 2x
-            out.append({"day": day, "net": round(net, 4), "source": "income" if day in pnl_income else "none"})
-            continue
-        moved = sum(a for t, a in transfers if prev["at"] < t <= p["at"])
-        out.append({"day": day, "net": round(p["equity"] - prev["equity"] - moved + carry, 4), "source": "equity"})
-        prev, carry = p, 0.0
-    return out
+    return [{"day": day, "net": round(pnl_income.get(day, 0.0), 4)} for day in _days_between(day_from, day_to)
+            if not (since and _ms(_day(day) + timedelta(days=1)) <= since)]  # reset de banca: nada antes do piso
 
 
 def _account_window(calendar: List[Dict[str, Any]], points: List[Dict[str, Any]]):
@@ -249,7 +228,7 @@ def _account_window(calendar: List[Dict[str, Any]], points: List[Dict[str, Any]]
 
 def _daily_snapshots(store, rows: List[Dict[str, Any]], day_from: str, day_to: str) -> List[Dict[str, Any]]:
     """Último snapshot de portfolio_history de cada dia UTC do período, a partir do piso PNL_SINCE_UTC:
-    {day, equity, unrealized, at (epoch ms)}, precedido do 1º snapshot válido (baseline do Δ da conta).
+    {day, equity, unrealized, at (epoch ms)}, precedido do 1º snapshot válido (equity inicial das janelas).
     Equity pela MESMA fórmula do card SALDO (effective_equity)."""
     if store is None or not hasattr(store, "recent_equity"):
         return []
