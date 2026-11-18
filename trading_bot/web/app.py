@@ -14,10 +14,11 @@ O bot é passado como argumento da factory e fica em `app.config['BOT']`.
 from __future__ import annotations
 
 import logging
+import os
 import secrets
 from datetime import timedelta
 
-from flask import Flask, jsonify, redirect, render_template, request, session
+from flask import Flask, jsonify, redirect, render_template, request, session, url_for
 from flask_socketio import SocketIO
 
 from ..core.config import config, exchange_label
@@ -75,6 +76,17 @@ def create_app(bot) -> tuple[Flask, SocketIO]:
         logger=False,
         engineio_logger=False,
     )
+
+    @app.context_processor
+    def _static_version():
+        # ?v=<mtime> muda a cada deploy, senão o navegador segue com JS/CSS antigo em cache.
+        def static_url(filename):
+            try:
+                v = int(os.path.getmtime(os.path.join(app.static_folder, filename)))
+            except OSError:
+                return url_for("static", filename=filename)
+            return url_for("static", filename=filename, v=v)
+        return {"static_url": static_url}
 
     _register_routes(app, socketio)
     _register_sockets(socketio)

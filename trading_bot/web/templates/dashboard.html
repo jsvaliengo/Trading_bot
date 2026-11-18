@@ -9,14 +9,14 @@
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="Trader">
-    <link rel="apple-touch-icon" href="{{ url_for('static', filename='icon-180.png') }}">
-    <link rel="manifest" href="{{ url_for('static', filename='manifest.webmanifest') }}">
+    <link rel="apple-touch-icon" href="{{ static_url('icon-180.png') }}">
+    <link rel="manifest" href="{{ static_url('manifest.webmanifest') }}">
     <title>Forward test · {{ environment|upper }}</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/mobile.css') }}">
+    <link rel="stylesheet" href="{{ static_url('css/style.css') }}">
+    <link rel="stylesheet" href="{{ static_url('css/mobile.css') }}">
 </head>
 <body data-environment="{{ environment }}" data-poll-interval="{{ poll_interval }}" data-strategy="{{ strategy }}">
 
@@ -422,6 +422,6 @@
 
 <script src="https://unpkg.com/chart.js@4.4.1/dist/chart.umd.js"></script>
 <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-<script src="{{ url_for('static', filename='js/main.js') }}"></script>
+<script src="{{ static_url('js/main.js') }}"></script>
 </body>
 </html>
