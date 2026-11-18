@@ -177,6 +177,8 @@ def test_index_requires_auth_returns_html():
     # Topo sem Sair nem toggle de tema; relógio no lugar (main.js atualiza a cada segundo).
     assert b'action="/logout"' not in r.data and b'theme-toggle' not in r.data
     assert b'id="clock"' in r.data and b'tradingbot-theme' not in r.data
+    # Versão (mtime) na URL dos assets: sem isso o navegador usa JS antigo após deploy.
+    assert b"/static/js/main.js?v=" in r.data and b"/static/css/style.css?v=" in r.data
 
 
 def test_martingale_dashboard_is_ring_legs_sheet_pnl_health():
