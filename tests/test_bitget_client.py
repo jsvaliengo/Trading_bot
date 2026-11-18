@@ -331,9 +331,10 @@ def test_income_history_maps_bills_ascending(conn, monkeypatch):
     conn.http.routes[("GET", "/api/v2/mix/account/bill")] = {"code": "00000", "data": {"bills": BILLS, "endId": "0"}}
     rows = conn.get_income_history(limit=100)
     assert [(r["incomeType"], r["income"], r["time"]) for r in rows] == [
+        ("TRANSFER", "100", 1700000000000),   # depósito na conta de futuros: não é lucro, mas o P&L diário precisa descontar
         ("COMMISSION", "-0.01", 1700000100000), ("FUNDING_FEE", "-0.02", 1700000200000),
         ("REALIZED_PNL", "0.35", 1700000300000), ("COMMISSION", "-0.01", 1700000300000)]
-    assert rows[0]["symbol"] == "ADAUSDT"   # transferência (sem open/close) ignorada
+    assert rows[1]["symbol"] == "ADAUSDT"
     pnl = conn.get_income_history(income_type="REALIZED_PNL", symbol="ADAUSDT", start_time=1700000000000)
     assert [r["income"] for r in pnl] == ["0.35"]
     q = conn.http.calls[-1]["query"]

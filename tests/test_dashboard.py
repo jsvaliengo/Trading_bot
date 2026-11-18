@@ -13,6 +13,7 @@ Cobre:
 from __future__ import annotations
 
 import base64
+from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -811,7 +812,7 @@ def _brt(monkeypatch):
     monkeypatch.setattr(global_config, "SIMULATED_BALANCE_USD", 0.0, raising=False)
 
 
-def test_pnl_report_aggregates_period_in_trading_day(_brt):
+def test_pnl_report_aggregates_period_in_utc_day(_brt):
     from trading_bot.web.pnl_report import build_report
 
     out = build_report(_pnl_bot(), "2026-11-01", "2026-11-07")
@@ -821,9 +822,12 @@ def test_pnl_report_aggregates_period_in_trading_day(_brt):
     assert (t["best"], t["worst"]) == (3.0, -4.0)
     # equity inicial = capital 100 + 10 do trade anterior; % = −2 / 110
     assert t["start_equity"] == 110.0 and t["pct"] == pytest.approx(-2 / 110 * 100, rel=1e-4)
-    # dia de trading BRT: o trade de 03/11 01:00 UTC cai em 02/11
-    assert [(d["day"], d["net"], d["trades"]) for d in out["daily"]] == [("2026-11-02", 2.0, 2), ("2026-11-05", -4.0, 1)]
-    assert [(c["day"], c["value"]) for c in out["cumulative"]] == [("2026-11-02", 2.0), ("2026-11-05", -2.0)]
+    # dia UTC (como na Bitget), mesmo com o bot em BRT: o trade de 03/11 01:00 UTC fica em 03/11
+    assert [(d["day"], d["net"], d["trades"]) for d in out["daily"]] == [("2026-11-02", 3.0, 1), ("2026-11-03", -1.0, 1), ("2026-11-05", -4.0, 1)]
+    # sem snapshot nem income, a conta não tem como variar: calendário/acumulado zerados dia a dia
+    assert [(d["day"], d["net"], d["source"]) for d in out["calendar"]][:2] == [("2026-11-01", 0.0, "none"), ("2026-11-02", 0.0, "none")]
+    assert len(out["calendar"]) == len(out["cumulative"]) == 7 and all(c["value"] == 0.0 for c in out["cumulative"])
+    assert out["period"] == {"usd": 0.0, "pct": None, "start_equity": None}
     assert [(s["symbol"], s["net"], s["trades"], s["win_rate"]) for s in out["by_symbol"]] == [("ETHUSDT", -4.0, 1, 0.0), ("ADAUSDT", 2.0, 2, 50.0)]
     assert [tr["symbol"] for tr in out["trades"]] == ["ETHUSDT", "ADAUSDT", "ADAUSDT"]  # saída desc
     # Análise de trading: N lucro / N perda, long : short, índice de P&L = 3 / |−5|
@@ -875,8 +879,8 @@ def test_pnl_report_income_and_reference_from_binance(_brt):
     assert out["income_totals"] == {"REALIZED_PNL": 0.0, "COMMISSION": -0.2, "FUNDING_FEE": -0.01, "TRANSFER": 0.0}
     assert calls == [("BTCUSDT", "1d", 8)]
     assert [(r["day"], r["pct"]) for r in out["reference"]["BTCUSDT"]] == [("2026-11-01", 0.0), ("2026-11-02", 10.0)]
-    # funding por dia de trading (BRT): 03/11 00:00 UTC = 02/11 21:00 BRT
-    assert out["funding_daily"] == [{"day": "2026-11-02", "amount": -0.01}]
+    # funding por dia UTC (como na Bitget), não pelo dia de trading BRT (seria 02/11)
+    assert out["funding_daily"] == [{"day": "2026-11-03", "amount": -0.01}]
     # cache de 30-60s: a mesma exchange no mesmo período não bate de novo na API
     pnl_report.build_report(_pnl_bot(ex), "2026-11-01", "2026-11-07")
     assert len(calls) == 1
@@ -904,15 +908,15 @@ def test_pnl_report_income_floors_on_pnl_since(_brt, monkeypatch):
     assert out["income_totals"]["REALIZED_PNL"] == 1.5
 
 
-def test_pnl_report_series_last_snapshot_per_trading_day(_brt):
-    # "P&L total" / "Tendência de ativos": 1 ponto por dia de trading = último snapshot do dia,
+def test_pnl_report_series_last_snapshot_per_utc_day(_brt):
+    # "P&L total" / "Tendência de ativos": 1 ponto por dia UTC = último snapshot do dia,
     # equity = wallet + não realizado (sem cap simulado), realizado acumulado só entra no testnet simulado.
     from trading_bot.web.pnl_report import build_report
 
     snaps = [
         {"timestamp": "2026-11-02T10:00:00+00:00", "balance": 100.0, "pnl_unrealized": 1.0},
-        {"timestamp": "2026-11-02T23:00:00+00:00", "balance": 103.0, "pnl_unrealized": -0.5},   # 20:00 BRT: ainda 02/11, vence
-        {"timestamp": "2026-11-03T02:59:00+00:00", "balance": 104.0, "pnl_unrealized": 0.25},   # 23:59 BRT de 02/11 → vence
+        {"timestamp": "2026-11-02T23:00:00+00:00", "balance": 103.0, "pnl_unrealized": -0.5},   # último de 02/11 UTC, vence
+        {"timestamp": "2026-11-03T02:59:00+00:00", "balance": 104.0, "pnl_unrealized": 0.25},   # 23:59 BRT de 02/11, mas 03/11 em UTC
         {"timestamp": "2026-11-05T12:00:00+00:00", "balance": 99.0, "pnl_unrealized": 0.0},
         {"timestamp": "2026-10-20T12:00:00+00:00", "balance": 50.0, "pnl_unrealized": 0.0},     # fora do período
     ]
@@ -920,8 +924,90 @@ def test_pnl_report_series_last_snapshot_per_trading_day(_brt):
     store = SimpleNamespace(closed_trades=lambda strategy_type=None, limit=2000: [dict(r) for r in _PNL_ROWS],
                             recent_equity=lambda limit: asked.append(limit) or snaps)
     out = build_report(SimpleNamespace(trade_store=store, initial_capital=100.0), "2026-11-01", "2026-11-07")
-    assert out["series"] == [{"day": "2026-11-02", "equity": 104.25, "unrealized": 0.25}, {"day": "2026-11-05", "equity": 99.0, "unrealized": 0.0}]
-    assert asked == [(7 + 2) * 144]
+    assert [(p["day"], p["equity"], p["unrealized"]) for p in out["series"]] == [("2026-11-02", 102.5, -0.5), ("2026-11-03", 104.25, 0.25), ("2026-11-05", 99.0, 0.0)]
+    # snapshots cobrem a união do período com a janela de 30d de hoje (que ancora o 7d/30d)
+    wide_days = (date.fromisoformat(out["today"]) - min(date(2026, 11, 1), date.fromisoformat(out["today"]) - timedelta(days=29))).days + 1
+    assert asked == [(wide_days + 2) * 144]
+    # Análise da conta: Δequity de um dia pro outro; antes do 1º snapshot (20/10, fora do período) a conta cresceu até 02/11
+    cal = {d["day"]: (d["net"], d["source"]) for d in out["calendar"]}
+    assert cal["2026-11-01"] == (0.0, "none") and cal["2026-11-02"] == (52.5, "equity")
+    assert cal["2026-11-03"] == (1.75, "equity") and cal["2026-11-04"] == (0.0, "none") and cal["2026-11-05"] == (-5.25, "equity")
+    assert out["period"] == {"usd": 49.0, "pct": 98.0, "start_equity": 50.0}
+
+
+def _snap(ts, balance, unreal=0.0):
+    return {"timestamp": ts, "balance": balance, "pnl_unrealized": unreal}
+
+
+def _inc(ts_ms, kind, amount):
+    return {"time": ts_ms, "incomeType": kind, "symbol": "" if kind == "TRANSFER" else "ADAUSDT", "income": str(amount)}
+
+
+def _account_bot(snaps, income, wallet=None, unreal=0.0, rows=()):
+    from trading_bot.web import pnl_report
+
+    pnl_report._memo.clear()
+    store = SimpleNamespace(closed_trades=lambda strategy_type=None, limit=2000: [dict(r) for r in rows], recent_equity=lambda limit: snaps)
+    ex = SimpleNamespace(get_income_history=lambda **kw: [i for i in income if i["time"] >= kw["start_time"]])
+    if wallet is not None:
+        ex.get_account_info = lambda: {"wallet_balance": wallet, "unrealized_pnl": unreal}
+    return SimpleNamespace(trade_store=store, initial_capital=0.0, exchange=ex)
+
+
+def test_pnl_report_account_day_is_equity_delta_minus_transfers(_brt):
+    # Caso real de 16-17/11: depósito de $60 no dia 17 não é lucro; o que fechou antes do 1º snapshot entra pelo income
+    from trading_bot.web.pnl_report import build_report
+
+    snaps = [_snap("2026-11-16T19:39:00+00:00", 90.5), _snap("2026-11-16T23:50:00+00:00", 90.0, 1.0), _snap("2026-11-17T23:50:00+00:00", 151.75)]
+    income = [_inc(1794816000000, "REALIZED_PNL", 0.5), _inc(1794816000000, "COMMISSION", -0.02),   # 16/11 08:00 UTC, antes do 1º snapshot
+              _inc(1794916800000, "TRANSFER", 60.0),                                                 # 17/11 12:00 UTC: depósito
+              _inc(1794988800000, "FUNDING_FEE", -0.1)]                                              # 18/11 08:00 UTC: dia sem snapshot
+    out = build_report(_account_bot(snaps, income), "2026-11-15", "2026-11-18")
+    assert [(d["day"], d["net"], d["source"]) for d in out["calendar"]] == [
+        ("2026-11-15", 0.0, "none"), ("2026-11-16", 0.98, "equity"), ("2026-11-17", 0.75, "equity"), ("2026-11-18", -0.1, "income")]
+    assert out["period"] == {"usd": 1.63, "pct": pytest.approx(1.63 / 90.5 * 100, rel=1e-4), "start_equity": 90.5}
+    assert [(c["day"], c["value"]) for c in out["cumulative"]] == [("2026-11-15", 0.0), ("2026-11-16", 0.98), ("2026-11-17", 1.73), ("2026-11-18", 1.63)]
+    assert out["income_totals"]["TRANSFER"] == 60.0 and out["funding_daily"] == [{"day": "2026-11-18", "amount": -0.1}]
+
+
+def test_pnl_report_today_uses_live_equity_and_windows_anchor_on_utc_today(_brt):
+    from trading_bot.web.pnl_report import build_report
+
+    today = datetime.now(timezone.utc).date()
+    yday = (today - timedelta(days=1)).isoformat()
+    snaps = [_snap(f"{yday}T23:50:00+00:00", 100.0), _snap(f"{today.isoformat()}T00:10:00+00:00", 100.4)]
+    out = build_report(_account_bot(snaps, [], wallet=102.0, unreal=0.5), None, None, days=7)
+    assert out["today"] == today.isoformat()
+    assert out["series"][-1] == {"day": out["today"], "equity": 102.5, "unrealized": 0.5, "at": out["series"][-1]["at"]}  # ao vivo, não o snapshot de 00:10
+    assert out["today_pnl"] == {"usd": 2.5, "pct": 2.5, "start_equity": 100.0}
+    assert out["windows"]["d7"]["usd"] == 2.5 and out["windows"]["d30"]["usd"] == 2.5
+    assert out["calendar"][-1] == {"day": out["today"], "net": 2.5, "source": "equity"}
+    # 1º dia de vida: o único snapshot é de hoje e continua sendo a baseline, a equity ao vivo não o apaga
+    out = build_report(_account_bot(snaps[1:], [], wallet=102.0, unreal=0.5), None, None, days=7)
+    assert out["today_pnl"]["usd"] == pytest.approx(2.1) and out["series"] == [{"day": out["today"], "equity": 102.5, "unrealized": 0.5, "at": out["series"][0]["at"]}]
+
+
+def test_pnl_report_gap_day_income_is_not_counted_twice(_brt):
+    # Bot parado em 03/11 (sem snapshot) mas com funding: o dia mostra o income e o Δ de 04/11 desconta esse valor
+    from trading_bot.web.pnl_report import build_report
+
+    snaps = [_snap("2026-11-02T23:50:00+00:00", 100.0), _snap("2026-11-04T23:50:00+00:00", 101.0)]
+    out = build_report(_account_bot(snaps, [_inc(1793700000000, "FUNDING_FEE", -0.3)]), "2026-11-02", "2026-11-04")  # 03/11 10:00 UTC
+    assert [(d["day"], d["net"], d["source"]) for d in out["calendar"]] == [("2026-11-02", 0.0, "equity"), ("2026-11-03", -0.3, "income"), ("2026-11-04", 1.3, "equity")]
+    assert out["period"]["usd"] == 1.0
+
+
+def test_pnl_report_account_respects_pnl_since_floor(_brt, monkeypatch):
+    from trading_bot.web.pnl_report import build_report
+
+    monkeypatch.setattr(global_config, "PNL_SINCE_UTC", "2026-11-16T12:00:00Z", raising=False)
+    snaps = [_snap("2026-11-15T23:50:00+00:00", 50.0), _snap("2026-11-16T10:00:00+00:00", 80.0), _snap("2026-11-16T23:50:00+00:00", 85.0)]
+    income = [_inc(1794819960000, "REALIZED_PNL", 30.0),   # 16/11 09:06 UTC: antes do piso, a exchange nem devolve
+              _inc(1794840000000, "REALIZED_PNL", 1.0)]    # 16/11 14:40 UTC: depois do piso, antes do último snapshot
+    out = build_report(_account_bot(snaps, income), "2026-11-15", "2026-11-17")
+    assert [p["day"] for p in out["series"]] == ["2026-11-16"] and out["series"][0]["equity"] == 85.0
+    # 15/11 some (antes do piso); 16/11 = Δ zero do único snapshot válido + income depois do piso
+    assert [(d["day"], d["net"], d["source"]) for d in out["calendar"]] == [("2026-11-16", 1.0, "equity"), ("2026-11-17", 0.0, "none")]
 
 
 def test_profit_factor_pure():
