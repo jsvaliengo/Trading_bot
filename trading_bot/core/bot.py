@@ -2438,13 +2438,14 @@ class TradingBot:
             self.daily_realized_pnl = 0.0
             self.last_daily_reset = today
             
-            # Notifica reset
-            self.telegram.send_message(
-                "🌅 <b>NOVO DIA DE TRADING</b>\n\n"
-                f"📈 Meta de Lucro: <code>+${config.DAILY_PROFIT_TARGET:.2f}</code>\n"
-                f"📉 Limite de Perda: <code>-${config.DAILY_LOSS_LIMIT:.2f}</code>\n\n"
-                "<i>Bot pronto para operar!</i>"
-            )
+            # Notifica reset (meta/limite são do pullback)
+            if self.strategy_runner is None:
+                self.telegram.send_message(
+                    "🌅 <b>NOVO DIA DE TRADING</b>\n\n"
+                    f"📈 Meta de Lucro: <code>+${config.DAILY_PROFIT_TARGET:.2f}</code>\n"
+                    f"📉 Limite de Perda: <code>-${config.DAILY_LOSS_LIMIT:.2f}</code>\n\n"
+                    "<i>Bot pronto para operar!</i>"
+                )
         
         if self.daily_target_reached:
             return True
@@ -2466,7 +2467,8 @@ class TradingBot:
             )
             return True
         
-        if self.daily_realized_pnl <= -config.DAILY_LOSS_LIMIT:
+        # Martingale: fechar todas as pernas a mercado seria o pior momento (docs/MARTINGALE_HEDGE.md).
+        if self.strategy_runner is None and self.daily_realized_pnl <= -config.DAILY_LOSS_LIMIT:
             self.daily_target_reached = True
             logger.info(f"🛑 LIMITE DE PERDA ATINGIDO! P&L: ${self.daily_realized_pnl:.2f}")
             
@@ -2536,8 +2538,13 @@ class TradingBot:
             return False
 
         try:
-            # Sobrepõe 60s entre janelas para não perder evento no limite.
-            start_time = max(0, self.last_transfer_check_ts_ms - 60_000)
+            # A bill da Bitget pode aparecer horas depois do cTime: relê 24h (dedupe por
+            # tranId) e, sem histórico processado, tudo desde o início do bot. Nunca antes
+            # do start_time: o saldo daquele momento já virou initial_capital.
+            bot_start_ms = int(self.start_time.timestamp() * 1000)
+            start_time = max(bot_start_ms, self.last_transfer_check_ts_ms - 24 * 3_600_000)
+            if not self.processed_transfer_ids:
+                start_time = bot_start_ms
             transfer_events = self.exchange.get_income_history(
                 income_type='TRANSFER',
                 limit=1000,
@@ -2564,10 +2571,13 @@ class TradingBot:
                 if event_id in known_ids:
                     continue
 
+                event_ts = int(event.get('time', 0) or 0)
+                if event_ts < bot_start_ms:
+                    continue
+
                 known_ids.add(event_id)
                 self._mark_transfer_event_processed(event_id)
 
-                event_ts = int(event.get('time', 0) or 0)
                 if event_ts > latest_event_ts:
                     latest_event_ts = event_ts
 
@@ -2633,8 +2643,8 @@ class TradingBot:
                     f"<b>Últimos eventos:</b>\n{events_text}"
                 )
 
-            # Recalcula imediatamente a faixa/estratégia baseada no saldo novo.
-            if config.USE_BINANCE_STRATEGY:
+            # Recalcula imediatamente a faixa/estratégia baseada no saldo novo (só pullback).
+            if config.USE_BINANCE_STRATEGY and self.strategy_runner is None:
                 try:
                     self.check_and_update_binance_strategy()
                 except Exception as exc:
@@ -5677,9 +5687,9 @@ class TradingBot:
         logger.info("📱 Use /help no Telegram para ver comandos disponíveis.")
         
         self.telegram.send_startup_message(
-            pairs=config.TRADING_PAIRS,
+            pairs=list(self.martingale.pairs) if self.martingale else config.TRADING_PAIRS,
             capital=self.initial_capital,
-            leverage=config.LEVERAGE
+            leverage=config.MARTINGALE_LEVERAGE if self.martingale else config.LEVERAGE
         )
         
         self.telegram.send_message(
