@@ -471,7 +471,8 @@ class BitgetConnection:
                            start_time: int = None, raise_errors: bool = False) -> list:
         """Lista Binance-like {incomeType, income, symbol, time, asset}, ascendente.
         Bill de trade (open_*/close_*) vira COMMISSION (fee) e, nos close_*, REALIZED_PNL (amount);
-        contract_settle_fee vira FUNDING_FEE (amount)."""
+        contract_settle_fee vira FUNDING_FEE (amount); trans_* (depósito/saque entre carteiras,
+        ex. trans_from_exchange) vira TRANSFER (amount, sinal da Bitget)."""
         try:
             out = []
             for b in self._bills(start_time, limit):
@@ -483,6 +484,8 @@ class BitgetConnection:
                 items = []
                 if bt == FUNDING_TYPE:
                     items.append(("FUNDING_FEE", b.get("amount") or "0"))
+                elif bt.startswith("trans_"):
+                    items.append(("TRANSFER", b.get("amount") or "0"))
                 elif "open" in bt or "close" in bt:
                     if "close" in bt and _f(b.get("amount")) != 0:
                         items.append(("REALIZED_PNL", b.get("amount")))
@@ -498,10 +501,10 @@ class BitgetConnection:
             return []
 
     def _sum_income(self, start_ms: int, limit: int) -> Dict[str, Any]:
-        rows = self.get_income_history(limit=limit, start_time=start_ms, raise_errors=True)
         sums = {"REALIZED_PNL": 0.0, "FUNDING_FEE": 0.0, "COMMISSION": 0.0}
+        rows = [r for r in self.get_income_history(limit=limit, start_time=start_ms, raise_errors=True) if r["incomeType"] in sums]  # TRANSFER não é P&L
         for r in rows:
-            sums[r["incomeType"]] = sums.get(r["incomeType"], 0.0) + _f(r["income"])
+            sums[r["incomeType"]] += _f(r["income"])
         return {"realized_pnl": sums["REALIZED_PNL"], "funding_fee": sums["FUNDING_FEE"],
                 "commission": sums["COMMISSION"], "income_count": len(rows),
                 "income_types": sorted({r["incomeType"] for r in rows})}

@@ -682,7 +682,7 @@
             const future = d > end, before = key < startIso;
             const c = v ? cls(v.net) : '';
             const op = v ? (0.35 + 0.65 * Math.min(1, Math.abs(v.net) / maxAbs)).toFixed(2) : '';
-            html += `<i class="${c}${future || before ? ' future' : ''}" style="${op ? `opacity:${op}` : ''}" title="${fmt.day(key)}${v ? `: ${fmt.money(v.net, { signed: true })} em ${v.trades} trade(s)` : ''}"></i>`;
+            html += `<i class="${c}${future || before ? ' future' : ''}" style="${op ? `opacity:${op}` : ''}" title="${fmt.day(key)}${v ? `: ${fmt.money(v.net, { signed: true })} · ${tradesOf.get(key) || 0} trade(s)${v.source === 'income' ? ' · sem snapshot, pelo income' : ''}` : ''}"></i>`;
         }
         root.innerHTML = html;
         const n = (days || []).length, pos = (days || []).filter(d => d.net > 0).length;
@@ -706,7 +706,7 @@
     const addDays = (iso, n) => { const d = new Date(iso + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return dayStr(d); };
     const dayRange = (from, to) => { const out = []; for (let d = from; d <= to; d = addDays(d, 1)) out.push(d); return out; };
     const pnlState = { days: 30, from: null, to: null, tab: 'account', month: null, page: 1, symDir: -1 };
-    // presets mandam só `days`: o servidor ancora no dia de trading dele (BRT), não na data do navegador
+    // presets mandam só `days`: o servidor ancora no dia UTC dele (como a Bitget), não na data do navegador
     const pnlQuery = () => pnlState.days === 'custom' ? (pnlState.from && pnlState.to ? `?from=${pnlState.from}&to=${pnlState.to}` : '') : `?days=${pnlState.days}`;
     async function fetchPnl() {
         try {
@@ -719,7 +719,7 @@
     function pctTxt(w) { return isNum(w && w.pct) ? fmt.pct(w.pct) : '—'; }
     function renderPnl(p) {
         const t = p.totals || {}, w = p.windows || {}, a = p.account || {};
-        $('pnl-sub').textContent = `${fmt.day(p.from)} → ${fmt.day(p.to)} · ${t.trades || 0} trade(s) · dia de trading ${fmt.tzLabel()}`;
+        $('pnl-sub').textContent = `${fmt.day(p.from)} → ${fmt.day(p.to)} · ${t.trades || 0} trade(s) · dia UTC (como na Bitget)`;
         // Análise da conta: saldo + hoje/7d/30d
         $('pnl-equity').textContent = a.ok ? fmt.money(a.equity) : '—';
         $('pnl-equity-alt').textContent = a.ok ? fmt.moneyAlt(a.equity) : `saldo indisponível (${exchangeName()} não respondeu)`;
@@ -747,18 +747,19 @@
         renderPnlTrades(p); renderPnlSymbols(p); renderPnlIncome(p);
     }
     function renderPnlCalendar(p) {
-        const byDay = new Map((p.daily || []).map(d => [d.day, d]));
+        // variação do patrimônio por dia UTC (p.calendar); o nº de trades do dia vem da aba de trading
+        const byDay = new Map((p.calendar || []).map(d => [d.day, d])), tradesOf = new Map((p.daily || []).map(d => [d.day, d.trades]));
         const [y, m] = pnlState.month.split('-').map(Number);
         $('pnl-cal-month').textContent = new Date(Date.UTC(y, m - 1, 1)).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric', timeZone: 'UTC' });
         $('pnl-cal-prev').disabled = pnlState.month <= p.from.slice(0, 7); $('pnl-cal-next').disabled = pnlState.month >= p.to.slice(0, 7);
-        $('pnl-cal-sub').textContent = `realizado + funding − taxas · dia ${fmt.tzLabel()}`;
+        $('pnl-cal-sub').textContent = 'variação do patrimônio · dia UTC (como na Bitget)';
         const first = new Date(Date.UTC(y, m - 1, 1)), nDays = new Date(Date.UTC(y, m, 0)).getUTCDate();
         let html = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'].map(d => `<span class="wd">${d}</span>`).join('') + '<i></i>'.repeat(first.getUTCDay());
         for (let d = 1; d <= nDays; d++) {
             const key = `${pnlState.month}-${String(d).padStart(2, '0')}`, v = byDay.get(key);
             const out = key < p.from || key > p.to, future = key > p.today, today = key === p.today;
             const c = v ? (cls(v.net) || 'zero') : (out || future ? 'off' : 'zero');
-            html += `<span class="day ${c}${today ? ' today' : ''}" role="gridcell" title="${fmt.day(key)}${v ? `: ${fmt.money(v.net, { signed: true })} em ${v.trades} trade(s)` : ''}"><small>${today ? 'Hoje' : d}</small>${v ? `<b>${fmt.money(v.net, { signed: true })}</b>` : (out || future ? '' : '<b>0,00</b>')}</span>`;
+            html += `<span class="day ${c}${today ? ' today' : ''}" role="gridcell" title="${fmt.day(key)}${v ? `: ${fmt.money(v.net, { signed: true })} · ${tradesOf.get(key) || 0} trade(s)${v.source === 'income' ? ' · sem snapshot, pelo income' : ''}` : ''}"><small>${today ? 'Hoje' : d}</small>${v ? `<b>${fmt.money(v.net, { signed: true })}</b>` : (out || future ? '' : '<b>0,00</b>')}</span>`;
         }
         $('pnl-cal').innerHTML = html;
     }
@@ -797,18 +798,18 @@
     }
     function renderPnlTotal(p) {
         const pal = palette(), days = dayRange(p.from, p.to);
-        const realized = carry(days, new Map((p.cumulative || []).map(c => [c.day, c.value])), 0);
+        // total = variação do patrimônio acumulada (p.cumulative, já inclui o não realizado); realizado = trades fechados
+        const total = carry(days, new Map((p.cumulative || []).map(c => [c.day, c.value])), 0);
+        let run = 0; const realized = carry(days, new Map((p.daily || []).map(d => [d.day, run += d.net])), 0);
         const unreal = carry(days, new Map((p.series || []).map(s => [s.day, s.unrealized])));
-        const total = days.map((d, i) => isNum(unreal[i]) ? realized[i] + unreal[i] : null);
-        // hoje: o não realizado ao vivo da conta vale mais que o último snapshot (até 10 min atrás)
         const liveUnreal = p.account && p.account.ok ? p.account.unrealized : lastOf(unreal);
         const series = [['P&L total', total, pal.warn, 2], ['P&L realizado', realized, pal.good], ['P&L não realizado', unreal, pal.ac]];
-        [['pnl-tot-total', lastOf(realized) + (liveUnreal || 0)], ['pnl-tot-real', lastOf(realized)], ['pnl-tot-unreal', liveUnreal]].forEach(([id, v]) => { const el = $(id); el.textContent = fmt.money(v, { signed: true }); el.className = cls(v); });
+        [['pnl-tot-total', lastOf(total)], ['pnl-tot-real', lastOf(realized)], ['pnl-tot-unreal', liveUnreal]].forEach(([id, v]) => { const el = $(id); el.textContent = fmt.money(v, { signed: true }); el.className = cls(v); });
         $('pnl-total-legend').innerHTML = series.map(([label, , color]) => `<i class="sw" style="background:${color}"></i>${label}`).join('');
         pnlLines(p, 'pnlTotal', 'pnl-total-chart', series.map(([l, d, c, w]) => lineDs(l, d, c, w)), v => fmt.money(v, { signed: true }));
     }
     function renderPnlRoi(p) {
-        const pal = palette(), days = dayRange(p.from, p.to), eq = p.totals && p.totals.start_equity;
+        const pal = palette(), days = dayRange(p.from, p.to), eq = p.period && p.period.start_equity;
         const roi = carry(days, new Map((p.cumulative || []).map(c => [c.day, c.value])), 0).map(v => eq > 0 ? v / eq * 100 : null);
         const btc = carry(days, new Map(((p.reference || {}).BTCUSDT || []).map(r => [r.day, r.pct])));
         [['pnl-roi', lastOf(roi)], ['pnl-roi-btc', lastOf(btc)]].forEach(([id, v]) => { const el = $(id); el.textContent = fmt.pct(v); el.className = cls(v); });
