@@ -1177,15 +1177,11 @@ class TelegramCommandHandler:
                 side = pos['side']
                 entry = pos['entry_price']
                 current = self.bot.exchange.get_symbol_price(pos['symbol'])
-                qty = pos['quantity']
 
-                if side == 'LONG':
-                    pnl = (current - entry) * qty
-                    emoji = "📈"
-                else:
-                    pnl = (entry - current) * qty
-                    emoji = "📉"
-                
+                emoji = "📈" if side == 'LONG' else "📉"
+                # Não realizado da exchange (mark price), não ticker×qty.
+                pnl = float(pos.get('unrealized_pnl', 0.0) or 0.0)
+
                 total_unrealized += pnl
                 pnl_emoji = "🟢" if pnl >= 0 else "🔴"
                 

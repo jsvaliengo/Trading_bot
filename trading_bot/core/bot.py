@@ -39,7 +39,7 @@ from .trade_ledger import TradeLedger
 from .trade_store import trading_day, trading_day_start
 from .trade_store import TradeStore
 from .donchian import STRATEGY_TYPE as DONCHIAN, DonchianRunner
-from .martingale import STRATEGY_TYPE as MARTINGALE, MartingaleRunner
+from .martingale import STRATEGY_TYPE as MARTINGALE, MartingaleRunner, portfolio_stop_floor
 from ..ai.consultive_engine import ConsultiveEngine
 from ..observability.log_redaction import install_on_root_handlers
 from ..execution import ExecutionEngine
@@ -4910,13 +4910,13 @@ class TradingBot:
             sign = "+"
         return f"{sign}${value:.{decimals}f}"
 
-    def _build_daily_performance_snapshot(self, lookback_hours: int) -> Dict[str, Any]:
+    def _build_daily_performance_snapshot(self) -> Dict[str, Any]:
         """
-        Consolida métricas de performance em uma janela móvel (últimas N horas).
+        Consolida métricas de performance do dia de trading em curso (mesmo limite
+        de dia do dashboard/app da exchange, não janela móvel de 24h).
         """
-        lookback_hours = max(1, int(lookback_hours))
         now_utc = datetime.now(timezone.utc)
-        window_start_utc = now_utc - timedelta(hours=lookback_hours)
+        window_start_utc = trading_day_start(now_utc).astimezone(timezone.utc)
         window_start_ms = int(window_start_utc.timestamp() * 1000)
 
         income_list = self.exchange.get_income_history(limit=1000, start_time=window_start_ms)
@@ -4990,7 +4990,6 @@ class TradingBot:
         net_with_open = net_after_costs + open_pnl
 
         return {
-            'lookback_hours': lookback_hours,
             'window_start_utc': window_start_utc,
             'window_end_utc': now_utc,
             'trade_count': trade_count,
@@ -5022,8 +5021,7 @@ class TradingBot:
         """
         Envia relatório diário consolidado para tomada de decisão de risco/SL.
         """
-        lookback_hours = max(1, int(getattr(config, "DAILY_PERFORMANCE_REPORT_LOOKBACK_HOURS", 24)))
-        snapshot = self._build_daily_performance_snapshot(lookback_hours=lookback_hours)
+        snapshot = self._build_daily_performance_snapshot()
 
         if snapshot['trade_count'] == 0 and not force:
             return False
@@ -5032,7 +5030,15 @@ class TradingBot:
         status_text = "POSITIVO" if snapshot['net_after_costs'] >= 0 else "NEGATIVO"
         profit_factor = snapshot['profit_factor']
         profit_factor_text = "∞" if profit_factor is None else f"{profit_factor:.2f}"
-        sl_status = "ON" if config.USE_INDIVIDUAL_STOP_LOSS else "OFF"
+        if self.martingale is not None:
+            floor = portfolio_stop_floor(self.martingale.peak, config.MARTINGALE_PORTFOLIO_STOP_PERCENT,
+                                         config.MARTINGALE_STOP_LOSS_USDT)
+            risk_line = (f"TP {config.MARTINGALE_TP_PERCENT:.2f}% | Stop de portfólio: equity ≤ "
+                         f"${floor:.2f} (pico ${self.martingale.peak:.2f})")
+        else:
+            sl_status = "ON" if config.USE_INDIVIDUAL_STOP_LOSS else "OFF"
+            risk_line = (f"SL {sl_status} ({config.STOP_LOSS_PERCENT:.2f}%) | "
+                         f"Trailing {config.TRAILING_ACTIVATION_PERCENT:.2f}/{config.TRAILING_DISTANCE_PERCENT:.2f}%")
 
         start_utc = snapshot['window_start_utc'].strftime("%d/%m %H:%M")
         end_utc = snapshot['window_end_utc'].strftime("%d/%m %H:%M")
@@ -5040,7 +5046,7 @@ class TradingBot:
         top_loser = snapshot['top_loser_symbol'].replace('USDT', '') if snapshot['top_loser_symbol'] else "N/A"
 
         message = (
-            f"📅 <b>RELATÓRIO DIÁRIO ({snapshot['lookback_hours']}h)</b>\n"
+            f"📅 <b>RELATÓRIO DIÁRIO ({snapshot['window_start_utc'].strftime('%d/%m')} UTC)</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━━\n\n"
             f"🕒 <b>Janela UTC:</b> {start_utc} → {end_utc}\n"
             f"🧾 <b>Registros income:</b> <code>{snapshot['income_count']}</code>\n\n"
@@ -5063,8 +5069,7 @@ class TradingBot:
             f"• Líquido + Aberto: <code>{self._format_usd_brl(snapshot['net_with_open'], 4, True)}</code>\n\n"
             f"🏆 <b>Top Winner:</b> <code>{top_winner} {self._format_usd_brl(snapshot['top_winner_pnl'], 4, True)}</code>\n"
             f"📉 <b>Top Loser:</b> <code>{top_loser} {self._format_usd_brl(snapshot['top_loser_pnl'], 4, True)}</code>\n\n"
-            f"🛡️ <b>Risco atual:</b> SL {sl_status} ({config.STOP_LOSS_PERCENT:.2f}%) | "
-            f"Trailing {config.TRAILING_ACTIVATION_PERCENT:.2f}/{config.TRAILING_DISTANCE_PERCENT:.2f}%\n"
+            f"🛡️ <b>Risco atual:</b> {risk_line}\n"
             f"━━━━━━━━━━━━━━━━━━━━━"
         )
 
@@ -5693,6 +5698,16 @@ class TradingBot:
         )
         
         self.telegram.send_message(
+            "🎮 <b>COMANDOS TELEGRAM ATIVOS</b>\n\n"
+            "Use /help para ver todos os comandos.\n"
+            "Use /status para ver status a qualquer momento.\n"
+            "Use /positions para as posições abertas.\n"
+            "Use /balance para o saldo.\n"
+            "Use /dailyreport para relatório diário e controle on/off.\n"
+            "Use /drain e /undrain para tirar/devolver um par do martingale.\n"
+            "Use /pause para pausar o bot.\n"
+            "Use /stop para parar o bot."
+            if self.martingale else
             "🎮 <b>COMANDOS TELEGRAM ATIVOS</b>\n\n"
             "Use /help para ver todos os comandos.\n"
             "Use /status para ver status a qualquer momento.\n"
