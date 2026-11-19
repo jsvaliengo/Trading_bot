@@ -701,11 +701,11 @@
     }
 
     // ───────── Análise do P&L de futuros, réplica da tela da Bitget (/api/pnl_report) ─────────
-    const PNL_PAGE = 20;
+    const PNL_PAGE = 10;
     const dayStr = (d) => d.toISOString().slice(0, 10);
     const addDays = (iso, n) => { const d = new Date(iso + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return dayStr(d); };
     const dayRange = (from, to) => { const out = []; for (let d = from; d <= to; d = addDays(d, 1)) out.push(d); return out; };
-    const pnlState = { days: 30, from: null, to: null, tab: 'account', month: null, page: 1, symDir: -1 };
+    const pnlState = { days: 30, from: null, to: null, tab: 'account', month: null, page: {}, len: {}, symDir: -1 };
     // presets mandam só `days`: o servidor ancora no dia UTC dele (como a Bitget), não na data do navegador
     const pnlQuery = () => pnlState.days === 'custom' ? (pnlState.from && pnlState.to ? `?from=${pnlState.from}&to=${pnlState.to}` : '') : `?days=${pnlState.days}`;
     async function fetchPnl() {
@@ -822,13 +822,18 @@
         const ds = { ...lineDs('Equity', eq, pal.ac, 2), fill: true, backgroundColor: hexa(pal.ac, 0.12) };
         pnlLines(p, 'pnlEquity', 'pnl-equity-chart', [ds], v => fmt.money(v));
     }
+    // fatia da página atual de `rows` e atualiza o pager da aba; volta à página 1 quando a lista muda de tamanho (refresh/período)
+    function pnlPaginate(tab, rows) {
+        if (pnlState.len[tab] !== rows.length) { pnlState.len[tab] = rows.length; pnlState.page[tab] = 1; }
+        const pages = Math.max(1, Math.ceil(rows.length / PNL_PAGE)), page = pnlState.page[tab] = Math.max(1, Math.min(pnlState.page[tab] || 1, pages));
+        $(`pnl-${tab}-pager`).hidden = pages <= 1; $(`pnl-${tab}-page`).textContent = `página ${page} de ${pages}`;
+        $(`pnl-${tab}-prev`).disabled = page <= 1; $(`pnl-${tab}-next`).disabled = page >= pages;
+        return rows.slice((page - 1) * PNL_PAGE, page * PNL_PAGE);
+    }
     function renderPnlTrades(p) {
-        const rows = p.trades || [], tb = $('pnl-trades').querySelector('tbody'), pager = $('pnl-pager');
-        if (!rows.length) { tb.innerHTML = '<tr><td colspan="9" class="empty sans">Nenhum trade fechado no período.</td></tr>'; pager.hidden = true; return; }
-        const pages = Math.ceil(rows.length / PNL_PAGE); pnlState.page = Math.max(1, Math.min(pnlState.page, pages));
-        pager.hidden = pages <= 1; $('pnl-page').textContent = `${pnlState.page} / ${pages}`; $('pnl-prev').disabled = pnlState.page <= 1; $('pnl-next').disabled = pnlState.page >= pages;
-        const start = (pnlState.page - 1) * PNL_PAGE;
-        tb.innerHTML = rows.slice(start, start + PNL_PAGE).map(t => `<tr>
+        const rows = pnlPaginate('details', p.trades || []), tb = $('pnl-trades').querySelector('tbody');
+        if (!rows.length) { tb.innerHTML = '<tr><td colspan="9" class="empty sans">Nenhum trade fechado no período.</td></tr>'; return; }
+        tb.innerHTML = rows.map(t => `<tr>
             <td><small>${fmt.dateTime(t.exit_at)}</small></td>
             <td class="sans"><b>${esc(t.symbol)}</b></td>
             <td class="sans"><span class="side ${t.side === 'LONG' ? 'l' : 's'}">${esc(t.side)}</span></td>
@@ -849,21 +854,27 @@
     function renderPnlIncome(p) {
         const tb = $('pnl-income').querySelector('tbody'), tot = p.income_totals || {};
         $('pnl-income-totals').innerHTML = p.income_ok ? Object.keys(INCOME_LABEL).map(k => `<span>${INCOME_LABEL[k]} <b class="${cls(tot[k])}">${fmt.money(tot[k] || 0, { signed: true })}</b></span>`).join('') : `<span class="warn">Income da ${esc(exchangeName())} indisponível no momento; o restante da aba usa o banco local.</span>`;
-        const rows = p.income || [];
+        const rows = pnlPaginate('income', p.income || []);
         if (!rows.length) { tb.innerHTML = `<tr><td colspan="4" class="empty sans">${p.income_ok ? 'Nenhum lançamento no período.' : 'Sem dados.'}</td></tr>`; return; }
-        tb.innerHTML = rows.slice(0, 300).map(i => `<tr><td><small>${fmt.dateTime(i.time)}</small></td><td class="sans">${esc(INCOME_LABEL[i.type] || i.type)}</td><td class="sans">${esc(i.symbol || '—')}</td><td class="r ${cls(i.amount)}">${fmt.money(i.amount, { signed: true })}</td></tr>`).join('');
+        tb.innerHTML = rows.map(i => `<tr><td><small>${fmt.dateTime(i.time)}</small></td><td class="sans">${esc(INCOME_LABEL[i.type] || i.type)}</td><td class="sans">${esc(i.symbol || '—')}</td><td class="r ${cls(i.amount)}">${fmt.money(i.amount, { signed: true })}</td></tr>`).join('');
     }
     function initPnl() {
         $$('#pnl-ranges .chip').forEach(b => b.addEventListener('click', () => {
             const custom = b.dataset.days === 'custom'; $('pnl-custom').hidden = !custom;
-            pnlState.days = custom ? 'custom' : Number(b.dataset.days); pnlState.page = 1; pnlState.month = null;
+            pnlState.days = custom ? 'custom' : Number(b.dataset.days); pnlState.page = {}; pnlState.month = null;
             if (!custom || (pnlState.from && pnlState.to)) fetchPnl();
         }));
-        $('pnl-custom').addEventListener('submit', (e) => { e.preventDefault(); pnlState.from = $('pnl-from').value; pnlState.to = $('pnl-to').value; pnlState.page = 1; pnlState.month = null; fetchPnl(); });
-        $$('#pnl-tabs .chip').forEach(b => b.addEventListener('click', () => { pnlState.tab = b.dataset.tab; $$('.pnl-tab').forEach(t => { t.hidden = t.dataset.tab !== pnlState.tab; }); Object.values(charts).forEach(c => c.resize()); }));
+        $('pnl-custom').addEventListener('submit', (e) => { e.preventDefault(); pnlState.from = $('pnl-from').value; pnlState.to = $('pnl-to').value; pnlState.page = {}; pnlState.month = null; fetchPnl(); });
+        $$('#pnl-tabs .chip').forEach(b => b.addEventListener('click', () => {
+            pnlState.tab = b.dataset.tab; pnlState.page = {}; $$('.pnl-tab').forEach(t => { t.hidden = t.dataset.tab !== pnlState.tab; }); Object.values(charts).forEach(c => c.resize());
+            if (state.pnl) { renderPnlTrades(state.pnl); renderPnlIncome(state.pnl); }
+        }));
         const shiftMonth = (n) => { const [y, m] = pnlState.month.split('-').map(Number); pnlState.month = dayStr(new Date(Date.UTC(y, m - 1 + n, 1))).slice(0, 7); renderPnlCalendar(state.pnl); };
         $('pnl-cal-prev').addEventListener('click', () => shiftMonth(-1)); $('pnl-cal-next').addEventListener('click', () => shiftMonth(1));
-        $('pnl-prev').addEventListener('click', () => { pnlState.page--; renderPnlTrades(state.pnl); }); $('pnl-next').addEventListener('click', () => { pnlState.page++; renderPnlTrades(state.pnl); });
+        [['details', renderPnlTrades], ['income', renderPnlIncome]].forEach(([tab, render]) => {
+            $(`pnl-${tab}-prev`).addEventListener('click', () => { pnlState.page[tab]--; render(state.pnl); });
+            $(`pnl-${tab}-next`).addEventListener('click', () => { pnlState.page[tab]++; render(state.pnl); });
+        });
         $('pnl-symbols').querySelector('th[data-sort] button').addEventListener('click', (e) => { pnlState.symDir *= -1; e.target.closest('th').setAttribute('aria-sort', pnlState.symDir > 0 ? 'ascending' : 'descending'); renderPnlSymbols(state.pnl); });
     }
 
