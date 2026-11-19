@@ -1274,3 +1274,18 @@ def test_max_drawdown_is_worst_floating_dd_since_reset(monkeypatch):
     assert "max_drawdown" in dashboard_data.collect_history(_make_bot())
     html = open("trading_bot/web/templates/dashboard.html", encoding="utf-8").read()
     assert 'id="st-dd-w"' in html
+
+
+def test_pnl_details_and_income_tabs_paginate_client_side():
+    """Abas "Detalhes" e "Financiamento e Transações": 10 linhas por página, pager "‹ Anterior · página X de Y · Próxima ›"
+    (escondido com 1 página), volta à página 1 ao trocar aba/período ou quando a lista muda de tamanho."""
+    html = open("trading_bot/web/templates/dashboard.html", encoding="utf-8").read()
+    for tab in ("details", "income"):
+        pager = html.split(f'id="pnl-{tab}-pager"')[1].split("</div>")[0]
+        assert f'id="pnl-{tab}-prev">‹ Anterior<' in pager and f'id="pnl-{tab}-next">Próxima ›<' in pager and f'id="pnl-{tab}-page"' in pager
+    js = open("trading_bot/web/static/js/main.js", encoding="utf-8").read()
+    assert "const PNL_PAGE = 10;" in js
+    assert "if (pnlState.len[tab] !== rows.length) { pnlState.len[tab] = rows.length; pnlState.page[tab] = 1; }" in js
+    assert "$(`pnl-${tab}-pager`).hidden = pages <= 1; $(`pnl-${tab}-page`).textContent = `página ${page} de ${pages}`;" in js
+    assert "pnlPaginate('details', p.trades || [])" in js and "pnlPaginate('income', p.income || [])" in js
+    assert "pnlState.tab = b.dataset.tab; pnlState.page = {};" in js
