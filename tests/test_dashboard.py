@@ -910,10 +910,20 @@ def test_pnl_report_income_floors_on_pnl_since(_brt, monkeypatch):
     assert out["income_totals"]["REALIZED_PNL"] == 1.5
 
 
-def test_pnl_report_series_last_snapshot_per_utc_day(_brt):
+def test_pnl_report_series_last_snapshot_per_utc_day(_brt, monkeypatch):
     # "P&L total" / "Tendência de ativos": 1 ponto por dia UTC = último snapshot do dia,
     # equity = wallet + não realizado (sem cap simulado), realizado acumulado só entra no testnet simulado.
+    from trading_bot.web import pnl_report
     from trading_bot.web.pnl_report import build_report
+
+    # "hoje" fixo: a janela de snapshots é min(período, hoje−29d); com a data real o snapshot de 20/10
+    # saía da janela a partir de 19/11 e a % do período caía no 1º snapshot (101.0) em vez do de 20/10
+    class _FixedNow(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 11, 7, 12, 0, 0, tzinfo=tz)
+
+    monkeypatch.setattr(pnl_report, "datetime", _FixedNow)
 
     snaps = [
         {"timestamp": "2026-11-02T10:00:00+00:00", "balance": 100.0, "pnl_unrealized": 1.0},
