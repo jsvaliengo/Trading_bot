@@ -2263,6 +2263,9 @@ def test_check_for_deposit_catches_late_bill_and_ignores_pre_start_transfer(monk
     monkeypatch.setattr(config, "CAPITAL_TRANSFER_DETECTION_ENABLED", True)
     monkeypatch.setattr(config, "CAPITAL_TRANSFER_MIN_ABS_USDT", 1.0)
     monkeypatch.setattr(config, "USE_BINANCE_STRATEGY", False)
+    # Relógio fixo: o 2º check lê a janela do last_check anterior e depois o sobrescreve
+    # com "agora"; sem congelar, 1 ms de diferença quebra a asserção da janela.
+    monkeypatch.setattr("trading_bot.core.bot.time.time", lambda: 1_795_000_000.0)
 
     assert bot.check_for_deposit() is True
     assert bot.initial_capital == 150.0
