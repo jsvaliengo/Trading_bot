@@ -1190,7 +1190,7 @@ def test_rank_pairs_orders_by_color_then_score_with_sheet_reds_last():
         "DDDUSDT": sc("red", 9.0, 40.0, 30.0),
         "EEEUSDT": {"color": "unknown"},
         "DOGEUSDT": sc("green", 0.5, 5.0, 1.0),     # vermelha fixa da planilha: melhor número, mas vai pro fim
-        "FFFUSDT": sc("green", 1.0, 10.0, 2.0, volu=20e6),  # volume abaixo do piso penaliza
+        "FFFUSDT": sc("green", 1.0, 10.0, 2.0, volu=2.5e6),  # volume abaixo do piso (5M) penaliza
     }
     assert dashboard_data.rank_pairs(scores) == ["CCCUSDT", "BBBUSDT", "FFFUSDT", "AAAUSDT", "DDDUSDT", "EEEUSDT", "DOGEUSDT"]
     assert dashboard_data.rank_score(scores["CCCUSDT"]) == pytest.approx(1.0 / 5 + 10 / 25 + 2.0 / 10.5)  # move_green = 1,5 × 7

@@ -396,8 +396,8 @@ class TradingConfig:
     MARTINGALE_SCORE_ADX_RED: float = _env_float("TRADING_BOT_MARTINGALE_SCORE_ADX_RED", 35.0)
     MARTINGALE_SCORE_MOVE_GREEN: float = _env_float("TRADING_BOT_MARTINGALE_SCORE_MOVE_GREEN", 0.0)
     MARTINGALE_SCORE_MOVE_RED: float = _env_float("TRADING_BOT_MARTINGALE_SCORE_MOVE_RED", 20.0)
-    # 40M = piso de volume usado na VM pro pullback (MIN_VOLUME_24H_USD lá); o default do código é 150M.
-    MARTINGALE_SCORE_MIN_VOLUME_USD: float = _env_float("TRADING_BOT_MARTINGALE_SCORE_MIN_VOLUME_USD", 40_000_000)
+    # 5M calibrado no volume dos candles da Bitget (8-30× menor que o quoteVolume da Binance, onde o 40M antigo foi medido).
+    MARTINGALE_SCORE_MIN_VOLUME_USD: float = _env_float("TRADING_BOT_MARTINGALE_SCORE_MIN_VOLUME_USD", 5_000_000)
     MARTINGALE_SCORE_REFRESH_MINUTES: int = _env_int("TRADING_BOT_MARTINGALE_SCORE_REFRESH_MINUTES", 720)
     # Seleção automática de pares pelo ranking do score (docs/MARTINGALE_HEDGE.md, "Seleção automática").
     # Só troca par com AMBAS as pernas zeradas; AUTO_PAIRS=false prende MARTINGALE_PAIRS.

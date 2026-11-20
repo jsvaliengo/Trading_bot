@@ -455,6 +455,20 @@ def test_fills_slots_of_current_sheet_row_and_shrinks_when_row_drops(_one_slot_a
     assert list(r.pairs) == ["TRXUSDT"]
 
 
+def test_logs_once_per_hour_when_row_wants_more_coins_but_none_is_eligible(_one_slot_auto, caplog, monkeypatch):
+    ex = _Ex(balance=300.0, min_notional=1.0)   # faixa 300 → 2 moedas, só ADA ativo e todo o resto vermelho
+    bot, r = _runner(ex)
+    _scored(r, ADA="yellow", BNB="red", TRX="red")
+    caplog.set_level("INFO")
+    r.tick()
+    r.tick()
+    assert caplog.text.count("faixa pede 2 moeda(s), 1 ativa(s) — nenhuma verde/amarela elegível") == 1
+    monkeypatch.setattr(mg.time, "time", lambda: r._no_candidate_logged_at + 3601)
+    r.tick()
+    assert caplog.text.count("nenhuma verde/amarela elegível") == 2
+    bot.telegram.send_message.assert_not_called()
+
+
 def test_skips_candidates_already_in_slot_with_open_position_or_below_min_notional(_one_slot_auto):
     ex = _Ex(balance=300.0, min_notional=0.5)   # faixa 300 → 2 vagas, ambas ocupadas
     ex.min_notionals["ETHUSDT"] = 1000.0
