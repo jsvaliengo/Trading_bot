@@ -1299,3 +1299,28 @@ def test_pnl_details_and_income_tabs_paginate_client_side():
     assert "$(`pnl-${tab}-pager`).hidden = pages <= 1; $(`pnl-${tab}-page`).textContent = `página ${page} de ${pages}`;" in js
     assert "pnlPaginate('details', p.trades || [])" in js and "pnlPaginate('income', p.income || [])" in js
     assert "pnlState.tab = b.dataset.tab; pnlState.page = {};" in js
+
+
+def test_klines_endpoint_serves_exchange_candles_for_chart():
+    """/api/klines: velas da exchange do bot (get_klines_raw, formato Binance-like) como {t,o,h,l,c,v};
+    exige auth, valida símbolo/intervalo; o modal do gráfico usa Lightweight Charts (versão pinada) em vez do iframe."""
+    from trading_bot.web.app import create_app
+    raw = [[1_700_000_000_000, "0.50", "0.52", "0.49", "0.51", "1234.5", 1_700_000_059_999, "0", 0, "0", "0", "0"]]
+    bot = _make_bot()
+    bot.exchange = SimpleNamespace(get_klines_raw=MagicMock(return_value=raw))
+    app, _ = create_app(bot)
+    client = app.test_client()
+    assert client.get("/api/klines?symbol=ADAUSDT").status_code == 401
+    r = client.get("/api/klines?symbol=adausdt&limit=5000", headers=_basic_auth("admin", "secret"))
+    assert r.status_code == 200
+    assert r.get_json() == {"symbol": "ADAUSDT", "interval": "1m",
+                            "candles": [{"t": 1_700_000_000, "o": 0.5, "h": 0.52, "l": 0.49, "c": 0.51, "v": 1234.5}]}
+    bot.exchange.get_klines_raw.assert_called_once_with("ADAUSDT", "1m", 1000)
+    assert client.get("/api/klines?symbol=ADA/USDT", headers=_basic_auth("admin", "secret")).status_code == 400
+    assert client.get("/api/klines?symbol=ADAUSDT&interval=2m", headers=_basic_auth("admin", "secret")).status_code == 400
+    html = open("trading_bot/web/templates/dashboard.html", encoding="utf-8").read()
+    assert 'src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"' in html
+    assert 'id="chart-box"' in html and "chart-frame" not in html
+    js = open("trading_bot/web/static/js/main.js", encoding="utf-8").read()
+    assert "fetch(`/api/klines?symbol=${encodeURIComponent(cg.sym)}&interval=1m&limit=300`" in js
+    assert "try { chartSync(); }" in js and "if (cg) { clearInterval(cg.timer); cg.api.remove(); cg = null;" in js

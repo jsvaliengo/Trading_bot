@@ -906,6 +906,7 @@
         const hadFx = isNum(state.fx && state.fx.usd_brl); if (l.fx) state.fx = l.fx;
         if (!hadFx && isNum(state.fx && state.fx.usd_brl) && state.pnl) try { renderPnl(state.pnl); } catch (err) { console.error('render do P&L falhou', err); }
         try { renderLive(l); } catch (err) { console.error('render falhou', err); }
+        try { chartSync(); } catch (err) { console.error('linhas do gráfico falharam', err); }
         resetCountdown();
         // trade fechou desde o último poll: o histórico mudou
         const closed = l.summary.closed_trades;
@@ -947,16 +948,77 @@
     modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !modal.hidden) closeModal(); });
 
-    // Gráfico 1m do par (TradingView embed). Demo/testnet não tem feed no TV: usa o símbolo perpétuo da exchange real.
+    // Gráfico 1m do par (Lightweight Charts) como no app da Bitget: velas + volume + EMAs 5/10/20/50,
+    // linha da média de cada perna (qtd · P&L) e etiquetas no eixo pra alvo/degrau/empate/stop (cores da régua).
+    // Velas via /api/klines (exchange do bot) a cada 5s; as linhas acompanham o snapshot (chartSync em applyLive).
     const chart = $('chart-modal');
-    function openChart(sym) {
-        const ex = exchangeName().split(' ')[0].toUpperCase();
-        const tv = `${/^(BITGET|OKX|BINANCE)$/.test(ex) ? ex : 'BINANCE'}:${sym}.P`;
-        $('chart-title').textContent = sym;
-        $('chart-frame').src = `https://s.tradingview.com/widgetembed/?symbol=${encodeURIComponent(tv)}&interval=1&theme=dark&hide_top_toolbar=1&hide_side_toolbar=1&allow_symbol_change=0&save_image=0&locale=br`;
-        lastFocus = document.activeElement; chart.hidden = false; $('chart-close').focus();
+    const EMAS = [5, 10, 20, 50], EMA_COLORS = ['#f6c343', '#f28b3c', '#c86bf2', '#3987e5'];
+    let cg = null;   // { sym, api, candles, vol, emas: [series], lines: [priceLine], timer }
+    const ema = (closes, n) => { const k = 2 / (n + 1); let v = null; return closes.map(c => (v = v === null ? c : c * k + v * (1 - k))); };
+    async function chartLoad() {
+        if (!cg) return;
+        try {
+            const r = await fetch(`/api/klines?symbol=${encodeURIComponent(cg.sym)}&interval=1m&limit=300`, { credentials: 'include' });
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            const { candles } = await r.json(); if (!cg || !candles) return;
+            const first = !cg.loaded; cg.loaded = true;
+            cg.candles.setData(candles.map(k => ({ time: k.t, open: k.o, high: k.h, low: k.l, close: k.c })));
+            cg.vol.setData(candles.map(k => ({ time: k.t, value: k.v, color: k.c >= k.o ? 'rgba(47,181,90,.45)' : 'rgba(224,82,79,.45)' })));
+            const closes = candles.map(k => k.c);
+            cg.emas.forEach((s, i) => s.setData(ema(closes, EMAS[i]).map((v, j) => ({ time: candles[j].t, value: v })).slice(EMAS[i])));
+            if (first) { cg.api.timeScale().setVisibleLogicalRange({ from: candles.length - 90, to: candles.length + 6 }); chartSync(); }
+        } catch (err) { console.error('klines falharam', err); }
     }
-    function closeChart() { chart.hidden = true; $('chart-frame').src = 'about:blank'; if (lastFocus) lastFocus.focus(); }
+    function chartSync() {
+        if (!cg || !cg.loaded) return;
+        cg.lines.forEach(l => cg.candles.removePriceLine(l)); cg.lines = [];
+        const legs = ((state.live && state.live.martingale && state.live.martingale.legs) || []).filter(l => l.symbol === cg.sym && isNum(l.avg_price));
+        const positions = (state.live && state.live.positions) || [];
+        const LS = LightweightCharts.LineStyle, add = (price, color, title, style, width, offscale) => {
+            if (!isNum(price)) return;
+            cg.lines.push(cg.candles.createPriceLine({ price, color, title, lineWidth: width || 1, lineStyle: style, axisLabelVisible: true }));
+            if (!offscale) cg.scale.push(price);
+        };
+        cg.scale = [];
+        for (const l of legs) {
+            const long = l.side === 'LONG', pos = positions.find(p => p.symbol === l.symbol && p.side === l.side) || {};
+            const pnl = isNum(l.unrealized_pnl_usd) ? ` ${l.unrealized_pnl_usd >= 0 ? '+' : '−'}${Math.abs(l.unrealized_pnl_usd).toFixed(4)} USDT${isNum(pos.unrealized_pnl_percent) ? ` (${pos.unrealized_pnl_percent >= 0 ? '+' : '−'}${Math.abs(pos.unrealized_pnl_percent).toFixed(2)}%)` : ''}` : '';
+            add(l.avg_price, long ? cssv('--good') : cssv('--bad'), `${long ? '' : '−'}${fmt.price(l.quantity)}${pnl}`, LS.Solid, 2);
+            add(l.tp_price, cssv('--good'), `Alvo ${l.side}`, LS.Dashed);
+            add(l.next_add_price, cssv('--warn'), `Degrau ${l.level + 1} ${l.side}`, LS.Dashed);
+            add(l.breakeven_price, cssv('--text-muted'), `Empate ${l.side}`, LS.Dotted);
+            add(l.stop_price, cssv('--bad'), `Stop ${l.side}`, LS.LargeDashed, 1, true);   // stop pode estar longe: não estica a escala
+        }
+        cg.candles.applyOptions({ autoscaleInfoProvider: cg.autoscale });
+    }
+    function openChart(sym) {
+        closeChart(true);
+        $('chart-title').textContent = sym;
+        lastFocus = document.activeElement; chart.hidden = false; $('chart-close').focus();
+        if (!window.LightweightCharts) { $('chart-box').textContent = 'Biblioteca do gráfico não carregou.'; return; }
+        const api = LightweightCharts.createChart($('chart-box'), {
+            autoSize: true,
+            layout: { background: { type: 'solid', color: cssv('--bg-card') }, textColor: cssv('--text-dim'), fontSize: 11 },
+            grid: { vertLines: { color: cssv('--grid') }, horzLines: { color: cssv('--grid') } },
+            rightPriceScale: { borderColor: cssv('--border-strong'), scaleMargins: { top: 0.05, bottom: 0.22 } },
+            timeScale: { borderColor: cssv('--border-strong'), timeVisible: true, secondsVisible: false },
+            crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+        });
+        const candles = api.addCandlestickSeries({ upColor: cssv('--good'), downColor: cssv('--bad'), borderVisible: false, wickUpColor: cssv('--good'), wickDownColor: cssv('--bad'), priceFormat: { type: 'price', precision: 5, minMove: 0.00001 } });
+        const vol = api.addHistogramSeries({ priceFormat: { type: 'volume' }, priceScaleId: 'vol', lastValueVisible: false, priceLineVisible: false });
+        api.priceScale('vol').applyOptions({ scaleMargins: { top: 0.82, bottom: 0 }, visible: false });
+        const emas = EMAS.map((n, i) => api.addLineSeries({ color: EMA_COLORS[i], lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false }));
+        // escala inclui média/alvo/degrau/empate das pernas (linhas de preço não entram no autoscale por padrão)
+        const autoscale = (orig) => { const r = orig(); if (!r || !r.priceRange || !cg || !cg.scale.length) return r;
+            return { ...r, priceRange: { minValue: Math.min(r.priceRange.minValue, ...cg.scale), maxValue: Math.max(r.priceRange.maxValue, ...cg.scale) } }; };
+        cg = { sym, api, candles, vol, emas, lines: [], scale: [], autoscale, loaded: false, timer: setInterval(chartLoad, 5000) };
+        chartLoad();
+    }
+    function closeChart(keepOpen) {
+        if (cg) { clearInterval(cg.timer); cg.api.remove(); cg = null; $('chart-box').textContent = ''; }
+        if (keepOpen) return;
+        chart.hidden = true; if (lastFocus) lastFocus.focus();
+    }
     document.addEventListener('click', (e) => { const b = e.target.closest('[data-chart]'); if (b) openChart(b.dataset.chart); });
     $('chart-close').addEventListener('click', closeChart);
     chart.addEventListener('click', (e) => { if (e.target === chart) closeChart(); });

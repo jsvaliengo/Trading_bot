@@ -22,7 +22,7 @@ from flask import Flask, jsonify, redirect, render_template, request, session, u
 from flask_socketio import SocketIO
 
 from ..core.config import config, exchange_label
-from . import auth
+from . import auth, klines
 from .auth import login_required
 from .data import collect_history, collect_live, collect_snapshot, collect_summary
 
@@ -89,6 +89,7 @@ def create_app(bot) -> tuple[Flask, SocketIO]:
         return {"static_url": static_url}
 
     _register_routes(app, socketio)
+    klines.register(app)
     _register_sockets(socketio)
     return app, socketio
 
