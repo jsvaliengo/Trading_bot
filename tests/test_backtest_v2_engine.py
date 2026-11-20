@@ -185,3 +185,117 @@ def test_daily_ema_trend_matches_independent_loop():
         exp.append(c[-1] / ent - 1)
     assert len(exp) >= 2
     assert [t.gross_frac for t in res.trades] == pytest.approx(exp)
+
+
+# ───────────── saídas do bot ao vivo (experimentos) ─────────────
+def _bot_trail():
+    from trading_bot.core.bot import TradingBot
+
+    class _Fee:
+        @staticmethod
+        def get_taker_fee_rate():
+            return 0.0005
+
+    return lambda side, entry, peak, dist: TradingBot._trailing_stop_price(
+        _Fee, "LONG" if side == LONG else "SHORT", entry, peak, dist)
+
+
+def _plan(sl=99.0, tp=103.0, act=0.5, dist=0.4):
+    from scripts.backtest_v2.engine import LivePlan
+
+    return lambda fill: LivePlan(sl, tp, act, dist)
+
+
+def test_live_trailing_arms_and_exits_at_trail_stop():
+    from scripts.backtest_v2.engine import simulate_live_trade
+
+    # barra 1: pico 100,8 arma (lucro 0,8% ≥ 0,5%); stop = 100,8 × 0,996; barra 2 cai através dele
+    b = _bars([100, 100, 100.6], [100, 100.8, 100.7], [100, 99.9, 100.2], [100, 100.6, 100.3])
+    tr = simulate_live_trade(b, 0, LONG, _plan(), _bot_trail(), ZERO, end_idx=3)
+    assert tr.reason == "trail" and tr.exit_idx == 2
+    assert tr.exit_price == pytest.approx(100.3968)
+    assert tr.mfe_frac == pytest.approx(0.008)
+
+
+def test_live_trailing_breakeven_floor_and_short_mirror():
+    from scripts.backtest_v2.engine import simulate_live_trade
+
+    # pico 100,55: 100,55 × 0,996 = 100,148 < piso 100 × 1,0025 → stop no piso 100,25
+    b = _bars([100, 100, 100.4], [100, 100.55, 100.45], [100, 99.95, 100.0], [100, 100.4, 100.1])
+    tr = simulate_live_trade(b, 0, LONG, _plan(), _bot_trail(), ZERO, end_idx=3)
+    assert tr.reason == "trail" and tr.exit_price == pytest.approx(100.25)
+    s = _bars([100, 100, 99.6], [100, 100.05, 100.0], [100, 99.45, 99.55], [100, 99.6, 99.9])
+    tr = simulate_live_trade(s, 0, SHORT, _plan(sl=101.0, tp=97.0), _bot_trail(), ZERO, end_idx=3)
+    assert tr.reason == "trail" and tr.exit_price == pytest.approx(99.75)
+
+
+def test_live_adverse_extreme_first_sl_beats_tp_in_same_bar():
+    from scripts.backtest_v2.engine import simulate_live_trade
+
+    b = _bars([100, 100], [100, 104], [100, 98.5], [100, 103])
+    tr = simulate_live_trade(b, 0, LONG, _plan(), _bot_trail(), ZERO, end_idx=2)
+    assert tr.reason == "sl" and tr.exit_price == pytest.approx(99.0)
+
+
+def test_time_exit_cuts_only_when_mfe_below_threshold():
+    from scripts.backtest_v2.engine import TimeExit, simulate_live_trade
+
+    flat = _bars([100] * 5, [100, 100.2, 100.2, 100.2, 100.2], [100, 99.9, 99.9, 99.9, 99.9], [100] * 5)
+    tr = simulate_live_trade(flat, 0, LONG, _plan(), _bot_trail(), ZERO, end_idx=5, time_exit=TimeExit(2, 0.3))
+    assert tr.reason == "time" and tr.exit_idx == 3 and tr.exit_price == pytest.approx(100.0)
+    assert tr.exit_time == int(flat.open_time[3])
+    moved = _bars([100] * 5, [100, 100.4, 100.2, 100.2, 100.2], [100, 99.9, 99.9, 99.9, 99.9], [100] * 5)
+    tr = simulate_live_trade(moved, 0, LONG, _plan(), _bot_trail(), ZERO, end_idx=5, time_exit=TimeExit(2, 0.3))
+    assert tr.reason == "eod"
+
+
+def test_maker_fill_requires_trade_through_and_charges_maker_fee():
+    from scripts.backtest_v2.engine import MakerEntry, maker_fill, simulate_live_trade
+
+    m = MakerEntry(offset_pct=0.0, k_bars=2)
+    touch = _bars([100, 100.1, 100.2], [100, 100.3, 100.4], [100, 100.0, 100.0], [100, 100.2, 100.3])
+    assert maker_fill(touch, 0, LONG, m, 3) is None            # só tocou o limite: não preenche
+    through = _bars([100, 100.1, 100.2], [100, 100.3, 100.4], [100, 99.98, 100.0], [100, 100.2, 100.3])
+    assert maker_fill(through, 0, LONG, m, 3) == (1, 100.0)
+    gap = _bars([100, 99.5, 99.6], [100, 99.7, 99.8], [100, 99.4, 99.5], [100, 99.6, 99.7])
+    assert maker_fill(gap, 0, LONG, m, 3) == (1, 99.5)         # abriu além do limite: fill na abertura
+    late = _bars([100, 100.1, 100.2, 100.1], [100, 100.3, 100.4, 100.2], [100, 100.05, 100.1, 99.9],
+                 [100, 100.2, 100.3, 100.0])
+    assert maker_fill(late, 0, LONG, m, 4) is None             # atravessou só na 3ª barra (> k_bars)
+    assert maker_fill(through, 0, SHORT, MakerEntry(0.0, 2), 3) == (1, 100.1)   # sell limit, abriu acima
+    c = Costs(fee_rate=0.0005, entry_slip=0.0003, exit_slip=0.0, stop_slip=0.0)
+    tr = simulate_live_trade(through, 0, LONG, _plan(), _bot_trail(), c, end_idx=3, maker=m)
+    assert tr.entry_price == pytest.approx(100.0)             # limit: sem slippage de entrada
+    assert tr.fee_frac == pytest.approx(0.0002 + 0.0005 * tr.exit_price / 100.0)
+
+
+def test_portfolio_sizes_by_trade_stop_times_slippage_buffer():
+    n = 10
+    b = _bars([100] * n, [100.5] * n, [99.5] * n, [100] * n)
+    sd = {"TESTUSDT": SymbolData(b, SignalSet(np.array([0]), np.array([LONG], np.int8)), None)}
+    pc = PortfolioConfig(initial_equity=1000, risk_pct=1.0, max_pos_mult=1.0, max_gross_mult=3.0, sl_buffer=1.5)
+    res = run_portfolio(sd, [(T0, T0 + n * H, {"sl_pct": 2.0})], T0, T0 + n * H, ZERO, pc)
+    assert res.trades[0].notional == pytest.approx(1000 * 0.01 / (0.02 * 1.5))
+
+
+def test_day_block_bootstrap_degenerate_and_wider_than_iid_when_days_cluster():
+    from scripts.backtest_v2.experiments import day_block_ci
+    from scripts.backtest_v2.pipeline import bootstrap_ci
+
+    assert day_block_ci(np.full(50, 0.01), np.arange(50) // 5) == pytest.approx((0.01, 0.01))
+    day = np.repeat(np.arange(40), 25)
+    x = np.repeat(np.random.default_rng(1).normal(0, 0.01, 40), 25)   # trades do mesmo dia idênticos
+    lo, hi = day_block_ci(x, day)
+    ilo, ihi = bootstrap_ci(x)
+    assert (hi - lo) > 3 * (ihi - ilo)
+
+
+def test_donchian_breakout_signals_and_channel_exit():
+    from scripts.backtest_v2.strategies import DonchianBreakout
+
+    c = np.array([10, 11, 10, 11, 10, 12, 12.5, 11.8, 9.5, 9.0], float)
+    b = _bars(c, c + 0.1, c - 0.1, c)
+    st = DonchianBreakout("1h", 3, 2, [2.0])
+    ss = st.compute("SYN", {"1h": b}, 0, int(b.open_time[-1]) + H)
+    assert ss.idx.tolist() == [5, 6, 8, 9] and ss.side.tolist() == [LONG, LONG, SHORT, SHORT]
+    assert ss.exit_long[7] and not ss.exit_long[6]
