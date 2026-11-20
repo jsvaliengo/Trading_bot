@@ -150,6 +150,21 @@ fi
 # Fecha sessão screen anterior (se sobrou) para evitar duplicidade.
 screen -S "$SCREEN_NAME" -X quit >/dev/null 2>&1 || true
 
+# Escrito ANTES de subir o bot: o dashboard lê deploy_sha uma vez no boot
+# (versão ?v= dos assets); escrever depois faria o processo novo ver o SHA antigo.
+mkdir -p "$RUNTIME_DIR"
+DEPLOY_INFO_FILE="$RUNTIME_DIR/deploy_info.json"
+cat > "$DEPLOY_INFO_FILE" <<EOF
+{
+  "deployed_at_utc": "$(date -u '+%Y-%m-%dT%H:%M:%SZ')",
+  "deploy_sha": "$DEPLOY_SHA",
+  "deploy_ref": "$DEPLOY_REF",
+  "deploy_actor": "$DEPLOY_ACTOR",
+  "host": "$(hostname)"
+}
+EOF
+log "Metadados de deploy salvos em $DEPLOY_INFO_FILE"
+
 log "Subindo nova sessão screen '$SCREEN_NAME' via wrapper de auto-restart..."
 chmod +x "$BOT_WRAPPER" 2>/dev/null || true
 screen -dmS "$SCREEN_NAME" bash -lc "PROJECT_DIR='$PROJECT_DIR' PYTHON_BIN='$PYTHON_BIN' BOT_MODULE='$BOT_MODULE' '$BOT_WRAPPER'"
@@ -179,18 +194,5 @@ else
   log "Falha ao iniciar bot (wrapper ou python não detectado em ${HEALTHCHECK_TIMEOUT}s)."
   exit 1
 fi
-
-mkdir -p "$RUNTIME_DIR"
-DEPLOY_INFO_FILE="$RUNTIME_DIR/deploy_info.json"
-cat > "$DEPLOY_INFO_FILE" <<EOF
-{
-  "deployed_at_utc": "$(date -u '+%Y-%m-%dT%H:%M:%SZ')",
-  "deploy_sha": "$DEPLOY_SHA",
-  "deploy_ref": "$DEPLOY_REF",
-  "deploy_actor": "$DEPLOY_ACTOR",
-  "host": "$(hostname)"
-}
-EOF
-log "Metadados de deploy salvos em $DEPLOY_INFO_FILE"
 
 log "Concluído."

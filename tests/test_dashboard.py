@@ -177,8 +177,36 @@ def test_index_requires_auth_returns_html():
     # Topo sem Sair nem toggle de tema; relógio no lugar (main.js atualiza a cada segundo).
     assert b'action="/logout"' not in r.data and b'theme-toggle' not in r.data
     assert b'id="clock"' in r.data and b'tradingbot-theme' not in r.data
-    # Versão (mtime) na URL dos assets: sem isso o navegador usa JS antigo após deploy.
+    # Versão na URL dos assets: sem isso o navegador usa JS antigo após deploy.
     assert b"/static/js/main.js?v=" in r.data and b"/static/css/style.css?v=" in r.data
+
+
+def test_static_version_vem_do_deploy_sha_lido_uma_vez_no_boot(monkeypatch, tmp_path):
+    """HTML e assets têm que ter a mesma versão pra um processo: rsync troca o main.js
+    ~10s antes do restart e o mtime por request fazia o template antigo puxar o JS novo."""
+    from trading_bot.web import data as dash
+    from trading_bot.web.app import create_app
+    monkeypatch.setattr(global_config, "PROJECT_ROOT", str(tmp_path))
+    (tmp_path / "runtime").mkdir()
+    info = tmp_path / "runtime" / "deploy_info.json"
+    info.write_text('{"deploy_sha": "b8740eb1234567890abc"}')
+    dash._deploy_cache.update({"mtime": None, "data": {}})
+    app, _ = create_app(_make_bot())
+    assert app.config["STATIC_VERSION"] == "b8740eb12345"
+    client = app.test_client()
+    _login(client)
+    assert b"/static/js/main.js?v=b8740eb12345" in client.get("/").data
+    # Deploy novo no disco com o processo vivo: a versão NÃO muda até o restart.
+    info.write_text('{"deploy_sha": "ffff00001111"}')
+    dash._deploy_cache.update({"mtime": None, "data": {}})
+    assert b"/static/js/main.js?v=b8740eb12345" in client.get("/").data
+
+    # Sem deploy_info (dev/testes): versão estável e não vazia.
+    info.unlink()
+    dash._deploy_cache.update({"mtime": None, "data": {}})
+    app2, _ = create_app(_make_bot())
+    v = app2.config["STATIC_VERSION"]
+    assert v and v == create_app(_make_bot())[0].config["STATIC_VERSION"]
 
 
 def test_martingale_dashboard_is_ring_legs_sheet_pnl_health():
