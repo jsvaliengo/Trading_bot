@@ -78,7 +78,7 @@ sem resultado anterior a moeda fica cinza (`unknown`). Código: `services/martin
 | `vol_pct` | média de (high−low)/close dos últimos 14 candles diários, em % | < 5,0 | > 8,0 | `VOL_GREEN`, `VOL_RED` |
 | `adx` | ADX(14) no 4h, último valor | < 25 | > 35 | `ADX_GREEN`, `ADX_RED` |
 | `max_move_pct` | maior variação close-to-close numa só direção (pico-a-vale) nos últimos 30 dias | < alcance da escada (`STEP_PERCENT × MAX_LEVELS`; `MOVE_GREEN` > 0 fixa outro valor) | > 20 | `MOVE_GREEN`, `MOVE_RED` |
-| `volume_usd` | média do quoteVolume diário 14d | — | < 40M | `MIN_VOLUME_USD` |
+| `volume_usd` | média do volume diário 14d (candles da exchange) | — | < 5M (calibrado na Bitget) | `MIN_VOLUME_USD` |
 
 Cor final: **vermelho** se qualquer critério vermelho; **verde** se todos verdes; senão **amarelo**. `reasons`
 lista em pt-BR os critérios fora do verde (ex.: `vol 5,2% (>4,0%)`). As vermelhas fixas da planilha (NOT,

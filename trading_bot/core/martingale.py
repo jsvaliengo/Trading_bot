@@ -176,6 +176,7 @@ class MartingaleRunner:
         self.drain: set = set(config.MARTINGALE_DRAIN_PAIRS or [])    # env ∪ state (/drain); não abre nem adiciona
         self.score_cache: Optional[PairScoreCache] = None             # dono do score (dashboard lê daqui)
         self.stops = 0
+        self._no_candidate_logged_at = 0.0
 
     def snapshot(self) -> Dict[str, Any]:
         c = config
@@ -438,6 +439,9 @@ class MartingaleRunner:
         while active() < slots:
             new = self._take(candidates, now)
             if new is None:
+                if now - self._no_candidate_logged_at >= 3600:   # tick é ~2s; avisa 1×/hora
+                    self._no_candidate_logged_at = now
+                    logger.info(f"🎰 Martingale: faixa pede {slots} moeda(s), {active()} ativa(s) — nenhuma verde/amarela elegível no score")
                 break
             self._announce(f"ocupando vaga livre com {new} ({pos[new] + 1}º no ranking; faixa pede {slots} moeda(s))")
 

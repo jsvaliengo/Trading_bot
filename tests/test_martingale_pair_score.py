@@ -32,7 +32,7 @@ def _trend(n, step=0.02, qv=100e6):
 def _defaults(monkeypatch):
     for k, v in dict(MARTINGALE_SCORE_VOL_GREEN=4.0, MARTINGALE_SCORE_VOL_RED=7.0, MARTINGALE_SCORE_ADX_GREEN=25.0,
                      MARTINGALE_SCORE_ADX_RED=35.0, MARTINGALE_SCORE_MOVE_GREEN=0.0, MARTINGALE_SCORE_MOVE_RED=20.0,
-                     MARTINGALE_SCORE_MIN_VOLUME_USD=40e6, MARTINGALE_STEP_PERCENT=1.5, MARTINGALE_MAX_LEVELS=9).items():
+                     MARTINGALE_SCORE_MIN_VOLUME_USD=5e6, MARTINGALE_STEP_PERCENT=1.5, MARTINGALE_MAX_LEVELS=9).items():
         monkeypatch.setattr(config, k, v, raising=False)
 
 
@@ -57,8 +57,8 @@ def test_strong_trend_is_red_by_adx_and_move():
 
 
 def test_low_volume_alone_is_red():
-    s = ps.score_pair(_flat(30, qv=10e6), _flat(60))
-    assert s["color"] == "red" and s["reasons"] == ["volume 10M (<40M)"]
+    s = ps.score_pair(_flat(30, qv=1e6), _flat(60))
+    assert s["color"] == "red" and s["reasons"] == ["volume 1M (<5M)"]
 
 
 def test_middle_band_is_yellow_with_pt_br_reason():
