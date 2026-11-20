@@ -179,7 +179,7 @@ class TradingConfig:
     # 5. Acesse: https://api.telegram.org/bot<TOKEN>/getUpdates
     # 6. Procure pelo "chat":{"id": XXXXXXXX} - esse é seu CHAT_ID
     
-    TELEGRAM_ENABLED: bool = True  # Ative/desative notificações
+    TELEGRAM_ENABLED: bool = _env_bool("TRADING_BOT_TELEGRAM_ENABLED", True)  # false = sem notificações nem comandos
     TELEGRAM_TOKEN: str = os.getenv("TELEGRAM_TOKEN", "")
     TELEGRAM_CHAT_ID: str = os.getenv("TELEGRAM_CHAT_ID", "")
     
