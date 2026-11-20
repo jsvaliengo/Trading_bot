@@ -24,9 +24,19 @@ from flask_socketio import SocketIO
 from ..core.config import config, exchange_label
 from . import auth
 from .auth import login_required
-from .data import collect_history, collect_live, collect_snapshot, collect_summary
+from .data import _deploy_info, collect_history, collect_live, collect_snapshot, collect_summary
 
 logger = logging.getLogger(__name__)
+
+
+def _static_version(static_folder: str) -> str:
+    sha = str(_deploy_info().get("deploy_sha") or "")[:12]
+    if sha:
+        return sha
+    mtimes = [
+        os.path.getmtime(os.path.join(root, f)) for root, _, files in os.walk(static_folder) for f in files
+    ]
+    return str(int(max(mtimes))) if mtimes else "0"
 
 
 def create_app(bot) -> tuple[Flask, SocketIO]:
@@ -77,15 +87,16 @@ def create_app(bot) -> tuple[Flask, SocketIO]:
         engineio_logger=False,
     )
 
+    # ?v= fixo por processo: lido UMA vez no boot (SHA do deploy; sem deploy_info,
+    # o maior mtime da pasta static). Ler o mtime a cada request fazia o processo
+    # antigo (template em memória) apontar pro JS novo que o rsync acabou de trocar
+    # no disco, ~10s antes do restart — boot do JS quebrava até o reload.
+    app.config["STATIC_VERSION"] = _static_version(app.static_folder)
+
     @app.context_processor
-    def _static_version():
-        # ?v=<mtime> muda a cada deploy, senão o navegador segue com JS/CSS antigo em cache.
+    def _static_url():
         def static_url(filename):
-            try:
-                v = int(os.path.getmtime(os.path.join(app.static_folder, filename)))
-            except OSError:
-                return url_for("static", filename=filename)
-            return url_for("static", filename=filename, v=v)
+            return url_for("static", filename=filename, v=app.config["STATIC_VERSION"])
         return {"static_url": static_url}
 
     _register_routes(app, socketio)
