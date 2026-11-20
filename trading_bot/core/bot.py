@@ -5597,6 +5597,18 @@ class TradingBot:
             logger.warning(f"⚠️ Erro ao enviar health report para Telegram: {e}")
             return False
 
+    def _start_telegram_commands(self) -> None:
+        """Sobe o polling de comandos só com Telegram ligado e token configurado."""
+        if not (config.TELEGRAM_ENABLED and config.TELEGRAM_TOKEN):
+            logger.info(
+                "📴 Telegram desligado (TRADING_BOT_TELEGRAM_ENABLED=false ou sem token): "
+                "sem notificações nem comandos"
+            )
+            return
+        logger.info("🎮 Iniciando polling de comandos Telegram...")
+        self.command_handler.start_polling()
+        logger.info("📱 Use /help no Telegram para ver comandos disponíveis.")
+
     def run(self):
         """
         Loop principal com dois ciclos independentes:
@@ -5684,12 +5696,9 @@ class TradingBot:
         analysis_tasks = []
         analysis_index = 0
         
-        # Inicia polling de comandos do Telegram
-        logger.info("🎮 Iniciando polling de comandos Telegram...")
-        self.command_handler.start_polling()
+        self._start_telegram_commands()
         
         logger.info("🏁 Bot iniciado! Pressione CTRL+C para parar.")
-        logger.info("📱 Use /help no Telegram para ver comandos disponíveis.")
         
         self.telegram.send_startup_message(
             pairs=list(self.martingale.pairs) if self.martingale else config.TRADING_PAIRS,

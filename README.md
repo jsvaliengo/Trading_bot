@@ -115,6 +115,7 @@ TRADING_BOT_SIMULATED_BALANCE_USD=130  # cap de saldo só em testnet
 **Telegram**
 ```
 TELEGRAM_TOKEN= / TELEGRAM_CHAT_ID=
+TRADING_BOT_TELEGRAM_ENABLED=true  # false desliga notificações e polling de comandos
 ```
 
 **Risco / estratégia** (defaults atuais)

@@ -3324,3 +3324,35 @@ def test_dedupe_manual_close_script_apaga_so_a_linha_binance_do_mesmo_minuto(tmp
     rows = con.execute("SELECT close_reason FROM trades WHERE status='closed' ORDER BY id").fetchall()
     assert [r[0] for r in rows] == ["Manual (dashboard)", "Stop Loss (Binance)"]
     assert list(tmp_path.glob("t.db.bak.dedupe.*"))
+
+
+def test_telegram_disabled_skips_command_polling(monkeypatch):
+    """TRADING_BOT_TELEGRAM_ENABLED=false: sem polling de comandos e sem request HTTP."""
+    from unittest.mock import MagicMock
+
+    from trading_bot.services.notifications import TelegramNotifier
+
+    bot = _make_light_bot()
+    bot.command_handler = MagicMock()
+    monkeypatch.setattr(config, "TELEGRAM_ENABLED", False)
+    monkeypatch.setattr(config, "TELEGRAM_TOKEN", "token")
+
+    bot._start_telegram_commands()
+    bot.command_handler.start_polling.assert_not_called()
+
+    monkeypatch.setattr("trading_bot.services.notifications.requests.post", MagicMock(side_effect=AssertionError("HTTP")))
+    notifier = TelegramNotifier(token="token", chat_id="123", enabled=False)
+    assert notifier.send_message("oi") is False
+
+
+def test_telegram_without_token_skips_command_polling(monkeypatch):
+    """Token vazio (paliativo em prod) também não sobe o polling."""
+    from unittest.mock import MagicMock
+
+    bot = _make_light_bot()
+    bot.command_handler = MagicMock()
+    monkeypatch.setattr(config, "TELEGRAM_ENABLED", True)
+    monkeypatch.setattr(config, "TELEGRAM_TOKEN", "")
+
+    bot._start_telegram_commands()
+    bot.command_handler.start_polling.assert_not_called()
