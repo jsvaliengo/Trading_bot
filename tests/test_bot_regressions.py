@@ -3219,6 +3219,29 @@ def test_market_close_sem_avgprice_cai_no_ticker_com_aviso(caplog):
     assert "avgPrice" in caplog.text
 
 
+def test_market_close_telegram_desligado_nao_loga_erro(caplog):
+    """Telegram desligado (PR #307): send_* retorna False sem tentar; não é falha (VM 21/11, trades #34-#39)."""
+    bot = _bot_for_market_close({"orderId": 7, "status": "FILLED", "avgPrice": "2407.64", "executedQty": "0.05"})
+    bot.telegram = SimpleNamespace(enabled=False, send_position_closed=MagicMock(return_value=False))
+    pos = {"symbol": "ETHUSDT", "side": "SHORT", "entry_price": 2411.20, "quantity": 0.05, "leverage": 20}
+
+    with caplog.at_level("ERROR"):
+        assert bot._close_position_with_notification(pos, "Trailing Stop") is True
+
+    assert "FALHA ao enviar" not in caplog.text
+
+
+def test_market_close_telegram_ligado_e_falhou_loga_erro(caplog):
+    bot = _bot_for_market_close({"orderId": 7, "status": "FILLED", "avgPrice": "2407.64", "executedQty": "0.05"})
+    bot.telegram = SimpleNamespace(enabled=True, send_position_closed=MagicMock(return_value=False))
+    pos = {"symbol": "ETHUSDT", "side": "SHORT", "entry_price": 2411.20, "quantity": 0.05, "leverage": 20}
+
+    with caplog.at_level("ERROR"):
+        bot._close_position_with_notification(pos, "Trailing Stop")
+
+    assert "FALHA ao enviar" in caplog.text
+
+
 @pytest.mark.parametrize("open_kwargs,side,setup_kw", [
     ({"open_long": True}, "LONG", dict(signal=Signal.STRONG_BUY, stop_loss=4.94, take_profit=5.15)),
     ({"open_short": True}, "SHORT", dict(signal=Signal.STRONG_SELL, stop_loss=5.05, take_profit=4.85)),

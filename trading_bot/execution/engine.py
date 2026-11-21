@@ -943,7 +943,7 @@ class ExecutionEngine:
             logger.info(
                 f"✅ Notificação Telegram enviada para trade #{bot.closed_trades_count}"
             )
-        else:
+        elif getattr(bot.telegram, "enabled", True):  # desligado retorna False sem tentar
             logger.error(
                 f"❌ FALHA ao enviar notificação Telegram para trade #{bot.closed_trades_count}"
             )
