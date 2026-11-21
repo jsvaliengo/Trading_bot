@@ -768,6 +768,8 @@
             const c = v ? (cls(v.net) || 'zero') : (out || future ? 'off' : 'zero');
             html += `<span class="day ${c}${today ? ' today' : ''}" role="gridcell" title="${fmt.day(key)}${v ? `: ${fmt.money(v.net, { signed: true })} · ${tradesOf.get(key) || 0} trade(s)` : ''}"><small>${today ? 'Hoje' : d}</small>${v ? `<b>${fmt.money(v.net, { signed: true })}</b>` : (out || future ? '' : '<b>0,00</b>')}</span>`;
         }
+        // completa a última semana com células "off" pra grade não terminar com buraco
+        html += '<span class="day off" aria-hidden="true"></span>'.repeat((7 - (first.getUTCDay() + nDays) % 7) % 7);
         $('pnl-cal').innerHTML = html;
     }
     function pnlBase(p, id) { const pal = palette(); return { pal, el: $(id), ok: !!$(id) && typeof Chart !== 'undefined', days: dayRange(p.from, p.to) }; }

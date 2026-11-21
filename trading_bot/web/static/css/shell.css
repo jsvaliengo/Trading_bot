@@ -40,7 +40,10 @@
 .icon-btn:hover { color:var(--text); border-color:var(--accent); }
 .user-menu { margin:0; }
 
-/* KPIs: 3 cards (valor grande, rótulo, sparkline embaixo) */
+/* KPIs: 5 cards (valor grande, rótulo, sparkline embaixo). Regra da plataforma: nenhuma grade termina com
+   buraco — quando a contagem não fecha as colunas, o(s) último(s) card(s) esticam pra completar a linha.
+   Em 3 colunas a grade tem 6 frações (card = 2): sobra 1 → ocupa 6; sobram 2 → 3 cada. Em 2 colunas o
+   ímpar final ocupa a linha. (nth-child conta elementos [hidden]: só vale em grades sem filhos ocultos.) */
 .kpis { display:grid; grid-template-columns:repeat(5, minmax(0,1fr)); gap:14px; }
 .kpi { position:relative; overflow:hidden; background:var(--glass); border:1px solid var(--glass-border); border-radius:20px; min-height:150px; display:flex; flex-direction:column; backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px); }
 .kpi-h { padding:16px 18px 0; display:flex; flex-direction:column; gap:2px; min-width:0; }
@@ -80,6 +83,10 @@
     .ring-card .tile { padding:12px 14px; min-height:100px; } .ring-card .tile .tv { font-size:22px; }
 }
 
+/* Linha de status fora do martingale (6 tiles visíveis): entre 761 e 1180px o style.css põe 4 colunas e sobram 2
+   buracos; 3 colunas fecham a conta. (No Donchian são 8 tiles: 4 colunas fecham.) */
+@media (max-width: 1180px) and (min-width: 761px) { .status:where(:has(.tile[hidden])) { grid-template-columns:repeat(3, minmax(0,1fr)); } }
+
 /* Páginas: uma visível por vez (showPage no main.js) */
 .page { display:flex; flex-direction:column; gap:14px; min-width:0; } /* min-width:0: tabela larga rola dentro do card, não alarga a página */
 /* Linhas de dois cards: mesma altura quando os dois estão abertos (o gráfico de equity estica pra preencher);
@@ -97,11 +104,18 @@
     .sidebar { position:fixed; left:0; top:0; transform:translateX(-100%); transition:transform .18s ease; box-shadow:0 0 40px rgba(0,0,0,.4); }
     body.nav-open .sidebar { transform:none; }
     .burger { display:inline-grid; place-items:center; }
-    .kpis { grid-template-columns:repeat(3, minmax(0,1fr)); gap:10px; }
+    .kpis { gap:10px; }
 }
-@media (max-width: 1400px) and (min-width: 1101px) { .kpis { grid-template-columns:repeat(3, minmax(0,1fr)); } }
+/* 3 colunas de KPI entre 761 e 1400px: sem buraco (5 cards → 3 + 2 esticados) */
+@media (max-width: 1400px) and (min-width: 761px) {
+    .kpis { grid-template-columns:repeat(6, minmax(0,1fr)); }
+    .kpis > * { grid-column:span 2; }
+    .kpis > :last-child:nth-child(3n+1) { grid-column:span 6; }
+    .kpis > :nth-last-child(2):nth-child(3n+1), .kpis > :last-child:nth-child(3n+2) { grid-column:span 3; }
+}
 @media (max-width: 760px) {
     .kpis { grid-template-columns:repeat(2, minmax(0,1fr)); }
+    .kpis > :last-child:nth-child(odd) { grid-column:1 / -1; } /* 5º card ocupa a linha inteira */
     .kpi { min-height:120px; }
     .kpi-h { padding:12px 14px 0; } .kpi-bar, .kpi-legs { margin-left:14px; margin-right:14px; }
     .kpi-v { font-size:22px; }
@@ -109,6 +123,7 @@
     .page { gap:10px; }
 }
 @media (max-width: 600px) {
+    .pnl-wins > :last-child:nth-child(odd) { grid-column:1 / -1; } /* 3 blocos em 2 colunas: o 3º ocupa a linha */
     .hero { display:none; } /* os KPIs já trazem equity e P&L do dia logo abaixo do topo */
     .burger { order:0; }
     .top-id { order:1; }
