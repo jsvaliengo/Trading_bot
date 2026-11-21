@@ -426,7 +426,9 @@
             const fillCut = inside ? (long ? `0 ${100 - (pct(mk) - pct(z0)) / zw * 100}% 0 0` : `0 0 0 ${(pct(mk) - pct(z0)) / zw * 100}%`) : '';
             const gl = (v, txt, side) => `<span class="gl ${side}" style="${side === 'r' ? `right:${(100 - pct(v)).toFixed(2)}%` : `left:${at(v)}`}">${txt}</span>`;
             const [mn, mx] = [`mín ${pnlAt(be)}`, `máx ${pnlAt(tp)}`];
-            const narrow = zw / 100 * $('mg-list').clientWidth < 190;   // faixa estreita (mobile): uma linha só, ancorada no lado com espaço
+            // faixa estreita: os 3 rótulos (mín/meio/máx) não cabem → uma linha só, ancorada no lado com espaço. A largura é a do CARD (grade de 2 no desktop).
+            const cardW = $('mg-list').clientWidth / (matchMedia('(min-width: 1101px)').matches ? 2 : 1) - 44;
+            const narrow = zw / 100 * cardW < 260;
             const gain = `<div class="gain" aria-hidden="true">
                 ${inside && !narrow ? gl(mk, `agora ${pnlAt(mk)}`, 'now') : ''}
                 <div class="gbar${long ? '' : ' rev'}" style="left:${at(z0)};width:${zw.toFixed(2)}%"></div>
