@@ -59,11 +59,15 @@ def collect_live(bot) -> Dict[str, Any]:
             _safe_float(p.get("quantity")) * _safe_float(p.get("mark_price") or p.get("entry_price"))
             for p in positions
         )
+    martingale = collect_martingale(bot, positions, summary)
     return {
         "summary": summary,
         "positions": positions,
         "forward_test": collect_forward_test(bot, summary),
-        "martingale": collect_martingale(bot, positions, summary),
+        "martingale": martingale,
+        # planilha sempre presente (a página Planilha não depende do runner)
+        "sheet": martingale["sheet"] if martingale else collect_sheet(
+            bot, _safe_float(summary.get("last_balance")) or None, set(), with_scores=False),
         "engine": engine,
         "health": collect_health(bot, summary),
         "server_time": datetime.utcnow().isoformat() + "Z",
@@ -142,19 +146,25 @@ def collect_martingale(bot, positions: List[Dict[str, Any]], summary: Dict[str, 
         out = runner.ladder(positions, equity)
     except Exception:
         return None
-    scores = _pair_scores(bot)
+    out["sheet"] = collect_sheet(bot, equity, set(out.get("pairs") or {}), with_scores=True)
+    return out
+
+
+def collect_sheet(bot, equity: Optional[float], active: set, with_scores: bool) -> Dict[str, Any]:
+    """Planilha CoinTech2u (estática) com a faixa da equity atual, moedas verdes/vermelhas, score e
+    ranking. Renderiza sempre, com ou sem runner do martingale; o score só é consultado com runner
+    (sem ele não vale subir a thread de score)."""
+    scores = _pair_scores(bot) if with_scores else {"scores": {}, "updated_at": None}
     full = {c + "USDT": scores["scores"].get(c + "USDT", {"color": "unknown"}) for c in COINTECH2U_GREEN + COINTECH2U_RED}
-    active = set(out.get("pairs") or {})
     ranking = [{"symbol": sym, "rank": i + 1, "color": full[sym]["color"], "score": rank_score(full[sym]),
                 "active": sym in active, "sheet_red": sym.replace("USDT", "") in COINTECH2U_RED}
                for i, sym in enumerate(rank_pairs(full))]
     cur = sheet_row_index(equity)
     nxt = COINTECH2U_SHEET[0 if cur is None else cur + 1] if cur is None or cur + 1 < len(COINTECH2U_SHEET) else None
-    out["sheet"] = {"rows": COINTECH2U_SHEET, "current": cur,
-                    "green": COINTECH2U_GREEN, "red": COINTECH2U_RED,
-                    "scores": scores["scores"], "scores_updated_at": scores["updated_at"], "ranking": ranking,
-                    "projection": _martingale_projection(bot, equity, nxt[1] if nxt else None)}
-    return out
+    return {"rows": COINTECH2U_SHEET, "current": cur,
+            "green": COINTECH2U_GREEN, "red": COINTECH2U_RED,
+            "scores": scores["scores"], "scores_updated_at": scores["updated_at"], "ranking": ranking,
+            "projection": _martingale_projection(bot, equity, nxt[1] if nxt else None)}
 
 
 def _martingale_projection(bot, balance: Optional[float], next_bank: Optional[float]) -> Optional[Dict[str, Any]]:
@@ -236,26 +246,17 @@ def _deploy_info() -> Dict[str, Any]:
 
 
 def collect_health(bot, summary: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Saúde operacional: WS de klines, user stream, erros do loop, deploy, uptime
-    e o motivo provável da pausa (o bot não guarda o motivo; inferido do estado)."""
+    """Saúde operacional: user stream, erros do loop, deploy, uptime e o motivo provável
+    da pausa (o bot não guarda o motivo; inferido do estado)."""
     summary = summary or {}
     exchange = getattr(bot, "exchange", None)
-    ws = user = None
-    for name, target in (("get_ws_stats", "ws"), ("get_user_stream_stats", "user")):
-        try:
-            value = getattr(exchange, name)() if exchange is not None and hasattr(exchange, name) else None
-        except Exception:
-            value = None
-        if target == "ws" and value:
-            streams = value.get("streams") or []
-            ws = {
-                "subscriptions": value.get("subscriptions", len(streams)),
-                "reconnects": value.get("reconnects", 0),
-                "recovering": sum(1 for s in streams if s.get("recovering")),
-                "max_age_seconds": max([_safe_float(s.get("age_seconds")) for s in streams] or [0.0]),
-            }
-        elif target == "user" and value:
-            user = {k: value.get(k) for k in ("started", "error_count", "restart_attempts", "last_message_age_seconds")}
+    user = None
+    try:
+        value = exchange.get_user_stream_stats() if exchange is not None and hasattr(exchange, "get_user_stream_stats") else None
+    except Exception:
+        value = None
+    if value:
+        user = {k: value.get(k) for k in ("started", "error_count", "restart_attempts", "last_message_age_seconds")}
     runtime: Dict[str, Any] = {}
     try:
         if hasattr(bot, "get_runtime_stats_report"):
@@ -283,7 +284,6 @@ def collect_health(bot, summary: Optional[Dict[str, Any]] = None) -> Dict[str, A
             reason = "pausa manual (dashboard ou Telegram)"
     deploy = _deploy_info()
     return {
-        "ws": ws,
         "user_stream": user,
         "runtime": runtime,
         "uptime_seconds": uptime,
@@ -389,6 +389,8 @@ def _binance_summary(exchange, store) -> Dict[str, float]:
         if "wallet_balance" in info:
             out["wallet_balance"] = _safe_float(info.get("wallet_balance"))
         out["unrealized"] = _safe_float(info.get("unrealized_pnl"))
+        out["available"] = _safe_float(info.get("available_balance"))
+        out["margin_used"] = _safe_float(info.get("total_initial_margin"))
     except Exception:
         ok = False
     # falha transitória não fica presa 15s no cache: o próximo poll tenta de novo
@@ -439,9 +441,13 @@ def collect_summary(bot) -> Dict[str, Any]:
     binance_funding_total = 0.0
     binance_commission_total = 0.0
     wallet_balance = _safe_float(getattr(bot, "last_known_balance", 0.0) or 0.0)
+    available_balance: Optional[float] = None
+    margin_used: Optional[float] = None
     exchange = getattr(bot, "exchange", None)
     if exchange is not None:
         b = _binance_summary(exchange, getattr(bot, "trade_store", None))
+        available_balance = b.get("available")
+        margin_used = b.get("margin_used")
         binance_daily_realized = b.get("daily_realized", 0.0)
         binance_funding_fee = b.get("funding_fee", 0.0)
         binance_commission = b.get("commission", 0.0)
@@ -487,6 +493,9 @@ def collect_summary(bot) -> Dict[str, Any]:
         "total_pnl": total_pnl,
         "daily_pnl": daily_realized,
         "unrealized_pnl": binance_unrealized,
+        # Perpétuos: margem presa nas posições e saldo livre pra novas ordens (None sem exchange).
+        "margin_used": margin_used,
+        "available_balance": available_balance,
         "funding_fee_today": binance_funding_fee,
         "commission_today": binance_commission,
         # Parcelas que compõem daily_pnl (= soma das três) p/ o subtítulo do card.
@@ -604,6 +613,14 @@ def collect_positions(bot) -> List[Dict[str, Any]]:
         unrealized_pnl = _safe_float(live.get("unrealized_pnl")) if live else None
         entry_price = _safe_float(payload.get("entry_price"))
         side = payload.get("side", "")
+        quantity = _safe_float(payload.get("quantity"))
+        # Perpétuo: notional, alavancagem, margem e liquidação vêm da exchange; ROE = P&L / margem.
+        leverage = int(_safe_float(live.get("leverage"))) or None if live else None
+        notional = quantity * (mark_price or entry_price) if quantity else None
+        margin_usd = _safe_float(live.get("margin")) or None if live else None
+        if margin_usd is None and notional and leverage:
+            margin_usd = notional / leverage
+        roe_percent = unrealized_pnl / margin_usd * 100.0 if unrealized_pnl is not None and margin_usd else None
 
         pnl_percent: Optional[float] = None
         if mark_price and entry_price > 0:
@@ -617,9 +634,14 @@ def collect_positions(bot) -> List[Dict[str, Any]]:
                 "side": side,
                 "entry_price": entry_price,
                 "mark_price": mark_price,
-                "quantity": _safe_float(payload.get("quantity")),
+                "quantity": quantity,
                 "unrealized_pnl_usd": unrealized_pnl,
                 "unrealized_pnl_percent": pnl_percent,
+                "notional": notional,
+                "leverage": leverage,
+                "margin_usd": margin_usd,
+                "roe_percent": roe_percent,
+                "liquidation_price": (_safe_float(live.get("liquidation_price")) or None) if live else None,
                 "strategy_name": payload.get("strategy_name", "primary"),
                 "strategy_type": payload.get("strategy_type", "trend_signal"),
                 "custom_stop_loss": payload.get("custom_stop_loss"),

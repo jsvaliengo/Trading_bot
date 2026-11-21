@@ -26,11 +26,14 @@ from trading_bot.web import data as dashboard_data
 
 
 @pytest.fixture(autouse=True)
-def _dashboard_config(monkeypatch):
+def _dashboard_config(monkeypatch, tmp_path):
     """Aplica DASHBOARD_* defaults no config global pra cada teste.
 
     USE_TESTNET é @property derivada de ENVIRONMENT — monkeypatcham ENVIRONMENT.
+    platform.db (users/accounts) vai pro tmp: nunca no runtime/ do repo.
     """
+    monkeypatch.setattr(global_config, "PLATFORM_DB_PATH", str(tmp_path / "platform.db"), raising=False)
+    monkeypatch.setattr(global_config, "PLATFORM_SECRET", "", raising=False)
     monkeypatch.setattr(global_config, "DASHBOARD_ENABLED", True, raising=False)
     monkeypatch.setattr(global_config, "DASHBOARD_USERNAME", "admin", raising=False)
     monkeypatch.setattr(global_config, "DASHBOARD_PASSWORD", "secret", raising=False)
@@ -117,6 +120,103 @@ def test_create_app_succeeds_with_credentials():
     assert app.config["DASHBOARD_USERNAME"] == "admin"
 
 
+# ---------- Plataforma: users/accounts ----------
+
+
+def test_platform_seed_from_env_is_idempotent_and_hashes_password(tmp_path):
+    from trading_bot.web.platform import PlatformStore
+    monkeypatch_cfg = SimpleNamespace(DASHBOARD_USERNAME="admin", DASHBOARD_PASSWORD="secret", EXCHANGE="bitget",
+                                      BITGET_API_KEY="k1", BITGET_API_SECRET="s1", BITGET_PASSPHRASE="p1")
+    store = PlatformStore(str(tmp_path / "p.db"), secret="segredo")
+    first = store.seed_from_env(monkeypatch_cfg)
+    assert first == {"user_id": 1, "account_id": 1}
+    assert store.seed_from_env(monkeypatch_cfg) == first   # 2º boot: nada duplicado
+    user = store.user_by_name("admin")
+    assert user["password_hash"] != "secret" and user["password_hash"].startswith(("scrypt:", "pbkdf2:"))
+    assert store.verify_login("admin", "secret")["id"] == 1 and store.verify_login("admin", "errada") is None
+    assert store.verify_login("ninguem", "secret") is None
+    acc = store.account(1)
+    assert acc["user_id"] == 1 and acc["exchange"] == "bitget" and "api_key" not in acc
+    # chaves cifradas no disco, decifradas só por account_credentials com o mesmo segredo
+    raw = store._conn.execute("SELECT api_key_enc, passphrase_enc FROM accounts WHERE id = 1").fetchone()
+    assert raw["api_key_enc"] != "k1" and "k1" not in raw["api_key_enc"] and raw["passphrase_enc"] != "p1"
+    assert store.account_credentials(1) == {"api_key": "k1", "api_secret": "s1", "passphrase": "p1"}
+    other = PlatformStore(str(tmp_path / "p.db"), secret="outro-segredo")
+    assert other.account_credentials(1) == {"api_key": "", "api_secret": "", "passphrase": ""}
+
+
+def test_platform_seed_without_secret_keeps_account_but_no_keys(tmp_path):
+    from trading_bot.web.platform import PlatformStore
+    cfg = SimpleNamespace(DASHBOARD_USERNAME="admin", DASHBOARD_PASSWORD="secret", EXCHANGE="bitget",
+                          BITGET_API_KEY="k1", BITGET_API_SECRET="s1", BITGET_PASSPHRASE="p1")
+    store = PlatformStore(str(tmp_path / "p.db"), secret="")
+    assert store.seed_from_env(cfg)["account_id"] == 1
+    assert store.account_credentials(1) == {"api_key": "", "api_secret": "", "passphrase": ""}
+    with pytest.raises(RuntimeError):
+        store.encrypt("x")
+
+
+def test_login_uses_users_table_and_env_only_as_fallback():
+    """Senha trocada na tabela vale no login; o .env deixa de ser segunda chance para quem existe lá.
+    Usuário que NÃO existe na tabela ainda entra pelo .env (compatibilidade)."""
+    from trading_bot.web.app import create_app
+    app, _ = create_app(_make_bot())
+    store = app.config["PLATFORM"]
+    client = app.test_client()
+    assert _login(client).status_code == 302
+    with client.session_transaction() as s:
+        assert s["user_id"] == 1 and s["username"] == "admin"
+    client.get("/")   # renova o CSRF da sessão (o login limpa a sessão) antes do logout
+    client.post("/logout", data={"csrf": _csrf(client)})
+    with store._lock, store._conn:
+        from werkzeug.security import generate_password_hash
+        store._conn.execute("UPDATE users SET password_hash = ? WHERE id = 1", (generate_password_hash("nova"),))
+    assert client.get("/", headers=_basic_auth("admin", "secret")).status_code == 302   # fora de /api/* nunca
+    assert client.get("/api/summary", headers=_basic_auth("admin", "secret")).status_code == 401
+    assert client.get("/api/summary", headers=_basic_auth("admin", "nova")).status_code == 200
+    r = _login(client, pw="secret")
+    assert r.status_code == 200 and "inválidos" in r.data.decode()
+    assert _login(client, pw="nova").status_code == 302
+
+
+def test_api_routes_resolve_account_of_logged_user():
+    """Rotas de dados recebem ?account=N: default = 1ª conta do usuário; conta de outro usuário,
+    inexistente ou sem bot neste processo → 404; valor inválido → 400. /api/me lista as contas."""
+    from trading_bot.web.app import create_app
+    app, _ = create_app(_make_bot())
+    client = app.test_client()
+    _login(client)
+    me = client.get("/api/me").get_json()
+    assert me["user"]["username"] == "admin" and [a["id"] for a in me["accounts"]] == [1]
+    assert me["accounts"][0]["exchange"] and "api_key" not in me["accounts"][0]
+    assert client.get("/api/live").status_code == 200
+    assert client.get("/api/live?account=1").status_code == 200
+    assert client.get("/api/history?account=2").status_code == 404
+    assert client.get("/api/live?account=x").status_code == 400
+    assert client.post("/api/control/pause?account=2").status_code == 404
+    store = app.config["PLATFORM"]
+    uid = store.create_user("outro", "senha2")
+    acc = store.create_account(uid, "bitget", "conta do outro")
+    assert client.get(f"/api/summary?account={acc}").status_code == 404   # conta existe, mas não é do admin
+    client.get("/")   # renova o CSRF da sessão antes do logout
+    client.post("/logout", data={"csrf": _csrf(client)})
+    assert client.get("/").status_code == 302
+    _login(client, user="outro", pw="senha2")
+    assert client.get("/api/live").status_code == 404   # conta do outro não tem bot neste processo
+    assert client.get("/api/me").get_json()["accounts"][0]["label"] == "conta do outro"
+
+
+def test_index_shows_logged_user_and_platform_placeholders():
+    from trading_bot.web.app import create_app
+    app, _ = create_app(_make_bot())
+    client = app.test_client()
+    _login(client)
+    html = client.get("/").data.decode()
+    assert 'id="profile"' in html and ">admin<" in html and "1 conta(s)" in html
+    nav = html.split('<nav class="nav" id="nav">')[1].split("</nav>")[0]
+    assert "Contas" in nav and "Usuários" in nav and nav.count('aria-disabled="true"') == 4   # + BTC e Histórico de fills (PR 2/3)
+
+
 # ---------- Rotas HTTP ----------
 
 
@@ -174,9 +274,9 @@ def test_index_requires_auth_returns_html():
     assert r.status_code == 200
     assert b"Forward test" in r.data
     assert b"socket.io" in r.data.lower() or b"socket.io" in r.data
-    # Topo sem Sair nem toggle de tema; relógio no lugar (main.js atualiza a cada segundo).
-    assert b'action="/logout"' not in r.data and b'theme-toggle' not in r.data
-    assert b'id="clock"' in r.data and b'tradingbot-theme' not in r.data
+    # Topo: relógio (main.js atualiza a cada segundo), toggle de tema e Sair (POST com CSRF).
+    assert b'id="clock"' in r.data and b'id="theme-toggle"' in r.data
+    assert b'action="/logout"' in r.data and b'name="csrf"' in r.data
     # Versão na URL dos assets: sem isso o navegador usa JS antigo após deploy.
     assert b"/static/js/main.js?v=" in r.data and b"/static/css/style.css?v=" in r.data
 
@@ -210,8 +310,8 @@ def test_static_version_vem_do_deploy_sha_lido_uma_vez_no_boot(monkeypatch, tmp_
 
 
 def test_martingale_dashboard_is_ring_legs_sheet_pnl_health():
-    """Sem card "Escada martingale"; no martingale o main.js esconde ft/pos/equity/perf/rdist/calendário
-    e move a linha de tiles pra dentro do anel (tile Equity some: o saldo já está no centro)."""
+    """Sem card "Escada martingale"; no martingale o main.js esconde ft/pos/rdist/calendário (Equity ×
+    Performance ficam) e move a linha de tiles pra dentro do anel (tile Equity some: o saldo já está no centro)."""
     from trading_bot.web.app import create_app
     app, _ = create_app(_make_bot())
     client = app.test_client()
@@ -224,8 +324,23 @@ def test_martingale_dashboard_is_ring_legs_sheet_pnl_health():
     assert html.index('id="rdist-row"') < html.index('id="cal-card"') < html.index("</section>", html.index('id="rdist-row"'))
     js = open("trading_bot/web/static/js/main.js", encoding="utf-8").read()
     assert "'tradingbot-open:' + d.id" in js
-    assert "$('ft-card').hidden = $('pos-card').hidden = $('tile-equity').hidden = $('eqperf-row').hidden = $('rdist-row').hidden = !!m" in js
+    assert "$('ft-card').hidden = $('pos-card').hidden = $('tile-equity').hidden = $('rdist-row').hidden = !!m" in js
+    assert "$('eqperf-row').hidden" not in js   # Equity × Performance aparecem também no martingale
     assert "rc.appendChild(st)" in js and "$('mg-list').addEventListener('click', onClose)" in js
+    # pernas como cards: cabeçalho, escada em barra, régua com rótulos ancorados, grade de métricas; perna vazia compacta
+    for marker in ('class="leg-h"', 'class="leg-ladder"', 'class="ruler-anchors"', 'class="leg-grid"', 'class="leg wait"'):
+        assert marker in js, marker
+    assert "WebSocket de klines" not in js
+
+
+def test_collect_health_has_no_klines_ws_line():
+    """A linha "WebSocket de klines" saiu do card Saúde: o payload não traz mais `ws` e o badge
+    "tudo ok" não depende dela (get_ws_stats da exchange nem é consultado)."""
+    bot = _make_bot()
+    bot.exchange = SimpleNamespace(get_ws_stats=lambda: (_ for _ in ()).throw(AssertionError("não devia consultar")),
+                                   get_user_stream_stats=lambda: {"started": True, "error_count": 0})
+    h = dashboard_data.collect_health(bot, {"paused": False})
+    assert "ws" not in h and h["user_stream"]["started"] is True
 
 
 def test_ring_card_badges_and_legs_list():
@@ -241,7 +356,7 @@ def test_ring_card_badges_and_legs_list():
     assert 'id="ring-badges"' in ring and 'id="ring-center"' in ring and 'id="ring-state"' in ring
     legs = html.split('id="legs-card"')[1].split("</section>")[0]
     assert "Posições abertas" in legs and 'id="legs-sum"' in legs and 'id="mg-list"' in legs
-    assert '<a href="#legs-card">Posições</a>' in html
+    assert 'id="legs-card"' in html.split('<div class="page" data-page="overview"')[1].split('<div class="page"')[0]
     for b in ("btn-pause", "btn-resume", "btn-close-all"):
         assert f'id="{b}"' in legs and html.count(f'id="{b}"') == 1
     js = open("trading_bot/web/static/js/main.js", encoding="utf-8").read()
@@ -262,7 +377,7 @@ def test_all_cards_start_closed_and_have_id_for_persistence():
 
 
 def test_mobile_first_pwa_metas_hero_and_tabbar():
-    """Celular: metas de PWA/iOS, hero no topo fixo, barra inferior com âncoras para cards existentes; login com input 16px."""
+    """Celular: metas de PWA/iOS, hero no topo fixo, barra inferior com as mesmas páginas do menu lateral; login com input 16px."""
     from trading_bot.web.app import create_app
     app, _ = create_app(_make_bot())
     client = app.test_client()
@@ -273,27 +388,106 @@ def test_mobile_first_pwa_metas_hero_and_tabbar():
         assert 'viewport-fit=cover' in page and 'name="apple-mobile-web-app-capable" content="yes"' in page
         assert 'rel="apple-touch-icon"' in page and 'rel="manifest"' in page
     assert 'id="hd-equity"' in html and 'id="hd-today"' in html
-    for href in re.findall(r'<nav class="tabbar"[^>]*>(.*?)</nav>', html, re.S)[0].split('href="')[1:]:
-        assert f'id="{href.split(chr(34))[0][1:]}"' in html
+    tabbar = re.findall(r'<nav class="tabbar"[^>]*>(.*?)</nav>', html, re.S)[0]
+    for page in re.findall(r'data-page="([^"]+)"', tabbar):
+        assert f'<div class="page" data-page="{page}"' in html
     assert client.get("/static/manifest.webmanifest").status_code == 200
     assert client.get("/static/icon-180.png").status_code == 200
     css = open("trading_bot/web/static/css/login.css", encoding="utf-8").read()
     assert "font-size:16px" in css.split(".login-field input {")[1].split("}")[0]
 
 
-def test_pages_are_dark_only_without_theme_script():
-    """Escuro é o único tema: nenhuma página lê tradingbot-theme do localStorage nem tem toggle."""
+def test_theme_toggle_applies_before_first_paint_and_never_follows_os():
+    """Tema claro/escuro só pelo botão (tradingbot-theme no localStorage, aplicado no <head> antes do
+    primeiro paint); nunca pelo prefers-color-scheme do sistema. O login continua só escuro."""
     from trading_bot.web.app import create_app
     app, _ = create_app(_make_bot())
     client = app.test_client()
     login_page = client.get("/login").data
     _login(client)
-    for page in (login_page, client.get("/").data):
-        assert b'<meta name="color-scheme" content="dark">' in page
-        assert b"prefers-color-scheme" not in page
-        assert b"tradingbot-theme" not in page and b"theme-toggle" not in page
+    html = client.get("/").data
+    assert b'<meta name="color-scheme" content="dark light">' in html
+    assert html.index(b"tradingbot-theme") < html.index(b"</head>") and b'id="theme-toggle"' in html
+    assert b"prefers-color-scheme" not in html and b"prefers-color-scheme" not in login_page
+    assert b"tradingbot-theme" not in login_page
     css = open("trading_bot/web/static/css/style.css", encoding="utf-8").read()
     assert "prefers-color-scheme" not in css and 'color-scheme: dark' in css.split("[data-theme=")[0]
+
+
+def test_shell_sidebar_kpis_and_pages():
+    """Shell CryptoZone: menu lateral com as páginas, 3 KPIs com sparkline, cada card existente dentro de
+    uma única página (o main.js só troca o `hidden` das páginas; ids/rotas/APIs não mudam)."""
+    from trading_bot.web.app import create_app
+    app, _ = create_app(_make_bot())
+    client = app.test_client()
+    _login(client)
+    html = client.get("/").data.decode()
+    assert 'id="sidebar"' in html and 'id="sidebar-toggle"' in html and 'id="sidebar-backdrop"' in html
+    assert 'id="sidebar-collapse"' in html and html.count('title="') >= 6   # recolher no desktop; tooltip nos itens
+    pages = re.findall(r'<div class="page" data-page="([^"]+)"', html)
+    assert pages == ["overview", "pnl", "sheet", "system"]
+    nav = html.split('<nav class="nav" id="nav">')[1].split("</nav>")[0]
+    assert set(re.findall(r'data-page="([^"]+)"', nav)) == set(pages)
+    # grupos do menu (accordion) com subitens apontando para página/card existentes
+    assert re.findall(r'data-group="([^"]+)"', nav) == ["trading", "market", "reports", "system", "platform"]
+    for target in re.findall(r'data-target="([^"]+)"', nav):
+        assert f'id="{target}"' in html, target
+    assert html.count('class="page" data-page="overview"') == 1 and ' hidden' in re.findall(r'<div class="page" data-page="pnl"[^>]*>', html)[0]
+    for k in ("equity", "margin", "unreal", "pnl", "funding"):
+        assert f'id="kpi-{k}"' in html, k
+    for k in ("equity", "pnl", "funding"):
+        assert f'id="kpi-{k}-spark"' in html, k
+    assert 'id="kpi-margin-bar"' in html and 'id="kpi-unreal-legs"' in html
+    assert "Depósito" not in html and "Buy Coin" not in html   # conta de perpétuos, não spot
+    # cada card segue existindo exatamente uma vez, agora dentro de uma página
+    for i in ("ring-card", "legs-card", "status", "ft-card", "pos-card", "pnl-card", "eqperf-row", "sheet-card", "trades-card", "rdist-row", "eng-card", "health-card"):
+        assert html.count(f'id="{i}"') == 1, i
+    body = html.split("<main")[1]
+    assert body.index('id="pnl-card"') > body.index('data-page="pnl"') and body.index('id="sheet-card"') > body.index('data-page="sheet"')
+    assert client.get("/static/css/shell.css").status_code == 200
+    js = open("trading_bot/web/static/js/main.js", encoding="utf-8").read()
+    assert "function showPage(" in js and "function renderKpis(" in js and "hashchange" in js
+    assert "function futLine(" in js and js.count("${futLine(") == 1   # posições Donchian; as pernas do martingale têm a própria grade
+
+
+def test_live_always_carries_sheet_and_js_renders_it_without_runner():
+    """Planilha CoinTech2u é estática: /api/live traz `sheet` (faixa da equity atual) mesmo sem runner
+    do martingale, e o main.js renderiza o card sempre (o runner só acrescenta score e pares ativos)."""
+    from trading_bot.web.app import create_app
+    app, _ = create_app(_make_bot(last_known_balance=320.0))
+    client = app.test_client()
+    _login(client)
+    live = client.get("/api/live").get_json()
+    assert live["martingale"] is None
+    sheet = live["sheet"]
+    assert sheet["rows"] and sheet["current"] == 1 and sheet["rows"][1][1] == 300   # $320 → faixa 300
+    assert sheet["scores"] == {} and sheet["green"] and sheet["red"]
+    html = client.get("/").data.decode()
+    assert html.count('class="empty page-empty"') == 4
+    js = open("trading_bot/web/static/js/main.js", encoding="utf-8").read()
+    assert "$('sheet-card').hidden = !sheet; renderSheet(sheet" in js and "function pageEmpties(" in js
+
+
+def test_collect_positions_exposes_perp_fields_from_exchange():
+    """Perpétuo: alavancagem, notional (qty × marca), margem, liquidação e ROE (P&L / margem) vêm da
+    exchange; sem exchange ficam None (nunca inventa)."""
+    known = {"ADAUSDT_LONG": {"symbol": "ADAUSDT", "side": "LONG", "entry_price": 0.50, "quantity": 100.0}}
+    bot = _make_bot(known_positions=known)
+    p = dashboard_data.collect_positions(bot)[0]
+    assert p["leverage"] is None and p["liquidation_price"] is None and p["roe_percent"] is None
+    assert p["margin_usd"] is None and p["notional"] == pytest.approx(50.0)   # qty × entrada sem marca
+    bot.exchange = SimpleNamespace(get_open_positions=lambda: [
+        {"symbol": "ADAUSDT", "side": "LONG", "quantity": 100.0, "entry_price": 0.50, "mark_price": 0.52,
+         "unrealized_pnl": 2.0, "leverage": 20, "liquidation_price": 0.4761, "margin": 2.5}])
+    p = dashboard_data.collect_positions(bot)[0]
+    assert p["leverage"] == 20 and p["notional"] == pytest.approx(52.0) and p["margin_usd"] == 2.5
+    assert p["liquidation_price"] == 0.4761 and p["roe_percent"] == pytest.approx(80.0)
+    # exchange sem marginSize (Binance/OKX): margem = notional / alavancagem
+    bot.exchange = SimpleNamespace(get_open_positions=lambda: [
+        {"symbol": "ADAUSDT", "side": "LONG", "quantity": 100.0, "entry_price": 0.50, "mark_price": 0.50,
+         "unrealized_pnl": 0.0, "leverage": 10}])
+    p = dashboard_data.collect_positions(bot)[0]
+    assert p["margin_usd"] == pytest.approx(5.0) and p["liquidation_price"] is None and p["roe_percent"] == 0.0
 
 
 # ---------- Login por sessão ----------

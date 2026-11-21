@@ -18,13 +18,14 @@ import os
 import secrets
 from datetime import timedelta
 
-from flask import Flask, jsonify, redirect, render_template, request, session, url_for
+from flask import Flask, abort, jsonify, redirect, render_template, request, session, url_for
 from flask_socketio import SocketIO
 
 from ..core.config import config, exchange_label
 from . import auth, klines
 from .auth import login_required
 from .data import _deploy_info, collect_history, collect_live, collect_snapshot, collect_summary
+from .platform import PlatformStore
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +94,15 @@ def create_app(bot) -> tuple[Flask, SocketIO]:
     # no disco, ~10s antes do restart — boot do JS quebrava até o reload.
     app.config["STATIC_VERSION"] = _static_version(app.static_folder)
 
+    # Plataforma: users/accounts em SQLite próprio; usuário 1 / conta 1 vêm do .env (seed idempotente).
+    # Hoje o único bot do processo é a conta 1; `BOTS` é o mapa conta → bot que as rotas resolvem.
+    db_path = str(getattr(config, "PLATFORM_DB_PATH", "") or "").strip() or os.path.join(
+        str(getattr(config, "RUNTIME_DIR", "runtime")), "platform.db")
+    platform = PlatformStore(db_path, str(getattr(config, "PLATFORM_SECRET", "") or "") or secret_key)
+    seeded = platform.seed_from_env(config)
+    app.config["PLATFORM"] = platform
+    app.config["BOTS"] = {seeded["account_id"] or 1: bot}
+
     @app.context_processor
     def _static_url():
         def static_url(filename):
@@ -111,9 +121,24 @@ def create_app(bot) -> tuple[Flask, SocketIO]:
 
 def _register_routes(app: Flask, socketio: SocketIO) -> None:
 
+    def account_bot():
+        """Bot da conta pedida (?account=N; default = a 1ª conta do usuário logado). 404 se a conta
+        não existe, não é do usuário ou não tem bot neste processo."""
+        user = auth.current_user()
+        accounts = app.config["PLATFORM"].accounts_for(user["id"])
+        raw = request.args.get("account")
+        try:
+            account_id = int(raw) if raw else (accounts[0]["id"] if accounts else 0)
+        except ValueError:
+            abort(400)
+        if account_id not in {a["id"] for a in accounts} or account_id not in app.config["BOTS"]:
+            abort(404)
+        return app.config["BOTS"][account_id]
+
     @app.route("/")
     @login_required
     def index():
+        user = auth.current_user()
         return render_template(
             "dashboard.html",
             environment="testnet" if getattr(config, "USE_TESTNET", False) else "mainnet",
@@ -121,6 +146,8 @@ def _register_routes(app: Flask, socketio: SocketIO) -> None:
             poll_interval=int(getattr(config, "DASHBOARD_POLL_INTERVAL_SECONDS", 5)),
             strategy=str(getattr(config, "STRATEGY", "pullback") or "pullback"),
             csrf_token=auth.csrf_token(),
+            user=user,
+            accounts=app.config["PLATFORM"].accounts_for(user["id"]),
         )
 
     @app.route("/login", methods=["GET", "POST"])
@@ -137,10 +164,13 @@ def _register_routes(app: Flask, socketio: SocketIO) -> None:
             elif limiter.blocked(ip):
                 logger.warning(f"Login do dashboard bloqueado por rate limit: ip={ip}")
                 error, status = "Muitas tentativas. Aguarde 15 minutos.", 429
-            elif auth._credentials_match(user, request.form.get("password", "")):
+            elif (found := auth.authenticate(user, request.form.get("password", ""))) is not None:
                 limiter.reset(ip)
                 session.clear()
                 session[auth.SESSION_KEY] = True
+                session["user_id"] = int(found["id"])
+                session["username"] = found["username"]
+                session["display_name"] = found.get("display_name") or found["username"]
                 session.permanent = bool(request.form.get("remember"))
                 logger.info(f"Login no dashboard: usuário={user!r} ip={ip}")
                 return redirect(auth.safe_next(request.form.get("next")))
@@ -168,36 +198,42 @@ def _register_routes(app: Flask, socketio: SocketIO) -> None:
         # Health check público (sem auth) — útil para readiness probes.
         return jsonify({"ok": True})
 
+    @app.route("/api/me")
+    @login_required
+    def me():
+        user = auth.current_user()
+        return jsonify({"user": user, "accounts": app.config["PLATFORM"].accounts_for(user["id"])})
+
     @app.route("/api/snapshot")
     @login_required
     def snapshot():
-        return jsonify(collect_snapshot(app.config["BOT"]))
+        return jsonify(collect_snapshot(account_bot()))
 
     @app.route("/api/live")
     @login_required
     def live():
-        return jsonify(collect_live(app.config["BOT"]))
+        return jsonify(collect_live(account_bot()))
 
     @app.route("/api/history")
     @login_required
     def history():
-        return jsonify(collect_history(app.config["BOT"]))
+        return jsonify(collect_history(account_bot()))
 
     @app.route("/api/summary")
     @login_required
     def summary():
-        return jsonify(collect_summary(app.config["BOT"]))
+        return jsonify(collect_summary(account_bot()))
 
     @app.route("/api/pnl_report")
     @login_required
     def pnl_report():
         from .pnl_report import build_report
-        return jsonify(build_report(app.config["BOT"], request.args.get("from"), request.args.get("to"), request.args.get("days")))
+        return jsonify(build_report(account_bot(), request.args.get("from"), request.args.get("to"), request.args.get("days")))
 
     @app.route("/api/control/pause", methods=["POST"])
     @login_required
     def pause():
-        bot = app.config["BOT"]
+        bot = account_bot()
         bot.paused = True
         logger.info("⏸️  Bot pausado via dashboard")
         socketio.emit("control_changed", {"paused": True})
@@ -206,7 +242,7 @@ def _register_routes(app: Flask, socketio: SocketIO) -> None:
     @app.route("/api/control/resume", methods=["POST"])
     @login_required
     def resume():
-        bot = app.config["BOT"]
+        bot = account_bot()
         bot.paused = False
         logger.warning("▶️ Bot retomado via dashboard /api/control/resume")
         socketio.emit("control_changed", {"paused": False})
@@ -215,7 +251,7 @@ def _register_routes(app: Flask, socketio: SocketIO) -> None:
     @app.route("/api/control/close_all", methods=["POST"])
     @login_required
     def close_all():
-        bot = app.config["BOT"]
+        bot = account_bot()
         payload = request.get_json(silent=True) or {}
         reason = str(payload.get("reason", "Close all via dashboard"))[:120]
         # Mesmo método usado pelo /closeall do Telegram.
@@ -230,7 +266,7 @@ def _register_routes(app: Flask, socketio: SocketIO) -> None:
     @app.route("/api/positions/<symbol>/close", methods=["POST"])
     @login_required
     def close_position(symbol: str):
-        bot = app.config["BOT"]
+        bot = account_bot()
         payload = request.get_json(silent=True) or {}
         if payload.get("confirm") != symbol:
             return jsonify({"ok": False, "error": "confirm precisa ser igual ao símbolo"}), 400

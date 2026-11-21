@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-    <meta name="color-scheme" content="dark">
+    <meta name="color-scheme" content="dark light">
     <meta name="theme-color" content="#0f1318">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="mobile-web-app-capable" content="yes">
@@ -17,10 +17,65 @@
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="{{ static_url('css/style.css') }}">
     <link rel="stylesheet" href="{{ static_url('css/mobile.css') }}">
+    <link rel="stylesheet" href="{{ static_url('css/shell.css') }}">
+    <!-- tema antes do primeiro paint (sem flash); o botão do topo grava a escolha -->
+    <script>try{var t=localStorage.getItem('tradingbot-theme');if(t==="light"||t==="dark")document.documentElement.dataset.theme=t;}catch(e){}</script>
 </head>
 <body data-environment="{{ environment }}" data-poll-interval="{{ poll_interval }}" data-strategy="{{ strategy }}">
 
+<div class="shell">
+<!-- Menu lateral (fixo no desktop; off-canvas no celular pelo botão ☰ do topo) -->
+<aside class="sidebar" id="sidebar" aria-label="Menu">
+    <div class="brand-row">
+        <a class="brand" href="#overview" data-page="overview"><span class="brand-mark" aria-hidden="true">TB</span><span class="brand-name">Trading bot</span></a>
+        <button class="collapse-btn" id="sidebar-collapse" type="button" aria-label="Recolher menu" aria-pressed="false" title="Recolher menu">‹</button>
+    </div>
+    <!-- Menu em grupos (accordion: um aberto por vez; recolhido vira flyout no hover). Subitem = página + card (rola até ele). -->
+    <nav class="nav" id="nav">
+        <a class="nav-item" href="#overview" data-page="overview" title="Dashboard"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg><span>Dashboard</span></a>
+        <div class="nav-group" data-group="trading">
+            <button class="nav-item nav-toggle" type="button" aria-expanded="false" title="Trading"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 17l5-6 4 4 5-7 4 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Trading</span><i class="chev" aria-hidden="true"></i></button>
+            <div class="nav-sub">
+            <a href="#overview/legs-card" data-page="overview" data-target="legs-card"><span>Posições</span></a>
+            <a href="#pnl" data-page="pnl"><span>P&amp;L</span></a>
+            <a href="#sheet" data-page="sheet"><span>Planilha</span></a>
+            </div>
+        </div>
+        <div class="nav-group" data-group="market">
+            <button class="nav-item nav-toggle" type="button" aria-expanded="false" title="Mercado"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4v16M17 4v16M4 8h6M4 14h6M14 7h6M14 15h6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><span>Mercado</span><i class="chev" aria-hidden="true"></i></button>
+            <div class="nav-sub">
+            <a class="soon" aria-disabled="true" title="BTC (em breve)"><span>BTC</span><small>em breve</small></a>
+            </div>
+        </div>
+        <div class="nav-group" data-group="reports">
+            <button class="nav-item nav-toggle" type="button" aria-expanded="false" title="Relatórios"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 8h8M8 12h8M8 16h5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><span>Relatórios</span><i class="chev" aria-hidden="true"></i></button>
+            <div class="nav-sub">
+            <a class="soon" aria-disabled="true" title="Histórico de fills (em breve)"><span>Histórico de fills</span><small>em breve</small></a>
+            <a href="#pnl/pnl-card" data-page="pnl" data-target="pnl-card"><span>Análise de P&amp;L</span></a>
+            </div>
+        </div>
+        <div class="nav-group" data-group="system">
+            <button class="nav-item nav-toggle" type="button" aria-expanded="false" title="Sistema"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l2-5 4 10 2-5h6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Sistema</span><i class="chev" aria-hidden="true"></i></button>
+            <div class="nav-sub">
+            <a href="#system/health-card" data-page="system" data-target="health-card"><span>Saúde</span></a>
+            <a href="#system/eng-card" data-page="system" data-target="eng-card"><span>Motor</span></a>
+            </div>
+        </div>
+        <div class="nav-group" data-group="platform">
+            <button class="nav-item nav-toggle" type="button" aria-expanded="false" title="Plataforma"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4" fill="none" stroke="currentColor" stroke-width="2"/><path d="M4 20c0-4 4-6 8-6s8 2 8 6" fill="none" stroke="currentColor" stroke-width="2"/></svg><span>Plataforma</span><i class="chev" aria-hidden="true"></i></button>
+            <div class="nav-sub">
+            <a class="soon" aria-disabled="true" title="Contas (em breve)"><span>Contas</span><small>em breve</small></a>
+            <a class="soon" aria-disabled="true" title="Usuários (em breve)"><span>Usuários</span><small>em breve</small></a>
+            </div>
+        </div>
+    </nav>
+    <div class="sidebar-foot"><span class="env env-{{ environment }}">{{ exchange_label }}</span><form class="user-menu" action="/logout" method="post"><input type="hidden" name="csrf" value="{{ csrf_token }}"><button class="btn btn-quiet btn-xs" type="submit">Sair</button></form></div>
+</aside>
+<div class="sidebar-backdrop" id="sidebar-backdrop" hidden></div>
+
+<div class="main">
 <header class="top" role="banner">
+    <button class="burger" id="sidebar-toggle" type="button" aria-label="Abrir menu" aria-controls="sidebar" aria-expanded="false">☰</button>
     <div class="top-id">
         <h1 class="top-title" id="top-title">Forward test · Donchian 4h</h1>
         <span class="env env-{{ environment }}">{{ exchange_label }}</span>
@@ -33,14 +88,30 @@
         <span><span class="tl">Hoje</span><b class="tv" id="hd-today">—</b></span>
     </div>
     <time class="clock" id="clock" aria-label="Hora em São Paulo">--:--:--</time>
+    <button class="icon-btn" id="theme-toggle" type="button" aria-label="Alternar tema claro/escuro" title="Tema">◐</button>
+    <div class="profile" id="profile"><span class="avatar" aria-hidden="true">{{ (user.display_name or user.username or '?')[:1]|upper }}</span><span class="profile-name">{{ user.display_name or user.username }}<small>{{ accounts|length }} conta(s)</small></span>
+        <form class="user-menu" action="/logout" method="post"><input type="hidden" name="csrf" value="{{ csrf_token }}"><button class="btn btn-quiet btn-xs" type="submit">Sair</button></form></div>
 </header>
 
 <div class="banner" id="pause-banner" hidden role="status"></div>
 
 <main class="wrap">
 
+    <!-- Cards de resumo (estilo CryptoZone, mas de perpétuos USDT-M): valor grande + sparkline.
+         Equity (wallet + não realizado), margem usada/disponível, P&L não realizado, realizado do dia UTC e funding acumulado. -->
+    <section class="kpis" aria-label="Resumo da conta de futuros">
+        <article class="kpi"><div class="kpi-h"><b class="kpi-v" id="kpi-equity">—</b><span class="kpi-l">Equity</span><small class="kpi-s" id="kpi-equity-s">—</small></div><div class="kpi-cv"><canvas id="kpi-equity-spark" role="img" aria-label="Equity recente"></canvas></div></article>
+        <article class="kpi"><div class="kpi-h"><b class="kpi-v" id="kpi-margin">—</b><span class="kpi-l">Margem usada</span><small class="kpi-s" id="kpi-margin-s">—</small></div><div class="kpi-bar" role="progressbar" aria-label="Margem usada sobre a equity" aria-valuemin="0" aria-valuemax="100" id="kpi-margin-bar"><i></i></div></article>
+        <article class="kpi"><div class="kpi-h"><b class="kpi-v" id="kpi-unreal">—</b><span class="kpi-l">P&amp;L não realizado</span><small class="kpi-s" id="kpi-unreal-s">—</small></div><div class="kpi-legs" id="kpi-unreal-legs"></div></article>
+        <article class="kpi"><div class="kpi-h"><b class="kpi-v" id="kpi-pnl">—</b><span class="kpi-l">P&amp;L realizado hoje (UTC)</span><small class="kpi-s" id="kpi-pnl-s">—</small></div><div class="kpi-cv"><canvas id="kpi-pnl-spark" role="img" aria-label="P&amp;L realizado por dia, últimos 30 dias"></canvas></div></article>
+        <article class="kpi"><div class="kpi-h"><b class="kpi-v" id="kpi-funding">—</b><span class="kpi-l">Funding acumulado</span><small class="kpi-s" id="kpi-funding-s">—</small></div><div class="kpi-cv"><canvas id="kpi-funding-spark" role="img" aria-label="P&amp;L acumulado, últimos 30 dias"></canvas></div></article>
+    </section>
+
+    <div class="page" data-page="overview">
+        <p class="empty page-empty" hidden>Sem dados do martingale para esta página neste processo.</p>
     <!-- 0. Anel: notional por par (segmentos), saldo no centro; toque num par mostra as pernas dele (só no martingale) -->
     <section class="card ring-card" id="ring-card" aria-label="Carteira" hidden>
+        <div class="kpi ring-kpi">
         <div class="ring-head">
             <span class="ring-state" id="ring-state">—</span>
             <small class="cs" id="ring-stop">—</small>
@@ -59,6 +130,7 @@
             </svg>
             <div class="ring-badges" id="ring-badges"></div>
             <div class="ring-center" id="ring-center" title="Voltar ao total"></div>
+        </div>
         </div>
     </section>
 
@@ -116,6 +188,11 @@
             <b class="tv" id="st-net">—</b>
             <span class="tf" id="st-net-f">—</span>
         </div>
+        <div class="tile" id="tile-stop" hidden>
+            <span class="tl">Stop de portfólio</span>
+            <b class="tv" id="st-stop">—</b>
+            <span class="tf" id="st-stop-f">—</span>
+        </div>
     </section>
 
     <!-- 2. Progresso do forward test (oculto fora do Donchian) -->
@@ -153,6 +230,50 @@
         <div id="positions-list"><p class="empty">Nenhuma posição aberta. O motor entra só no fechamento de barra 4h com rompimento de 40 barras.</p></div>
     </section>
 
+    <!-- Equity + Performance (ocultos no martingale: curva/tabela são do forward test Donchian) -->
+    <section class="two" id="eqperf-row">
+        <!-- Equity + drawdown -->
+        <details class="card" id="eq-card">
+            <summary><h2>Equity</h2><span class="cs" id="eq-sub">—</span></summary>
+            <div class="chips" role="tablist" aria-label="Janela do gráfico">
+                <button class="chip" role="tab" data-range="all">Tudo</button>
+                <button class="chip on" role="tab" data-range="test" aria-selected="true">Teste</button>
+                <button class="chip" role="tab" data-range="7d">7d</button>
+                <button class="chip" role="tab" data-range="24h">24h</button>
+            </div>
+            <div class="cv cv-eq"><canvas id="equity-chart" role="img" aria-label="Curva de equity"></canvas></div>
+            <div class="cv cv-dd"><canvas id="drawdown-chart" role="img" aria-label="Drawdown desde o pico"></canvas></div>
+            <p class="legend"><i class="sw sw-line"></i> equity <i class="sw sw-dot"></i> trade fechado <i class="sw sw-area"></i> drawdown desde o pico</p>
+        </details>
+
+        <!-- Performance & risco -->
+        <details class="card" id="perf-card">
+            <summary><h2>Performance e risco</h2><span class="cs" id="perf-sub">—</span></summary>
+            <table class="kv" id="perf">
+                <thead><tr><th scope="col"></th><th scope="col" class="r">Ao vivo</th><th scope="col" class="r">Pesquisa</th></tr></thead>
+                <tbody>
+                    <tr><th scope="row">Expectativa por trade</th><td class="r" data-k="expectancy">—</td><td class="r dim">+0,41% notional</td></tr>
+                    <tr><th scope="row">Expectativa em R</th><td class="r" data-k="avg_r">—</td><td class="r dim">—</td></tr>
+                    <tr><th scope="row">Profit factor</th><td class="r" data-k="profit_factor">—</td><td class="r dim">—</td></tr>
+                    <tr><th scope="row">Sharpe (diário, anualizado)</th><td class="r" data-k="sharpe">—</td><td class="r dim">—</td></tr>
+                    <tr><th scope="row">Win rate</th><td class="r" data-k="win_rate">—</td><td class="r dim">29%</td></tr>
+                    <tr><th scope="row">Ganho médio</th><td class="r" data-k="avg_win">—</td><td class="r dim">+17,8%</td></tr>
+                    <tr><th scope="row">Perda média</th><td class="r" data-k="avg_loss">—</td><td class="r dim">−6,7%</td></tr>
+                    <tr><th scope="row">Trades por semana</th><td class="r" data-k="trades_per_week">—</td><td class="r dim">~10</td></tr>
+                    <tr><th scope="row">Drawdown máximo</th><td class="r" data-k="max_drawdown_pct">—</td><td class="r dim">39%</td></tr>
+                    <tr><th scope="row">Taxas + funding pagos</th><td class="r" data-k="costs">—</td><td class="r dim">—</td></tr>
+                </tbody>
+            </table>
+            <figure class="ci" aria-describedby="ci-cap">
+                <svg class="ci-plot" id="ci-plot" viewBox="0 0 600 110" preserveAspectRatio="none" role="img" aria-label="Intervalo de confiança da expectativa por trade"></svg>
+                <figcaption class="cs" id="ci-cap">—</figcaption>
+            </figure>
+        </details>
+    </section>
+    </div>
+
+    <div class="page" data-page="pnl" hidden>
+        <p class="empty page-empty" hidden>Sem dados do martingale para esta página neste processo.</p>
     <!-- 3c. Análise do P&L de futuros (réplica da tela da Bitget; dados do TradeStore + portfolio_history + income da exchange) -->
     <details class="card pnl" id="pnl-card">
         <summary><h2>Análise do P&amp;L de futuros</h2><span class="cs" id="pnl-sub">—</span></summary>
@@ -265,78 +386,6 @@
         </div>
     </details>
 
-    <!-- Equity + Performance (ocultos no martingale: curva/tabela são do forward test Donchian) -->
-    <section class="two" id="eqperf-row">
-        <!-- Equity + drawdown -->
-        <details class="card" id="eq-card">
-            <summary><h2>Equity</h2><span class="cs" id="eq-sub">—</span></summary>
-            <div class="chips" role="tablist" aria-label="Janela do gráfico">
-                <button class="chip" role="tab" data-range="all">Tudo</button>
-                <button class="chip on" role="tab" data-range="test" aria-selected="true">Teste</button>
-                <button class="chip" role="tab" data-range="7d">7d</button>
-                <button class="chip" role="tab" data-range="24h">24h</button>
-            </div>
-            <div class="cv cv-eq"><canvas id="equity-chart" role="img" aria-label="Curva de equity"></canvas></div>
-            <div class="cv cv-dd"><canvas id="drawdown-chart" role="img" aria-label="Drawdown desde o pico"></canvas></div>
-            <p class="legend"><i class="sw sw-line"></i> equity <i class="sw sw-dot"></i> trade fechado <i class="sw sw-area"></i> drawdown desde o pico</p>
-        </details>
-
-        <!-- Performance & risco -->
-        <details class="card" id="perf-card">
-            <summary><h2>Performance e risco</h2><span class="cs" id="perf-sub">—</span></summary>
-            <table class="kv" id="perf">
-                <thead><tr><th scope="col"></th><th scope="col" class="r">Ao vivo</th><th scope="col" class="r">Pesquisa</th></tr></thead>
-                <tbody>
-                    <tr><th scope="row">Expectativa por trade</th><td class="r" data-k="expectancy">—</td><td class="r dim">+0,41% notional</td></tr>
-                    <tr><th scope="row">Expectativa em R</th><td class="r" data-k="avg_r">—</td><td class="r dim">—</td></tr>
-                    <tr><th scope="row">Profit factor</th><td class="r" data-k="profit_factor">—</td><td class="r dim">—</td></tr>
-                    <tr><th scope="row">Sharpe (diário, anualizado)</th><td class="r" data-k="sharpe">—</td><td class="r dim">—</td></tr>
-                    <tr><th scope="row">Win rate</th><td class="r" data-k="win_rate">—</td><td class="r dim">29%</td></tr>
-                    <tr><th scope="row">Ganho médio</th><td class="r" data-k="avg_win">—</td><td class="r dim">+17,8%</td></tr>
-                    <tr><th scope="row">Perda média</th><td class="r" data-k="avg_loss">—</td><td class="r dim">−6,7%</td></tr>
-                    <tr><th scope="row">Trades por semana</th><td class="r" data-k="trades_per_week">—</td><td class="r dim">~10</td></tr>
-                    <tr><th scope="row">Drawdown máximo</th><td class="r" data-k="max_drawdown_pct">—</td><td class="r dim">39%</td></tr>
-                    <tr><th scope="row">Taxas + funding pagos</th><td class="r" data-k="costs">—</td><td class="r dim">—</td></tr>
-                </tbody>
-            </table>
-            <figure class="ci" aria-describedby="ci-cap">
-                <svg class="ci-plot" id="ci-plot" viewBox="0 0 600 110" preserveAspectRatio="none" role="img" aria-label="Intervalo de confiança da expectativa por trade"></svg>
-                <figcaption class="cs" id="ci-cap">—</figcaption>
-            </figure>
-        </details>
-    </section>
-
-    <section class="two">
-        <!-- Motor Donchian (oculto fora do Donchian) -->
-        <details class="card" id="eng-card">
-            <summary><h2>Motor Donchian</h2><span class="cs" id="eng-sub">—</span></summary>
-            <p class="cs" id="eng-params">—</p>
-            <dl class="kvl" id="eng-list"></dl>
-            <ul class="skips" id="eng-skip-list"></ul>
-        </details>
-
-        <!-- Saúde -->
-        <details class="card" id="health-card">
-            <summary><h2>Saúde</h2><span class="badge" id="hl-badge">—</span></summary>
-            <ul class="hlist" id="health-list"></ul>
-        </details>
-    </section>
-
-    <!-- Planilha de banca (no lugar de Trades, só no martingale) -->
-    <details class="card" id="sheet-card" hidden>
-        <summary><h2>Planilha — Estratégia Padrão</h2><span class="cs" id="sheet-sub">—</span></summary>
-        <p class="cs sheet-coins" id="sheet-pace" hidden></p>
-        <div class="table-scroll">
-            <table class="table sheet" id="sheet-table">
-                <thead><tr><th scope="col">Banca (USDT)</th><th scope="col">Estratégia</th><th scope="col" class="r">1ª ordem Long</th><th scope="col" class="r">1ª ordem Short</th><th scope="col" class="r">Alavancagem</th><th scope="col" class="r">Stop Loss</th><th scope="col">Double First</th><th scope="col" class="r">Moedas</th></tr></thead>
-                <tbody></tbody>
-            </table>
-        </div>
-        <p class="cs sheet-coins" id="sheet-coins"></p>
-        <p class="cs sheet-coins" id="sheet-rank"></p>
-        <p class="cs warn" id="sheet-warn" hidden></p>
-    </details>
-
     <!-- Trades -->
     <details class="card" id="trades-card">
         <summary><h2>Trades</h2><span class="cs" id="tr-sub">—</span></summary>
@@ -394,14 +443,54 @@
             <table class="kv" id="cal-table"><thead><tr><th scope="col">Período</th><th scope="col" class="r">Trades</th><th scope="col" class="r">Win rate</th><th scope="col" class="r">Líquido</th></tr></thead><tbody></tbody></table>
         </details>
     </section>
+    </div>
+
+    <div class="page" data-page="sheet" hidden>
+        <p class="empty page-empty" hidden>Sem dados do martingale para esta página neste processo.</p>
+    <!-- Planilha de banca (no lugar de Trades, só no martingale) -->
+    <details class="card" id="sheet-card" hidden>
+        <summary><h2>Planilha — Estratégia Padrão</h2><span class="cs" id="sheet-sub">—</span></summary>
+        <p class="cs sheet-coins" id="sheet-pace" hidden></p>
+        <div class="table-scroll">
+            <table class="table sheet" id="sheet-table">
+                <thead><tr><th scope="col">Banca (USDT)</th><th scope="col">Estratégia</th><th scope="col" class="r">1ª ordem Long</th><th scope="col" class="r">1ª ordem Short</th><th scope="col" class="r">Alavancagem</th><th scope="col" class="r">Stop Loss</th><th scope="col">Double First</th><th scope="col" class="r">Moedas</th></tr></thead>
+                <tbody></tbody>
+            </table>
+        </div>
+        <p class="cs sheet-coins" id="sheet-coins"></p>
+        <p class="cs sheet-coins" id="sheet-rank"></p>
+        <p class="cs warn" id="sheet-warn" hidden></p>
+    </details>
+    </div>
+
+    <div class="page" data-page="system" hidden>
+        <p class="empty page-empty" hidden>Sem dados do martingale para esta página neste processo.</p>
+    <section class="two">
+        <!-- Motor Donchian (oculto fora do Donchian) -->
+        <details class="card" id="eng-card">
+            <summary><h2>Motor Donchian</h2><span class="cs" id="eng-sub">—</span></summary>
+            <p class="cs" id="eng-params">—</p>
+            <dl class="kvl" id="eng-list"></dl>
+            <ul class="skips" id="eng-skip-list"></ul>
+        </details>
+
+        <!-- Saúde -->
+        <details class="card" id="health-card">
+            <summary><h2>Saúde</h2><span class="badge" id="hl-badge">—</span></summary>
+            <ul class="hlist" id="health-list"></ul>
+        </details>
+    </section>
+    </div>
 </main>
 
 <nav class="tabbar" aria-label="Seções">
-    <a href="#legs-card">Posições</a>
-    <a href="#pnl-card">P&amp;L</a>
-    <a href="#sheet-card">Planilha</a>
-    <a href="#health-card">Saúde</a>
+    <a href="#overview" data-page="overview">Geral</a>
+    <a href="#pnl" data-page="pnl">P&amp;L</a>
+    <a href="#sheet" data-page="sheet">Planilha</a>
+    <a href="#system" data-page="system">Sistema</a>
 </nav>
+</div><!-- /.main -->
+</div><!-- /.shell -->
 
 <div class="modal" id="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="confirm-title" hidden>
     <div class="modal-card">

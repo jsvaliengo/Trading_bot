@@ -94,8 +94,7 @@
         d.addEventListener('toggle', () => { try { localStorage.setItem('tradingbot-open:' + d.id, d.open ? '1' : '0'); } catch (e) { /* idem */ } });
     });
 
-    // Celular: a barra inferior abre o card antes de rolar; --top-h é a altura do topo fixo (scroll-margin-top dos cards).
-    $$('.tabbar a').forEach(a => a.addEventListener('click', () => { const d = document.querySelector(a.getAttribute('href')); if (d) d.open = true; }));
+    // --top-h é a altura do topo fixo (scroll-margin-top dos cards).
     if (window.ResizeObserver) new ResizeObserver(([e]) => document.documentElement.style.setProperty('--top-h', e.target.offsetHeight + 'px')).observe(document.querySelector('.top'));
 
     // ───────── Topo + status ─────────
@@ -320,7 +319,7 @@
         const root = $('positions-list'); $('positions-count').textContent = positions.length;
         for (const s of closing) if (!positions.some(p => p.symbol === s)) closing.delete(s);   // símbolo já saiu: libera o botão numa reentrada
         const unreal = positions.map(p => p.unrealized_pnl_usd).filter(isNum), risk = positions.map(p => p.risk_usd).filter(isNum);
-        $('pos-sum').textContent = positions.length ? `não realizado ${fmt.money(sum(unreal), { signed: true })} · risco inicial total ${fmt.money(sum(risk))}` : '';
+        $('pos-sum').textContent = positions.length ? `não realizado ${fmt.money(sum(unreal), { signed: true })} · margem ${fmt.money(sum(positions.map(p => p.margin_usd).filter(isNum)))} · risco inicial ${fmt.money(sum(risk))}` : '';
         if (!positions.length) { root.innerHTML = '<p class="empty">Nenhuma posição aberta. O motor entra só no fechamento de barra 4h com rompimento de 40 barras.</p>'; return; }
         root.innerHTML = positions.map(p => {
             const age = p.entry_time ? (Date.now() - new Date(p.entry_time).getTime()) / 36e5 : null;
@@ -330,10 +329,11 @@
                     <span class="psym"><button type="button" class="sym-btn" data-chart="${esc(p.symbol)}">${esc(p.symbol)}</button> <span class="side ${p.side === 'LONG' ? 'l' : 's'}">${esc(p.side)}</span>${isD ? '' : `<small class="dim">${esc(p.strategy_type)}</small>`}</span>
                     <span class="pr-pnl ${cls(p.unrealized_pnl_usd)}">${fmt.money(p.unrealized_pnl_usd, { signed: true })}<small>${fmt.pct(p.unrealized_pnl_percent)}</small></span>
                     <span class="pr-r ${cls(p.r_now)}">${fmt.r(p.r_now)}<small>risco ${fmt.money(p.risk_usd)}${isNum(p.trail_floor_r) ? ` · piso ${fmt.r(p.trail_floor_r)}` : ''}</small></span>
-                    <span class="pr-meta">${fmt.price(p.quantity)} un · ${fmt.dur(age)}</span>
+                    <span class="pr-meta">${fmt.price(p.quantity)} contratos · ${fmt.dur(age)}</span>
                     ${closeCell(p)}
                 </div>
                 ${isD ? ruler(p) : `<div class="ruler-l"><span>stop <b>${fmt.price(p.custom_stop_loss)}</b></span><span>TP <b>${fmt.price(p.custom_take_profit)}</b></span></div>`}
+                ${futLine(p)}
             </div>`;
         }).join('');
     }
@@ -392,13 +392,16 @@
     }
 
     // ───────── Escada martingale ─────────
-    function renderMartingale(m, s, positions) {
-        $('ft-card').hidden = $('pos-card').hidden = $('tile-equity').hidden = $('eqperf-row').hidden = $('rdist-row').hidden = !!m; $('ring-card').hidden = $('legs-card').hidden = !m;
-        $('trades-card').hidden = !!m; $('sheet-card').hidden = !m;
+    function renderMartingale(m, s, positions, sheet) {
+        // Equity × Performance ficam em qualquer estratégia (abaixo do anel/pernas no martingale)
+        $('ft-card').hidden = $('pos-card').hidden = $('tile-equity').hidden = $('rdist-row').hidden = !!m; $('ring-card').hidden = $('legs-card').hidden = !m;
+        $('trades-card').hidden = !!m;
+        // a planilha é estática: renderiza sempre, com a faixa da equity atual (o runner só acrescenta score/pares ativos)
+        $('sheet-card').hidden = !sheet; renderSheet(sheet, Object.keys((m && m.pairs) || {}));
+        pageEmpties();
         if (!m) return;
         const rc = $('ring-card'), st = $('status'); if (st.parentElement !== rc) rc.appendChild(st);   // tiles viram o grid de métricas do anel
         renderRing(m, s);
-        renderSheet(m.sheet, Object.keys(m.pairs || {}));
         const away = (px, pct) => isNum(px) ? `<b>${fmt.price(px)}</b>${isNum(pct) ? ` <small>(${fmt.pct(pct)})</small>` : ''}` : '<b>—</b>';
         // Barra de saída: stop ─ degrau N+1 ─ empate ─ alvo, ponteiro no preço atual (anda a cada poll);
         // vermelho do stop ao empate, verde do empate ao alvo; rótulo = preço + P&L da perna naquele preço.
@@ -423,7 +426,9 @@
             const fillCut = inside ? (long ? `0 ${100 - (pct(mk) - pct(z0)) / zw * 100}% 0 0` : `0 0 0 ${(pct(mk) - pct(z0)) / zw * 100}%`) : '';
             const gl = (v, txt, side) => `<span class="gl ${side}" style="${side === 'r' ? `right:${(100 - pct(v)).toFixed(2)}%` : `left:${at(v)}`}">${txt}</span>`;
             const [mn, mx] = [`mín ${pnlAt(be)}`, `máx ${pnlAt(tp)}`];
-            const narrow = zw / 100 * $('mg-list').clientWidth < 190;   // faixa estreita (mobile): uma linha só, ancorada no lado com espaço
+            // faixa estreita: os 3 rótulos (mín/meio/máx) não cabem → uma linha só, ancorada no lado com espaço. A largura é a do CARD (grade de 2 no desktop).
+            const cardW = $('mg-list').clientWidth / (matchMedia('(min-width: 1101px)').matches ? 2 : 1) - 44;
+            const narrow = zw / 100 * cardW < 260;
             const gain = `<div class="gain" aria-hidden="true">
                 ${inside && !narrow ? gl(mk, `agora ${pnlAt(mk)}`, 'now') : ''}
                 <div class="gbar${long ? '' : ' rev'}" style="left:${at(z0)};width:${zw.toFixed(2)}%"></div>
@@ -432,34 +437,47 @@
                     ? gl(pct(z0) < 50 ? z0 : z1, `0 → ${mx}${inside ? ` · agora ${pnlAt(mk)}` : ''}`, pct(z0) < 50 ? 'l' : 'r')
                     : gl(z0, long ? mn : mx, 'l') + gl((z0 + z1) / 2, pnlAt((be + tp) / 2), 'c') + gl(z1, long ? mx : mn, 'r')}
             </div>`;
+            // Rótulos ancorados no próprio marcador (duas fileiras alternadas pra não se sobrepor), preço atual acima do eixo.
+            const anchored = marks.slice().sort((a, b) => a[0] - b[0]).map(([v, c, n], i) =>
+                `<span class="ra ${c} r${i % 2}" style="left:${at(v)}"><em>${arrow(v, n)}</em><b>${fmt.price(v)}</b><small>${pnlAt(v)}</small></span>`).join('');
             return `<div class="ruler" aria-hidden="true">
                 <div class="line"></div>${zone(worst, be, 'neg')}${zone(be, tp, '')}
                 ${marks.map(([v, c, n]) => `<span class="mk ${c}" style="left:${at(v)}" title="${n} ${fmt.price(v)} (${pnlAt(v)})"></span>`).join('')}
-                ${isNum(mk) ? `<span class="mk mark" style="left:${at(mk)}" title="preço ${fmt.price(mk)}"></span>` : ''}
+                ${isNum(mk) ? `<span class="mk mark" style="left:${at(mk)}" title="preço ${fmt.price(mk)}"></span><span class="now" style="left:${at(mk)}">${arrow(mk, 'preço')} ${fmt.price(mk)}</span>` : ''}
                 ${isNum(st) ? edge(st, `Stop ${fmt.price(st)}`) : ''}${isNum(mk) && !(isNum(st) && out(st) === out(mk)) ? edge(mk, `preço ${fmt.price(mk)}`) : ''}
-            </div>${gain}
-            <div class="ruler-l">
-                ${marks.sort((a, b) => a[0] - b[0]).map(([v, , n]) => `<span>${arrow(v, n)} <b>${fmt.price(v)}</b> <small>${pnlAt(v)}</small></span>`).join('')}
-                <span>${arrow(mk, 'preço')} <b>${fmt.price(mk)}</b></span>
-            </div>`;
+            </div>
+            <div class="ruler-anchors" aria-hidden="true">${anchored}</div>${gain}`;
         };
         const unreal = (positions || []).map(p => p.unrealized_pnl_usd).filter(isNum);
         $('legs-sum').textContent = unreal.length ? `não realizado ${fmt.money(sum(unreal), { signed: true })}` : '';
         const draining = new Set(m.draining || []);
+        // Um card por perna, como a tela de posições de uma exchange: cabeçalho (par, lado, alavancagem),
+        // P&L + ROE em destaque, escada N de 9 como barra, a régua de saída grande e a grade de métricas.
+        // Perna sem posição vira um card compacto "aguardando entrada" com a próxima adição e o alvo.
+        const kv = (k, v) => isNum(v) || typeof v === 'string' ? `<div><dt>${k}</dt><dd>${v}</dd></div>` : '';
         $('mg-list').innerHTML = (m.legs || []).map(l => {
             const pos = (positions || []).find(p => p.symbol === l.symbol && p.side === l.side);
             const age = pos && pos.entry_time ? (Date.now() - new Date(pos.entry_time).getTime()) / 36e5 : null;
-            return `<div class="prow">
-            <div class="prow-top">
-                <span class="psym"><button type="button" class="sym-btn" data-chart="${esc(l.symbol)}">${esc(l.symbol)}</button> <span class="side ${l.side === 'LONG' ? 'l' : 's'}">${esc(l.side)}</span>${draining.has(l.symbol) ? ' <span class="badge warn">drenando</span>' : ''}</span>
-                <span class="pr-pnl ${cls(l.unrealized_pnl_usd)}">${fmt.money(l.unrealized_pnl_usd, { signed: true })}${pos ? `<small>${fmt.pct(pos.unrealized_pnl_percent)}</small>` : ''}</span>
-                <span class="pr-r">${l.level} de ${l.max_levels}<small>ordens</small></span>
-                <span class="pr-meta">${isNum(l.quantity) ? `${fmt.price(l.quantity)} un · ${fmt.money(l.notional)}` : 'sem posição'}${age != null ? ` · ${fmt.dur(age)}` : ''}</span>
-                <span class="pr-meta">média <b>${fmt.price(l.avg_price)}</b></span>
+            const long = l.side === 'LONG', lev = pos && isNum(pos.leverage) ? `<span class="leg-lev">${pos.leverage}×</span>` : '';
+            const head = `<header class="leg-h">
+                <div class="leg-id"><button type="button" class="sym-btn leg-sym" data-chart="${esc(l.symbol)}">${esc(l.symbol.replace(/USDT$/, ''))}<small>USDT perp</small></button><span class="side ${long ? 'l' : 's'}">${esc(l.side)}</span>${lev}${draining.has(l.symbol) ? '<span class="badge warn">drenando</span>' : ''}</div>
+                ${pos ? `<div class="leg-pnl ${cls(l.unrealized_pnl_usd)}"><b>${fmt.money(l.unrealized_pnl_usd, { signed: true })}</b><small>${isNum(pos.roe_percent) ? `ROE ${fmt.pct(pos.roe_percent, 1)}` : fmt.pct(pos.unrealized_pnl_percent)}</small></div>` : ''}
                 ${pos ? closeCell(pos) : ''}
-            </div>
-            ${mgRuler(l) || `<div class="ruler-l"><span>próx. adição @ ${l.level >= l.max_levels ? '<b>teto da escada</b>' : away(l.next_add_price, l.next_add_pct)}</span><span>TP @ ${away(l.tp_price, l.tp_pct)}</span></div>`}
-        </div>`; }).join('') || '<p class="empty">Nenhum par na escada (estratégia não iniciou ou nenhum par cabe na ordem base).</p>';
+            </header>`;
+            if (!pos) return `<article class="leg wait">${head}
+                <p class="leg-wait">Aguardando entrada<small>${l.level >= l.max_levels ? 'teto da escada' : `próx. adição @ ${away(l.next_add_price, l.next_add_pct)}`} · alvo @ ${away(l.tp_price, l.tp_pct)}</small></p>
+            </article>`;
+            const ladder = `<div class="leg-ladder"><span>Escada <b>${l.level} de ${l.max_levels}</b> ordens</span><div class="meter"><i style="width:${(l.level / l.max_levels * 100).toFixed(0)}%"></i></div><span>${l.level >= l.max_levels ? 'teto' : `próx. degrau @ ${away(l.next_add_price, l.next_add_pct)}`}</span></div>`;
+            const liq = isNum(pos.liquidation_price) ? `<b class="neg">${fmt.price(pos.liquidation_price)}</b>${isNum(pos.mark_price) && pos.mark_price > 0 ? ` <small>(${fmt.pct(Math.abs(pos.liquidation_price - pos.mark_price) / pos.mark_price * 100, 1, false)})</small>` : ''}` : '—';
+            const grid = `<dl class="leg-grid">
+                ${kv('Contratos', fmt.price(l.quantity))}${kv('Notional', fmt.money(l.notional))}${kv('Margem', fmt.money(pos.margin_usd))}
+                ${kv('Média', fmt.price(l.avg_price))}${kv('Marca', fmt.price(l.mark_price))}${kv('Liquidação', liq)}
+                ${kv('Alvo', away(l.tp_price, l.tp_pct))}${kv('Idade', fmt.dur(age))}
+            </dl>`;
+            return `<article class="leg ${long ? 'long' : 'short'}">${head}${ladder}
+                <div class="leg-ruler">${mgRuler(l) || `<div class="ruler-l"><span>próx. adição @ ${away(l.next_add_price, l.next_add_pct)}</span><span>TP @ ${away(l.tp_price, l.tp_pct)}</span></div>`}</div>
+                ${grid}
+            </article>`; }).join('') || '<p class="empty">Nenhum par na escada (estratégia não iniciou ou nenhum par cabe na ordem base).</p>';
     }
 
     // ───────── Anel da carteira ─────────
@@ -491,6 +509,9 @@
         $('ring-state').className = 'ring-state ' + (s.paused ? 'warn' : (s.running ? 'ok' : 'bad'));
         $('ring-stop').textContent = `stop em ${fmt.money(m.portfolio_stop_equity)}` + (isNum(m.portfolio_stop_room_pct) ? ` · faltam ${fmt.pct(m.portfolio_stop_room_pct, 1, false)}` : '');
         $('ring-stop').className = 'cs ' + (isNum(m.portfolio_stop_room_pct) && m.portfolio_stop_room_pct < 5 ? 'warn' : '');
+        $('tile-stop').hidden = false;
+        setTile('st-stop', fmt.money(m.portfolio_stop_equity), (isNum(m.portfolio_stop_room_pct) ? `faltam ${fmt.pct(m.portfolio_stop_room_pct, 1, false)} da equity` : 'sem equity') + ` · pico ${fmt.money(m.peak_equity)}` + (m.portfolio_stops ? ` · ${m.portfolio_stops} stop(s) de portfólio` : ''),
+            isNum(m.portfolio_stop_room_pct) && m.portfolio_stop_room_pct < 5 ? 'neg' : '', m.portfolio_stop_equity);
         const c = $('ring-center'), sp = pairs[ringSel];
         if (sp) {
             const deep = sp.legs.reduce((x, y) => (y.level > x.level ? y : x));
@@ -562,10 +583,6 @@
         if (!h) { $('health-list').innerHTML = '<li class="empty">sem dados</li>'; return; }
         let worst = 'ok';
         const bump = (st) => { if (st === 'bad' || (st === 'warn' && worst === 'ok')) worst = st; };
-        const ws = h.ws;
-        if (ws) { const st = ws.recovering > 0 ? 'warn' : (ws.max_age_seconds > 900 ? 'bad' : 'ok'); bump(st);
-            items.push([dot(st) + 'WebSocket de klines', `${ws.subscriptions} streams<small>${ws.reconnects} reconexões · ${ws.recovering} recuperando · último dado há ${fmt.ago(ws.max_age_seconds)}</small>`]); }
-        else items.push([dot('') + 'WebSocket de klines', 'desligado<small>klines via REST</small>']);
         const us = h.user_stream;
         if (us) { const st = !us.started ? 'bad' : (us.error_count > 0 ? 'warn' : 'ok'); bump(st);
             items.push([dot(st) + 'User stream (fills)', `${us.started ? 'ativo' : 'parado'}<small>${us.error_count || 0} erros · ${us.restart_attempts || 0} restarts · última msg há ${fmt.ago(us.last_message_age_seconds)}</small>`]); }
@@ -761,6 +778,8 @@
             const c = v ? (cls(v.net) || 'zero') : (out || future ? 'off' : 'zero');
             html += `<span class="day ${c}${today ? ' today' : ''}" role="gridcell" title="${fmt.day(key)}${v ? `: ${fmt.money(v.net, { signed: true })} · ${tradesOf.get(key) || 0} trade(s)` : ''}"><small>${today ? 'Hoje' : d}</small>${v ? `<b>${fmt.money(v.net, { signed: true })}</b>` : (out || future ? '' : '<b>0,00</b>')}</span>`;
         }
+        // completa a última semana com células "off" pra grade não terminar com buraco
+        html += '<span class="day off" aria-hidden="true"></span>'.repeat((7 - (first.getUTCDay() + nDays) % 7) % 7);
         $('pnl-cal').innerHTML = html;
     }
     function pnlBase(p, id) { const pal = palette(); return { pal, el: $(id), ok: !!$(id) && typeof Chart !== 'undefined', days: dayRange(p.from, p.to) }; }
@@ -886,17 +905,19 @@
         renderForwardTest(ft);
         renderPerf(ft);
         renderPositions(pos);
-        renderMartingale(l.martingale, s, pos);
+        renderMartingale(l.martingale, s, pos, l.sheet);
         renderEngine(e, pos);
         renderHealth(h, s);
         renderRHist(ft.r_histogram);
         renderExcursions(ft.excursions);
         renderCalendar(ft.calendar, ft);
         if (state.hist) renderEquity(state.hist.portfolio_history, state.hist.recent_trades, ft);
+        renderKpis();
     }
     function renderHistory(hs) {
         renderTrades(hs.recent_trades || []);
         renderEquity(hs.portfolio_history || [], hs.recent_trades || [], state.live && state.live.forward_test);
+        renderKpis();
     }
     let lastClosed = null;
     function applyLive(l) {
@@ -1053,6 +1074,112 @@
     function reqRefresh() { if (socket && socket.connected) socket.emit('request_snapshot'); else pollOnce(); }
     setInterval(() => { left -= 1; if (left <= 0) { reqRefresh(); left = REFRESH; } if (state.live) renderNext(); }, 1000);
     setInterval(fetchHistory, HISTORY_INTERVAL);
+
+    // ───────── Shell: KPIs com sparkline, páginas do menu, menu off-canvas, tema ─────────
+    function sparkline(id, values, color) {
+        const el = $(id); if (!el || typeof Chart === 'undefined') return;
+        const data = values.map((y, x) => ({ x, y }));
+        if (charts[id]) { const d = charts[id].data.datasets[0]; d.data = data; d.borderColor = color; d.backgroundColor = hexa(color, 0.18); charts[id].update('none'); return; }
+        charts[id] = new Chart(el, {
+            type: 'line', data: { datasets: [{ data, borderColor: color, backgroundColor: hexa(color, 0.18), fill: true, borderWidth: 2, pointRadius: 0, tension: 0.4 }] },
+            options: { responsive: true, maintainAspectRatio: false, parsing: false, animation: false, events: [],
+                plugins: { legend: { display: false }, tooltip: { enabled: false } }, scales: { x: { type: 'linear', display: false }, y: { display: false } } },
+        });
+    }
+    // Conta de perpétuos: equity (curva do portfolio_history), margem usada × disponível, não realizado por perna,
+    // realizado do dia UTC (net por dia, 30d) e funding acumulado (com comissões) sobre o acumulado por dia.
+    function renderKpis() {
+        const s = state.live && state.live.summary; if (!s) return;
+        const p = palette(), h = state.hist || {}, days = (h.daily_history || []).slice(-30), pos = (state.live.positions || []);
+        const eq = s.last_balance, today = s.daily_pnl;
+        $('kpi-equity').innerHTML = esc(fmt.money(eq)) + brlTag(eq);
+        $('kpi-equity-s').textContent = `wallet ${fmt.money(isNum(eq) && isNum(s.unrealized_pnl) ? eq - s.unrealized_pnl : null)} · capital ${fmt.money(s.initial_capital)} · P&L total ${fmt.money(s.total_pnl, { signed: true })} (${fmt.pct(s.roi_percent)})`;
+        sparkline('kpi-equity-spark', (h.portfolio_history || []).map(q => q.equity ?? q.balance).filter(isNum), p.ac);
+        const used = isNum(s.margin_used) ? s.margin_used : (pos.length ? sum(pos.map(q => q.margin_usd).filter(isNum)) : null);
+        const pct = isNum(used) && isNum(eq) && eq > 0 ? used / eq * 100 : null;
+        $('kpi-margin').innerHTML = esc(fmt.money(used)) + brlTag(used);
+        $('kpi-margin-s').textContent = `${isNum(pct) ? fmt.pct(pct, 1, false) + ' da equity · ' : ''}disponível ${fmt.money(isNum(s.available_balance) ? s.available_balance : (isNum(used) && isNum(eq) ? eq - used : null))}`;
+        const bar = $('kpi-margin-bar'); bar.firstElementChild.style.width = `${Math.min(100, Math.max(0, pct || 0))}%`; bar.setAttribute('aria-valuenow', String(Math.round(pct || 0))); bar.classList.toggle('hot', isNum(pct) && pct >= 70);
+        const legs = [...pos].sort((a, b) => Math.abs(b.unrealized_pnl_usd || 0) - Math.abs(a.unrealized_pnl_usd || 0));
+        $('kpi-unreal').innerHTML = esc(fmt.money(s.unrealized_pnl, { signed: true })) + brlTag(s.unrealized_pnl); $('kpi-unreal').className = 'kpi-v ' + cls(s.unrealized_pnl);
+        $('kpi-unreal-s').textContent = pos.length ? `${pos.length} perna(s) · notional ${fmt.money(sum(pos.map(q => q.notional).filter(isNum)))}` : 'nenhuma posição aberta';
+        $('kpi-unreal-legs').innerHTML = legs.slice(0, 6).map(q => `<span class="${cls(q.unrealized_pnl_usd)}">${esc(String(q.symbol || '').replace(/USDT$/, ''))} ${esc(q.side)} ${esc(fmt.money(q.unrealized_pnl_usd, { signed: true }))}${isNum(q.roe_percent) ? ` (${esc(fmt.pct(q.roe_percent, 1))})` : ''}</span>`).join('');
+        $('kpi-pnl').innerHTML = esc(fmt.money(today, { signed: true })) + brlTag(today); $('kpi-pnl').className = 'kpi-v ' + cls(today);
+        const bd = s.daily_pnl_breakdown || {};
+        $('kpi-pnl-s').textContent = `trades ${fmt.money(bd.trades, { signed: true })} · funding ${fmt.money(bd.funding, { signed: true })} · taxas ${fmt.money(bd.commission, { signed: true })} · ${s.closed_trades_today ?? 0} fechado(s)`;
+        sparkline('kpi-pnl-spark', days.map(d => d.net).filter(isNum), sgn(today) < 0 ? p.bad : p.good);
+        const fund = s.funding_fee_total;
+        $('kpi-funding').innerHTML = esc(fmt.money(fund, { signed: true })) + brlTag(fund); $('kpi-funding').className = 'kpi-v ' + cls(fund);
+        $('kpi-funding-s').textContent = `${sgn(fund) < 0 ? 'pago' : sgn(fund) > 0 ? 'recebido' : 'líquido'} desde o 1º trade · taxas ${fmt.money(s.commission_total, { signed: true })} · hoje ${fmt.money(s.funding_fee_today, { signed: true })}`;
+        sparkline('kpi-funding-spark', days.map(d => d.cumulative).filter(isNum), p.warn);
+    }
+    // Linha de perpétuo de uma posição/perna: alavancagem, notional, margem, marca, liquidação, ROE (o que a exchange deu).
+    function futLine(p) {
+        if (!p) return '';
+        const it = [
+            isNum(p.leverage) ? `<span>alav. <b>${p.leverage}×</b></span>` : '',
+            isNum(p.notional) ? `<span>notional <b>${esc(fmt.money(p.notional))}</b></span>` : '',
+            isNum(p.margin_usd) ? `<span>margem <b>${esc(fmt.money(p.margin_usd))}</b></span>` : '',
+            isNum(p.mark_price) ? `<span>marca <b>${esc(fmt.price(p.mark_price))}</b></span>` : '',
+            isNum(p.liquidation_price) ? `<span class="liq">liquidação <b>${esc(fmt.price(p.liquidation_price))}</b>${isNum(p.mark_price) && p.mark_price > 0 ? ` <small>(${esc(fmt.pct(Math.abs(p.liquidation_price - p.mark_price) / p.mark_price * 100, 1, false))})</small>` : ''}</span>` : '',
+            isNum(p.roe_percent) ? `<span>ROE <b class="${cls(p.roe_percent)}">${esc(fmt.pct(p.roe_percent, 1))}</b></span>` : '',
+        ].filter(Boolean);
+        return it.length ? `<div class="fut">${it.join('')}</div>` : '';
+    }
+
+    const PAGES = $$('.page').map(p => p.dataset.page);
+    // hash = "pagina" ou "pagina/id-do-card" (subitem do menu: mostra a página e rola até o card, abrindo-o)
+    function showPage(hash) {
+        const [raw, target] = String(hash || '').split('/');
+        const name = PAGES.includes(raw) ? raw : PAGES[0];
+        $$('.page').forEach(p => { p.hidden = p.dataset.page !== name; });
+        $$('a[data-page]').forEach(a => {
+            // no menu lateral o item ativo é o que casa página E card (Dashboard só sem card); na tabbar basta a página
+            const on = a.dataset.page === name && (!a.closest('.nav') || (a.dataset.target || '') === (target || ''));
+            a.classList.toggle('on', on); if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
+        });
+        $$('.nav-group').forEach(g => g.classList.toggle('has-on', !!g.querySelector('a.on')));
+        const el = target && $(target);
+        if (el && !el.hidden) { if (el.tagName === 'DETAILS') el.open = true; }
+        else { const first = $$(`.page[data-page="${name}"] details.card`).find(d => !d.hidden); if (first) first.open = true; }   // página só com cards recolhíveis: abre o primeiro
+        pageEmpties();
+        Object.values(charts).forEach(c => c.resize());   // canvas em página oculta nasce com 0px
+        closeSidebar();
+        if (el && !el.hidden) el.scrollIntoView({ block: 'start' });
+    }
+    // página sem nenhum card visível (ex.: fora do martingale) mostra um aviso em vez de ficar em branco
+    function pageEmpties() { $$('.page').forEach(p => { const e = p.querySelector('.page-empty'); if (e) e.hidden = Array.from(p.children).some(c => c !== e && !c.hidden); }); }
+    // Desktop: menu recolhido (só ícones); lembrado em localStorage. No celular o menu é off-canvas e isto não se aplica.
+    const NAV_KEY = 'tradingbot-nav';
+    function setCompact(on) { document.body.classList.toggle('nav-compact', on); $('sidebar-collapse').setAttribute('aria-pressed', String(on)); $('sidebar-collapse').title = $('sidebar-collapse').ariaLabel = on ? 'Expandir menu' : 'Recolher menu'; Object.values(charts).forEach(c => c.resize()); }
+    try { setCompact(localStorage.getItem(NAV_KEY) === 'compact'); } catch (e) { /* storage bloqueado */ }
+    $('sidebar-collapse').addEventListener('click', () => { const on = !document.body.classList.contains('nav-compact'); setCompact(on); try { localStorage.setItem(NAV_KEY, on ? 'compact' : 'full'); } catch (e) { /* storage bloqueado */ } });
+    function closeSidebar() { document.body.classList.remove('nav-open'); $('sidebar-backdrop').hidden = true; $('sidebar-toggle').setAttribute('aria-expanded', 'false'); }
+    $('sidebar-toggle').addEventListener('click', () => { const open = !document.body.classList.contains('nav-open'); document.body.classList.toggle('nav-open', open); $('sidebar-backdrop').hidden = !open; $('sidebar-toggle').setAttribute('aria-expanded', String(open)); });
+    $('sidebar-backdrop').addEventListener('click', closeSidebar);
+    window.addEventListener('hashchange', () => showPage(location.hash.slice(1)));
+    showPage(location.hash.slice(1));
+    // Grupos do menu: accordion (um aberto por vez), lembrado em localStorage; o grupo do item ativo abre no boot.
+    const GROUP_KEY = 'tradingbot-nav-group';
+    function openGroup(key) { $$('.nav-group').forEach(g => { const on = g.dataset.group === key; g.classList.toggle('open', on); g.querySelector('.nav-toggle').setAttribute('aria-expanded', String(on)); }); }
+    $$('.nav-toggle').forEach(b => b.addEventListener('click', () => {
+        const g = b.parentElement, key = g.classList.contains('open') ? '' : g.dataset.group; openGroup(key);
+        try { localStorage.setItem(GROUP_KEY, key); } catch (e) { /* storage bloqueado */ }
+    }));
+    { let key = null; try { key = localStorage.getItem(GROUP_KEY); } catch (e) { /* storage bloqueado */ }
+      const active = document.querySelector('.nav-group.has-on'); openGroup(key !== null ? key : (active ? active.dataset.group : 'trading')); }
+
+    // Tema: grava em localStorage (o <head> aplica antes do primeiro paint). Os gráficos leem as cores ao nascer: destrói e redesenha.
+    const THEME_KEY = 'tradingbot-theme';
+    $('theme-toggle').addEventListener('click', () => {
+        const next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
+        document.documentElement.dataset.theme = next;
+        try { localStorage.setItem(THEME_KEY, next); } catch (e) { /* storage bloqueado */ }
+        Object.values(charts).forEach(c => c.destroy()); Object.keys(charts).forEach(k => { delete charts[k]; });
+        if (state.live) renderLive(state.live);
+        if (state.hist) renderHistory(state.hist);
+        if (state.pnl) renderPnl(state.pnl);
+    });
 
     // ───────── Boot ─────────
     initChips(); initTrades(); initPnl();
