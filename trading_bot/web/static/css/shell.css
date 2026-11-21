@@ -92,9 +92,7 @@
 .ring-card { display:grid; grid-template-columns:minmax(300px, 1fr) 2fr; gap:14px; align-items:stretch;
     background:none; border:0; padding:0; border-radius:0; backdrop-filter:none; -webkit-backdrop-filter:none; }
 .ring-kpi { padding:16px 18px 18px; min-height:0; }
-.ring-kpi .ring-wrap { margin:8px auto 0; }
 .ring-card .status { flex:none; display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:14px; margin:0; overflow:visible; }
-.ring-card .status:where(:has(.tile[hidden])) { grid-template-columns:repeat(3, minmax(0,1fr)); }
 .ring-card .tile { background:var(--glass); border:1px solid var(--glass-border); border-radius:20px; padding:16px 18px; min-height:120px; backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px); gap:2px; }
 .ring-card .tile .tv { order:-1; font-family:'IBM Plex Mono',ui-monospace,monospace; font-size:26px; font-weight:600; letter-spacing:-.02em; }
 .ring-card .tile .tl { font-size:12.5px; color:var(--text-dim); font-weight:500; white-space:nowrap; }

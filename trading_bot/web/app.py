@@ -168,7 +168,9 @@ def _register_routes(app: Flask, socketio: SocketIO) -> None:
                 limiter.reset(ip)
                 session.clear()
                 session[auth.SESSION_KEY] = True
-                session["user_id"] = int(found["id"]); session["username"] = found["username"]; session["display_name"] = found.get("display_name") or found["username"]
+                session["user_id"] = int(found["id"])
+                session["username"] = found["username"]
+                session["display_name"] = found.get("display_name") or found["username"]
                 session.permanent = bool(request.form.get("remember"))
                 logger.info(f"Login no dashboard: usuário={user!r} ip={ip}")
                 return redirect(auth.safe_next(request.form.get("next")))
