@@ -25,6 +25,8 @@ Flask-SocketIO>=5.3.0
 # Backend WebSocket do SocketIO — escolhido por compatibilidade com threading
 # nativo. Evita eventlet/gevent (monkey-patch stdlib, conflita com python-binance).
 simple-websocket>=1.0.0
+# Plataforma: chaves de exchange cifradas (Fernet) em runtime/platform.db
+cryptography>=42.0.0
 
 # Para testes (opcional)
 pytest>=7.0.0

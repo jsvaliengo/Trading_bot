@@ -389,6 +389,8 @@ def _binance_summary(exchange, store) -> Dict[str, float]:
         if "wallet_balance" in info:
             out["wallet_balance"] = _safe_float(info.get("wallet_balance"))
         out["unrealized"] = _safe_float(info.get("unrealized_pnl"))
+        out["available"] = _safe_float(info.get("available_balance"))
+        out["margin_used"] = _safe_float(info.get("total_initial_margin"))
     except Exception:
         ok = False
     # falha transitória não fica presa 15s no cache: o próximo poll tenta de novo
@@ -439,9 +441,13 @@ def collect_summary(bot) -> Dict[str, Any]:
     binance_funding_total = 0.0
     binance_commission_total = 0.0
     wallet_balance = _safe_float(getattr(bot, "last_known_balance", 0.0) or 0.0)
+    available_balance: Optional[float] = None
+    margin_used: Optional[float] = None
     exchange = getattr(bot, "exchange", None)
     if exchange is not None:
         b = _binance_summary(exchange, getattr(bot, "trade_store", None))
+        available_balance = b.get("available")
+        margin_used = b.get("margin_used")
         binance_daily_realized = b.get("daily_realized", 0.0)
         binance_funding_fee = b.get("funding_fee", 0.0)
         binance_commission = b.get("commission", 0.0)
@@ -487,6 +493,9 @@ def collect_summary(bot) -> Dict[str, Any]:
         "total_pnl": total_pnl,
         "daily_pnl": daily_realized,
         "unrealized_pnl": binance_unrealized,
+        # Perpétuos: margem presa nas posições e saldo livre pra novas ordens (None sem exchange).
+        "margin_used": margin_used,
+        "available_balance": available_balance,
         "funding_fee_today": binance_funding_fee,
         "commission_today": binance_commission,
         # Parcelas que compõem daily_pnl (= soma das três) p/ o subtítulo do card.
@@ -604,6 +613,14 @@ def collect_positions(bot) -> List[Dict[str, Any]]:
         unrealized_pnl = _safe_float(live.get("unrealized_pnl")) if live else None
         entry_price = _safe_float(payload.get("entry_price"))
         side = payload.get("side", "")
+        quantity = _safe_float(payload.get("quantity"))
+        # Perpétuo: notional, alavancagem, margem e liquidação vêm da exchange; ROE = P&L / margem.
+        leverage = int(_safe_float(live.get("leverage"))) or None if live else None
+        notional = quantity * (mark_price or entry_price) if quantity else None
+        margin_usd = _safe_float(live.get("margin")) or None if live else None
+        if margin_usd is None and notional and leverage:
+            margin_usd = notional / leverage
+        roe_percent = unrealized_pnl / margin_usd * 100.0 if unrealized_pnl is not None and margin_usd else None
 
         pnl_percent: Optional[float] = None
         if mark_price and entry_price > 0:
@@ -617,9 +634,14 @@ def collect_positions(bot) -> List[Dict[str, Any]]:
                 "side": side,
                 "entry_price": entry_price,
                 "mark_price": mark_price,
-                "quantity": _safe_float(payload.get("quantity")),
+                "quantity": quantity,
                 "unrealized_pnl_usd": unrealized_pnl,
                 "unrealized_pnl_percent": pnl_percent,
+                "notional": notional,
+                "leverage": leverage,
+                "margin_usd": margin_usd,
+                "roe_percent": roe_percent,
+                "liquidation_price": (_safe_float(live.get("liquidation_price")) or None) if live else None,
                 "strategy_name": payload.get("strategy_name", "primary"),
                 "strategy_type": payload.get("strategy_type", "trend_signal"),
                 "custom_stop_loss": payload.get("custom_stop_loss"),

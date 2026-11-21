@@ -846,6 +846,10 @@ class TradingConfig:
     # Chave secreta para sessões/SocketIO. Auto-gerada na inicialização se vazia
     # (cada restart invalida sessões — para sessões persistentes, defina via env).
     DASHBOARD_SECRET_KEY: str = _env_str("TRADING_BOT_DASHBOARD_SECRET_KEY", "")
+    # Plataforma (users/accounts): banco separado do TradeStore e segredo da cifra das chaves de
+    # exchange. Vazio = runtime/platform.db e o segredo cai em DASHBOARD_SECRET_KEY.
+    PLATFORM_DB_PATH: str = _env_str("TRADING_BOT_PLATFORM_DB_PATH", "")
+    PLATFORM_SECRET: str = _env_str("TRADING_BOT_PLATFORM_SECRET", "")
     # Login por sessão (cookie assinado). HTTPS=true marca o cookie Secure (só atrás
     # de TLS, ex.: Caddy); TRUST_PROXY=true usa X-Forwarded-For no rate limit do login.
     DASHBOARD_HTTPS: bool = _env_bool("TRADING_BOT_DASHBOARD_HTTPS", False)

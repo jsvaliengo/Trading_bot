@@ -340,7 +340,9 @@ class BitgetConnection:
             out.append({"symbol": self.from_bitget(p["symbol"]), "side": str(p.get("holdSide", "long")).upper(),
                         "quantity": qty, "entry_price": _f(p.get("openPriceAvg")),
                         "mark_price": _f(p.get("markPrice")), "unrealized_pnl": _f(p.get("unrealizedPL")),
-                        "leverage": int(_f(p.get("leverage"), self.config.LEVERAGE))})
+                        "leverage": int(_f(p.get("leverage"), self.config.LEVERAGE)),
+                        "liquidation_price": _f(p.get("liquidationPrice")) or None,
+                        "margin": _f(p.get("marginSize")) or None})
         return out
 
     def place_market_order(self, symbol: str, side: str, position_side: str, quantity: float) -> Optional[Dict]:

@@ -94,8 +94,7 @@
         d.addEventListener('toggle', () => { try { localStorage.setItem('tradingbot-open:' + d.id, d.open ? '1' : '0'); } catch (e) { /* idem */ } });
     });
 
-    // Celular: a barra inferior abre o card antes de rolar; --top-h é a altura do topo fixo (scroll-margin-top dos cards).
-    $$('.tabbar a').forEach(a => a.addEventListener('click', () => { const d = document.querySelector(a.getAttribute('href')); if (d) d.open = true; }));
+    // --top-h é a altura do topo fixo (scroll-margin-top dos cards).
     if (window.ResizeObserver) new ResizeObserver(([e]) => document.documentElement.style.setProperty('--top-h', e.target.offsetHeight + 'px')).observe(document.querySelector('.top'));
 
     // ───────── Topo + status ─────────
@@ -320,7 +319,7 @@
         const root = $('positions-list'); $('positions-count').textContent = positions.length;
         for (const s of closing) if (!positions.some(p => p.symbol === s)) closing.delete(s);   // símbolo já saiu: libera o botão numa reentrada
         const unreal = positions.map(p => p.unrealized_pnl_usd).filter(isNum), risk = positions.map(p => p.risk_usd).filter(isNum);
-        $('pos-sum').textContent = positions.length ? `não realizado ${fmt.money(sum(unreal), { signed: true })} · risco inicial total ${fmt.money(sum(risk))}` : '';
+        $('pos-sum').textContent = positions.length ? `não realizado ${fmt.money(sum(unreal), { signed: true })} · margem ${fmt.money(sum(positions.map(p => p.margin_usd).filter(isNum)))} · risco inicial ${fmt.money(sum(risk))}` : '';
         if (!positions.length) { root.innerHTML = '<p class="empty">Nenhuma posição aberta. O motor entra só no fechamento de barra 4h com rompimento de 40 barras.</p>'; return; }
         root.innerHTML = positions.map(p => {
             const age = p.entry_time ? (Date.now() - new Date(p.entry_time).getTime()) / 36e5 : null;
@@ -330,10 +329,11 @@
                     <span class="psym"><button type="button" class="sym-btn" data-chart="${esc(p.symbol)}">${esc(p.symbol)}</button> <span class="side ${p.side === 'LONG' ? 'l' : 's'}">${esc(p.side)}</span>${isD ? '' : `<small class="dim">${esc(p.strategy_type)}</small>`}</span>
                     <span class="pr-pnl ${cls(p.unrealized_pnl_usd)}">${fmt.money(p.unrealized_pnl_usd, { signed: true })}<small>${fmt.pct(p.unrealized_pnl_percent)}</small></span>
                     <span class="pr-r ${cls(p.r_now)}">${fmt.r(p.r_now)}<small>risco ${fmt.money(p.risk_usd)}${isNum(p.trail_floor_r) ? ` · piso ${fmt.r(p.trail_floor_r)}` : ''}</small></span>
-                    <span class="pr-meta">${fmt.price(p.quantity)} un · ${fmt.dur(age)}</span>
+                    <span class="pr-meta">${fmt.price(p.quantity)} contratos · ${fmt.dur(age)}</span>
                     ${closeCell(p)}
                 </div>
                 ${isD ? ruler(p) : `<div class="ruler-l"><span>stop <b>${fmt.price(p.custom_stop_loss)}</b></span><span>TP <b>${fmt.price(p.custom_take_profit)}</b></span></div>`}
+                ${futLine(p)}
             </div>`;
         }).join('');
     }
@@ -454,11 +454,12 @@
                 <span class="psym"><button type="button" class="sym-btn" data-chart="${esc(l.symbol)}">${esc(l.symbol)}</button> <span class="side ${l.side === 'LONG' ? 'l' : 's'}">${esc(l.side)}</span>${draining.has(l.symbol) ? ' <span class="badge warn">drenando</span>' : ''}</span>
                 <span class="pr-pnl ${cls(l.unrealized_pnl_usd)}">${fmt.money(l.unrealized_pnl_usd, { signed: true })}${pos ? `<small>${fmt.pct(pos.unrealized_pnl_percent)}</small>` : ''}</span>
                 <span class="pr-r">${l.level} de ${l.max_levels}<small>ordens</small></span>
-                <span class="pr-meta">${isNum(l.quantity) ? `${fmt.price(l.quantity)} un · ${fmt.money(l.notional)}` : 'sem posição'}${age != null ? ` · ${fmt.dur(age)}` : ''}</span>
+                <span class="pr-meta">${isNum(l.quantity) ? `${fmt.price(l.quantity)} contratos · ${fmt.money(l.notional)}` : 'sem posição'}${age != null ? ` · ${fmt.dur(age)}` : ''}</span>
                 <span class="pr-meta">média <b>${fmt.price(l.avg_price)}</b></span>
                 ${pos ? closeCell(pos) : ''}
             </div>
             ${mgRuler(l) || `<div class="ruler-l"><span>próx. adição @ ${l.level >= l.max_levels ? '<b>teto da escada</b>' : away(l.next_add_price, l.next_add_pct)}</span><span>TP @ ${away(l.tp_price, l.tp_pct)}</span></div>`}
+            ${futLine(pos)}
         </div>`; }).join('') || '<p class="empty">Nenhum par na escada (estratégia não iniciou ou nenhum par cabe na ordem base).</p>';
     }
 
@@ -893,10 +894,12 @@
         renderExcursions(ft.excursions);
         renderCalendar(ft.calendar, ft);
         if (state.hist) renderEquity(state.hist.portfolio_history, state.hist.recent_trades, ft);
+        renderKpis();
     }
     function renderHistory(hs) {
         renderTrades(hs.recent_trades || []);
         renderEquity(hs.portfolio_history || [], hs.recent_trades || [], state.live && state.live.forward_test);
+        renderKpis();
     }
     let lastClosed = null;
     function applyLive(l) {
@@ -1053,6 +1056,86 @@
     function reqRefresh() { if (socket && socket.connected) socket.emit('request_snapshot'); else pollOnce(); }
     setInterval(() => { left -= 1; if (left <= 0) { reqRefresh(); left = REFRESH; } if (state.live) renderNext(); }, 1000);
     setInterval(fetchHistory, HISTORY_INTERVAL);
+
+    // ───────── Shell: KPIs com sparkline, páginas do menu, menu off-canvas, tema ─────────
+    function sparkline(id, values, color) {
+        const el = $(id); if (!el || typeof Chart === 'undefined') return;
+        const data = values.map((y, x) => ({ x, y }));
+        if (charts[id]) { const d = charts[id].data.datasets[0]; d.data = data; d.borderColor = color; d.backgroundColor = hexa(color, 0.18); charts[id].update('none'); return; }
+        charts[id] = new Chart(el, {
+            type: 'line', data: { datasets: [{ data, borderColor: color, backgroundColor: hexa(color, 0.18), fill: true, borderWidth: 2, pointRadius: 0, tension: 0.4 }] },
+            options: { responsive: true, maintainAspectRatio: false, parsing: false, animation: false, events: [],
+                plugins: { legend: { display: false }, tooltip: { enabled: false } }, scales: { x: { type: 'linear', display: false }, y: { display: false } } },
+        });
+    }
+    // Conta de perpétuos: equity (curva do portfolio_history), margem usada × disponível, não realizado por perna,
+    // realizado do dia UTC (net por dia, 30d) e funding acumulado (com comissões) sobre o acumulado por dia.
+    function renderKpis() {
+        const s = state.live && state.live.summary; if (!s) return;
+        const p = palette(), h = state.hist || {}, days = (h.daily_history || []).slice(-30), pos = (state.live.positions || []);
+        const eq = s.last_balance, today = s.daily_pnl;
+        $('kpi-equity').innerHTML = esc(fmt.money(eq)) + brlTag(eq);
+        $('kpi-equity-s').textContent = `wallet ${fmt.money(isNum(eq) && isNum(s.unrealized_pnl) ? eq - s.unrealized_pnl : null)} · capital ${fmt.money(s.initial_capital)} · P&L total ${fmt.money(s.total_pnl, { signed: true })} (${fmt.pct(s.roi_percent)})`;
+        sparkline('kpi-equity-spark', (h.portfolio_history || []).map(q => q.equity ?? q.balance).filter(isNum), p.ac);
+        const used = isNum(s.margin_used) ? s.margin_used : (pos.length ? sum(pos.map(q => q.margin_usd).filter(isNum)) : null);
+        const pct = isNum(used) && isNum(eq) && eq > 0 ? used / eq * 100 : null;
+        $('kpi-margin').innerHTML = esc(fmt.money(used)) + brlTag(used);
+        $('kpi-margin-s').textContent = `${isNum(pct) ? fmt.pct(pct, 1, false) + ' da equity · ' : ''}disponível ${fmt.money(isNum(s.available_balance) ? s.available_balance : (isNum(used) && isNum(eq) ? eq - used : null))}`;
+        const bar = $('kpi-margin-bar'); bar.firstElementChild.style.width = `${Math.min(100, Math.max(0, pct || 0))}%`; bar.setAttribute('aria-valuenow', String(Math.round(pct || 0))); bar.classList.toggle('hot', isNum(pct) && pct >= 70);
+        const legs = [...pos].sort((a, b) => Math.abs(b.unrealized_pnl_usd || 0) - Math.abs(a.unrealized_pnl_usd || 0));
+        $('kpi-unreal').innerHTML = esc(fmt.money(s.unrealized_pnl, { signed: true })) + brlTag(s.unrealized_pnl); $('kpi-unreal').className = 'kpi-v ' + cls(s.unrealized_pnl);
+        $('kpi-unreal-s').textContent = pos.length ? `${pos.length} perna(s) · notional ${fmt.money(sum(pos.map(q => q.notional).filter(isNum)))}` : 'nenhuma posição aberta';
+        $('kpi-unreal-legs').innerHTML = legs.slice(0, 6).map(q => `<span class="${cls(q.unrealized_pnl_usd)}">${esc(String(q.symbol || '').replace(/USDT$/, ''))} ${esc(q.side)} ${esc(fmt.money(q.unrealized_pnl_usd, { signed: true }))}${isNum(q.roe_percent) ? ` (${esc(fmt.pct(q.roe_percent, 1))})` : ''}</span>`).join('');
+        $('kpi-pnl').innerHTML = esc(fmt.money(today, { signed: true })) + brlTag(today); $('kpi-pnl').className = 'kpi-v ' + cls(today);
+        const bd = s.daily_pnl_breakdown || {};
+        $('kpi-pnl-s').textContent = `trades ${fmt.money(bd.trades, { signed: true })} · funding ${fmt.money(bd.funding, { signed: true })} · taxas ${fmt.money(bd.commission, { signed: true })} · ${s.closed_trades_today ?? 0} fechado(s)`;
+        sparkline('kpi-pnl-spark', days.map(d => d.net).filter(isNum), sgn(today) < 0 ? p.bad : p.good);
+        const fund = s.funding_fee_total;
+        $('kpi-funding').innerHTML = esc(fmt.money(fund, { signed: true })) + brlTag(fund); $('kpi-funding').className = 'kpi-v ' + cls(fund);
+        $('kpi-funding-s').textContent = `${sgn(fund) < 0 ? 'pago' : sgn(fund) > 0 ? 'recebido' : 'líquido'} desde o 1º trade · taxas ${fmt.money(s.commission_total, { signed: true })} · hoje ${fmt.money(s.funding_fee_today, { signed: true })}`;
+        sparkline('kpi-funding-spark', days.map(d => d.cumulative).filter(isNum), p.warn);
+    }
+    // Linha de perpétuo de uma posição/perna: alavancagem, notional, margem, marca, liquidação, ROE (o que a exchange deu).
+    function futLine(p) {
+        if (!p) return '';
+        const it = [
+            isNum(p.leverage) ? `<span>alav. <b>${p.leverage}×</b></span>` : '',
+            isNum(p.notional) ? `<span>notional <b>${esc(fmt.money(p.notional))}</b></span>` : '',
+            isNum(p.margin_usd) ? `<span>margem <b>${esc(fmt.money(p.margin_usd))}</b></span>` : '',
+            isNum(p.mark_price) ? `<span>marca <b>${esc(fmt.price(p.mark_price))}</b></span>` : '',
+            isNum(p.liquidation_price) ? `<span class="liq">liquidação <b>${esc(fmt.price(p.liquidation_price))}</b>${isNum(p.mark_price) && p.mark_price > 0 ? ` <small>(${esc(fmt.pct(Math.abs(p.liquidation_price - p.mark_price) / p.mark_price * 100, 1, false))})</small>` : ''}</span>` : '',
+            isNum(p.roe_percent) ? `<span>ROE <b class="${cls(p.roe_percent)}">${esc(fmt.pct(p.roe_percent, 1))}</b></span>` : '',
+        ].filter(Boolean);
+        return it.length ? `<div class="fut">${it.join('')}</div>` : '';
+    }
+
+    const PAGES = $$('.page').map(p => p.dataset.page);
+    function showPage(name) {
+        if (!PAGES.includes(name)) name = PAGES[0];
+        $$('.page').forEach(p => { p.hidden = p.dataset.page !== name; });
+        $$('a[data-page]').forEach(a => { const on = a.dataset.page === name; a.classList.toggle('on', on); if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
+        // página só com cards recolhíveis: abre o primeiro visível pra não cair numa tela de títulos
+        const first = $$(`.page[data-page="${name}"] details.card`).find(d => !d.hidden); if (first) first.open = true;
+        Object.values(charts).forEach(c => c.resize());   // canvas em página oculta nasce com 0px
+        closeSidebar();
+    }
+    function closeSidebar() { document.body.classList.remove('nav-open'); $('sidebar-backdrop').hidden = true; $('sidebar-toggle').setAttribute('aria-expanded', 'false'); }
+    $('sidebar-toggle').addEventListener('click', () => { const open = !document.body.classList.contains('nav-open'); document.body.classList.toggle('nav-open', open); $('sidebar-backdrop').hidden = !open; $('sidebar-toggle').setAttribute('aria-expanded', String(open)); });
+    $('sidebar-backdrop').addEventListener('click', closeSidebar);
+    window.addEventListener('hashchange', () => showPage(location.hash.slice(1)));
+    showPage(location.hash.slice(1));
+
+    // Tema: grava em localStorage (o <head> aplica antes do primeiro paint). Os gráficos leem as cores ao nascer: destrói e redesenha.
+    const THEME_KEY = 'tradingbot-theme';
+    $('theme-toggle').addEventListener('click', () => {
+        const next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
+        document.documentElement.dataset.theme = next;
+        try { localStorage.setItem(THEME_KEY, next); } catch (e) { /* storage bloqueado */ }
+        Object.values(charts).forEach(c => c.destroy()); Object.keys(charts).forEach(k => { delete charts[k]; });
+        if (state.live) renderLive(state.live);
+        if (state.hist) renderHistory(state.hist);
+        if (state.pnl) renderPnl(state.pnl);
+    });
 
     // ───────── Boot ─────────
     initChips(); initTrades(); initPnl();

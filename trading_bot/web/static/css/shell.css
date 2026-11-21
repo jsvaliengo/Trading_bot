@@ -1,0 +1,86 @@
+/* Shell estilo CryptoZone: menu lateral roxo escuro fixo, topo, cards KPI com sparkline e páginas (data-page)
+   trocadas pelo menu. Só layout do contorno — os cards continuam com style.css/mobile.css.
+   Tokens próprios: --side-w (largura do menu) e --side-bg (roxo do menu, igual nos dois temas). */
+:root { --side-w:224px; --side-bg:#1f1545; --side-text:rgba(255,255,255,.72); --side-on:#8b5cf6; }
+:root[data-theme="light"] { --accent:#6d4ed6; --accent-soft:rgba(109,78,214,.14); }
+
+.shell { display:flex; min-height:100vh; }
+.main { flex:1; min-width:0; display:flex; flex-direction:column; }
+
+/* Menu lateral */
+.sidebar { position:sticky; top:0; align-self:flex-start; height:100vh; width:var(--side-w); flex:none; display:flex; flex-direction:column; gap:8px;
+    padding:14px 12px calc(14px + env(safe-area-inset-bottom,0px)); background:var(--side-bg); color:var(--side-text); z-index:40; }
+.brand { display:flex; align-items:center; gap:10px; padding:6px 8px 14px; color:#fff; text-decoration:none; font-weight:600; letter-spacing:-.01em; }
+.brand-mark { width:34px; height:34px; border-radius:10px; display:grid; place-items:center; background:linear-gradient(135deg,#8b5cf6,#5b3dc9); color:#fff; font-size:12px; font-weight:700; flex:none; }
+.nav { display:flex; flex-direction:column; gap:2px; }
+.nav a { display:flex; align-items:center; gap:12px; padding:10px 12px; border-radius:10px; color:inherit; text-decoration:none; font-size:13.5px; font-weight:500; min-height:44px; }
+.nav a svg { width:20px; height:20px; fill:currentColor; flex:none; }
+.nav a:hover { background:rgba(255,255,255,.06); color:#fff; }
+.nav a.on { background:var(--side-on); color:#fff; box-shadow:0 6px 16px rgba(139,92,246,.35); }
+.nav-sep { font-size:10.5px; text-transform:uppercase; letter-spacing:.08em; color:rgba(255,255,255,.4); padding:14px 12px 4px; }
+.nav a.soon { opacity:.5; cursor:default; } .nav a.soon:hover { background:none; color:inherit; }
+.nav a small { margin-left:auto; font-size:10px; padding:1px 6px; border-radius:999px; border:1px solid rgba(255,255,255,.25); }
+.profile { display:flex; align-items:center; gap:8px; }
+.avatar { width:32px; height:32px; border-radius:50%; display:grid; place-items:center; background:linear-gradient(135deg,#8b5cf6,#5b3dc9); color:#fff; font-weight:700; font-size:13px; }
+.profile-name { display:flex; flex-direction:column; line-height:1.15; font-size:12.5px; font-weight:500; }
+.profile-name small { font-size:10.5px; color:var(--text-muted); font-weight:400; }
+.sidebar-foot { margin-top:auto; padding:8px; display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.sidebar-foot .btn { background:transparent; color:var(--side-text); border-color:rgba(255,255,255,.2); }
+.sidebar-foot .env { color:var(--side-text); border-color:rgba(255,255,255,.2); }
+.sidebar-foot .env-mainnet { color:#ff8a87; border-color:#ff8a87; }
+.sidebar-backdrop { position:fixed; inset:0; background:rgba(0,0,0,.5); z-index:39; }
+.burger { display:none; width:40px; height:40px; border:0; border-radius:8px; background:transparent; font-size:20px; cursor:pointer; color:var(--text-dim); }
+.burger:hover { background:var(--bg-elevated); color:var(--text); }
+
+/* Topo: botão de tema + Sair à direita do relógio */
+.icon-btn { width:34px; height:34px; border-radius:8px; border:1px solid var(--border-strong); background:transparent; color:var(--text-dim); font-size:16px; cursor:pointer; }
+.icon-btn:hover { color:var(--text); border-color:var(--accent); }
+.user-menu { margin:0; }
+
+/* KPIs: 3 cards (valor grande, rótulo, sparkline embaixo) */
+.kpis { display:grid; grid-template-columns:repeat(5, minmax(0,1fr)); gap:14px; }
+.kpi { position:relative; overflow:hidden; background:var(--glass); border:1px solid var(--glass-border); border-radius:20px; min-height:150px; display:flex; flex-direction:column; backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px); }
+.kpi-h { padding:16px 18px 0; display:flex; flex-direction:column; gap:2px; min-width:0; }
+.kpi-v { font-family:'IBM Plex Mono',ui-monospace,monospace; font-variant-numeric:tabular-nums; font-size:26px; font-weight:600; letter-spacing:-.02em; line-height:1.15; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.kpi-v.pos { color:var(--good); } .kpi-v.neg { color:var(--bad); }
+.kpi-v .brl { display:inline; margin-left:8px; }
+.kpi-l { font-size:12.5px; color:var(--text-dim); font-weight:500; }
+.kpi-s { font-size:11.5px; color:var(--text-muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.kpi-cv { position:relative; flex:1; min-height:56px; margin-top:8px; }
+.kpi-cv canvas { position:absolute; inset:0; width:100% !important; height:100% !important; }
+.kpi-bar { margin:auto 18px 18px; height:8px; border-radius:4px; background:var(--bg-elevated); overflow:hidden; }
+.kpi-bar i { display:block; height:100%; width:0; border-radius:4px; background:linear-gradient(90deg,#8b5cf6,#5b3dc9); transition:width .3s ease; }
+.kpi-bar.hot i { background:var(--bad); }
+.kpi-legs { margin:auto 18px 14px; display:flex; flex-wrap:wrap; gap:4px 10px; font-size:11.5px; color:var(--text-dim); font-family:'IBM Plex Mono',ui-monospace,monospace; }
+.kpi-legs span.pos { color:var(--good); } .kpi-legs span.neg { color:var(--bad); }
+/* linha de perpétuo embaixo de cada posição: alavancagem, notional, margem, marca, liquidação, ROE */
+.fut { display:flex; flex-wrap:wrap; gap:4px 14px; font-size:11.5px; color:var(--text-muted); margin-top:4px; }
+.fut b { color:var(--text-dim); font-weight:500; font-family:'IBM Plex Mono',ui-monospace,monospace; }
+.fut .liq b { color:var(--bad); }
+
+/* Páginas: uma visível por vez (showPage no main.js) */
+.page { display:flex; flex-direction:column; gap:14px; }
+.tabbar a.on { color:var(--accent); }
+
+/* Tablet/celular: menu vira off-canvas */
+@media (max-width: 1100px) {
+    .sidebar { position:fixed; left:0; top:0; transform:translateX(-100%); transition:transform .18s ease; box-shadow:0 0 40px rgba(0,0,0,.4); }
+    body.nav-open .sidebar { transform:none; }
+    .burger { display:inline-grid; place-items:center; }
+    .kpis { grid-template-columns:repeat(3, minmax(0,1fr)); gap:10px; }
+}
+@media (max-width: 1400px) and (min-width: 1101px) { .kpis { grid-template-columns:repeat(3, minmax(0,1fr)); } }
+@media (max-width: 760px) {
+    .kpis { grid-template-columns:repeat(2, minmax(0,1fr)); }
+    .kpi { min-height:120px; }
+    .kpi-h { padding:12px 14px 0; } .kpi-bar, .kpi-legs { margin-left:14px; margin-right:14px; }
+    .kpi-v { font-size:22px; }
+    .top .user-menu, .top .profile-name { display:none; } /* no celular sobra o avatar; o Sair fica no rodapé do menu lateral */
+    .page { gap:10px; }
+}
+@media (max-width: 600px) {
+    .hero { display:none; } /* os KPIs já trazem equity e P&L do dia logo abaixo do topo */
+    .burger { order:0; }
+    .top-id { order:1; }
+    .clock, .icon-btn { order:1; }
+}

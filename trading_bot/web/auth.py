@@ -15,7 +15,7 @@ import secrets
 import time
 from collections import defaultdict, deque
 from functools import wraps
-from typing import Callable
+from typing import Callable, Optional
 from urllib.parse import quote
 
 from flask import Response, current_app, jsonify, redirect, request, session
@@ -40,13 +40,38 @@ def _credentials_match(username: str, password: str) -> bool:
     return user_ok and pass_ok
 
 
+def authenticate(username: str, password: str) -> Optional[dict]:
+    """Usuário autenticado ou None. Tabela `users` (hash) primeiro; se o nome não existe lá,
+    compara com DASHBOARD_USERNAME/PASSWORD do .env (compatibilidade; vira o usuário 1 no seed)."""
+    store = current_app.config.get("PLATFORM")
+    if store is not None:
+        user = store.verify_login(username, password)
+        if user is not None:
+            return user
+        if store.user_by_name(username) is not None:
+            return None   # existe na tabela e a senha não bateu: o .env não é segunda chance
+    if _credentials_match(username, password):
+        return {"id": 1, "username": username, "display_name": username}
+    return None
+
+
 def has_session() -> bool:
     return bool(session.get(SESSION_KEY))
 
 
+def current_user() -> dict:
+    """{id, username, display_name} da sessão ou do Basic Auth já validado."""
+    if session.get(SESSION_KEY):
+        return {"id": int(session.get("user_id") or 1), "username": str(session.get("username") or ""),
+                "display_name": str(session.get("display_name") or session.get("username") or "")}
+    auth = request.authorization
+    user = authenticate(auth.username, auth.password) if auth and auth.username and auth.password else None
+    return user or {"id": 0, "username": "", "display_name": ""}
+
+
 def _basic_ok() -> bool:
     auth = request.authorization
-    return bool(auth and auth.username and auth.password and _credentials_match(auth.username, auth.password))
+    return bool(auth and auth.username and auth.password and authenticate(auth.username, auth.password))
 
 
 def _unauthorized_api() -> Response:
