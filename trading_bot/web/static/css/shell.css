@@ -59,7 +59,16 @@
 .fut .liq b { color:var(--bad); }
 
 /* Páginas: uma visível por vez (showPage no main.js) */
-.page { display:flex; flex-direction:column; gap:14px; }
+.page { display:flex; flex-direction:column; gap:14px; min-width:0; } /* min-width:0: tabela larga rola dentro do card, não alarga a página */
+/* Linhas de dois cards: mesma altura quando os dois estão abertos (o gráfico de equity estica pra preencher);
+   com um recolhido, volta a alinhar pelo topo pra não sobrar um cartão alto e vazio. */
+.two { align-items:stretch; }
+.two:has(> details.card:not([open])) { align-items:start; }
+.two > details.card[open] { display:flex; flex-direction:column; }
+/* Chrome embrulha o conteúdo do <details> em ::details-content: é ele que vira a coluna flex */
+.two > details.card[open]::details-content { display:flex; flex-direction:column; flex:1; }
+.two > details.card[open] > .cv-eq { flex:1; min-height:220px; }
+.two .kv th, .two .kv td { white-space:normal; } /* tabela chave→valor quebra linha em vez de vazar do card */
 .tabbar a.on { color:var(--accent); }
 
 /* Tablet/celular: menu vira off-canvas */

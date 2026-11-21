@@ -392,13 +392,15 @@
     }
 
     // ───────── Escada martingale ─────────
-    function renderMartingale(m, s, positions) {
+    function renderMartingale(m, s, positions, sheet) {
         $('ft-card').hidden = $('pos-card').hidden = $('tile-equity').hidden = $('eqperf-row').hidden = $('rdist-row').hidden = !!m; $('ring-card').hidden = $('legs-card').hidden = !m;
-        $('trades-card').hidden = !!m; $('sheet-card').hidden = !m;
+        $('trades-card').hidden = !!m;
+        // a planilha é estática: renderiza sempre, com a faixa da equity atual (o runner só acrescenta score/pares ativos)
+        $('sheet-card').hidden = !sheet; renderSheet(sheet, Object.keys((m && m.pairs) || {}));
+        pageEmpties();
         if (!m) return;
         const rc = $('ring-card'), st = $('status'); if (st.parentElement !== rc) rc.appendChild(st);   // tiles viram o grid de métricas do anel
         renderRing(m, s);
-        renderSheet(m.sheet, Object.keys(m.pairs || {}));
         const away = (px, pct) => isNum(px) ? `<b>${fmt.price(px)}</b>${isNum(pct) ? ` <small>(${fmt.pct(pct)})</small>` : ''}` : '<b>—</b>';
         // Barra de saída: stop ─ degrau N+1 ─ empate ─ alvo, ponteiro no preço atual (anda a cada poll);
         // vermelho do stop ao empate, verde do empate ao alvo; rótulo = preço + P&L da perna naquele preço.
@@ -887,7 +889,7 @@
         renderForwardTest(ft);
         renderPerf(ft);
         renderPositions(pos);
-        renderMartingale(l.martingale, s, pos);
+        renderMartingale(l.martingale, s, pos, l.sheet);
         renderEngine(e, pos);
         renderHealth(h, s);
         renderRHist(ft.r_histogram);
@@ -1116,9 +1118,12 @@
         $$('a[data-page]').forEach(a => { const on = a.dataset.page === name; a.classList.toggle('on', on); if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
         // página só com cards recolhíveis: abre o primeiro visível pra não cair numa tela de títulos
         const first = $$(`.page[data-page="${name}"] details.card`).find(d => !d.hidden); if (first) first.open = true;
+        pageEmpties();
         Object.values(charts).forEach(c => c.resize());   // canvas em página oculta nasce com 0px
         closeSidebar();
     }
+    // página sem nenhum card visível (ex.: fora do martingale) mostra um aviso em vez de ficar em branco
+    function pageEmpties() { $$('.page').forEach(p => { const e = p.querySelector('.page-empty'); if (e) e.hidden = Array.from(p.children).some(c => c !== e && !c.hidden); }); }
     function closeSidebar() { document.body.classList.remove('nav-open'); $('sidebar-backdrop').hidden = true; $('sidebar-toggle').setAttribute('aria-expanded', 'false'); }
     $('sidebar-toggle').addEventListener('click', () => { const open = !document.body.classList.contains('nav-open'); document.body.classList.toggle('nav-open', open); $('sidebar-backdrop').hidden = !open; $('sidebar-toggle').setAttribute('aria-expanded', String(open)); });
     $('sidebar-backdrop').addEventListener('click', closeSidebar);

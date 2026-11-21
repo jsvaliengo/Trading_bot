@@ -430,6 +430,24 @@ def test_shell_sidebar_kpis_and_pages():
     assert "function futLine(" in js and js.count("${futLine(") == 2   # posições e pernas do martingale
 
 
+def test_live_always_carries_sheet_and_js_renders_it_without_runner():
+    """Planilha CoinTech2u é estática: /api/live traz `sheet` (faixa da equity atual) mesmo sem runner
+    do martingale, e o main.js renderiza o card sempre (o runner só acrescenta score e pares ativos)."""
+    from trading_bot.web.app import create_app
+    app, _ = create_app(_make_bot(last_known_balance=320.0))
+    client = app.test_client()
+    _login(client)
+    live = client.get("/api/live").get_json()
+    assert live["martingale"] is None
+    sheet = live["sheet"]
+    assert sheet["rows"] and sheet["current"] == 1 and sheet["rows"][1][1] == 300   # $320 → faixa 300
+    assert sheet["scores"] == {} and sheet["green"] and sheet["red"]
+    html = client.get("/").data.decode()
+    assert html.count('class="empty page-empty"') == 4
+    js = open("trading_bot/web/static/js/main.js", encoding="utf-8").read()
+    assert "$('sheet-card').hidden = !sheet; renderSheet(sheet" in js and "function pageEmpties(" in js
+
+
 def test_collect_positions_exposes_perp_fields_from_exchange():
     """Perpétuo: alavancagem, notional (qty × marca), margem, liquidação e ROE (P&L / margem) vêm da
     exchange; sem exchange ficam None (nunca inventa)."""

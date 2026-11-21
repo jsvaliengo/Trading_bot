@@ -59,11 +59,15 @@ def collect_live(bot) -> Dict[str, Any]:
             _safe_float(p.get("quantity")) * _safe_float(p.get("mark_price") or p.get("entry_price"))
             for p in positions
         )
+    martingale = collect_martingale(bot, positions, summary)
     return {
         "summary": summary,
         "positions": positions,
         "forward_test": collect_forward_test(bot, summary),
-        "martingale": collect_martingale(bot, positions, summary),
+        "martingale": martingale,
+        # planilha sempre presente (a página Planilha não depende do runner)
+        "sheet": martingale["sheet"] if martingale else collect_sheet(
+            bot, _safe_float(summary.get("last_balance")) or None, set(), with_scores=False),
         "engine": engine,
         "health": collect_health(bot, summary),
         "server_time": datetime.utcnow().isoformat() + "Z",
@@ -142,19 +146,25 @@ def collect_martingale(bot, positions: List[Dict[str, Any]], summary: Dict[str, 
         out = runner.ladder(positions, equity)
     except Exception:
         return None
-    scores = _pair_scores(bot)
+    out["sheet"] = collect_sheet(bot, equity, set(out.get("pairs") or {}), with_scores=True)
+    return out
+
+
+def collect_sheet(bot, equity: Optional[float], active: set, with_scores: bool) -> Dict[str, Any]:
+    """Planilha CoinTech2u (estática) com a faixa da equity atual, moedas verdes/vermelhas, score e
+    ranking. Renderiza sempre, com ou sem runner do martingale; o score só é consultado com runner
+    (sem ele não vale subir a thread de score)."""
+    scores = _pair_scores(bot) if with_scores else {"scores": {}, "updated_at": None}
     full = {c + "USDT": scores["scores"].get(c + "USDT", {"color": "unknown"}) for c in COINTECH2U_GREEN + COINTECH2U_RED}
-    active = set(out.get("pairs") or {})
     ranking = [{"symbol": sym, "rank": i + 1, "color": full[sym]["color"], "score": rank_score(full[sym]),
                 "active": sym in active, "sheet_red": sym.replace("USDT", "") in COINTECH2U_RED}
                for i, sym in enumerate(rank_pairs(full))]
     cur = sheet_row_index(equity)
     nxt = COINTECH2U_SHEET[0 if cur is None else cur + 1] if cur is None or cur + 1 < len(COINTECH2U_SHEET) else None
-    out["sheet"] = {"rows": COINTECH2U_SHEET, "current": cur,
-                    "green": COINTECH2U_GREEN, "red": COINTECH2U_RED,
-                    "scores": scores["scores"], "scores_updated_at": scores["updated_at"], "ranking": ranking,
-                    "projection": _martingale_projection(bot, equity, nxt[1] if nxt else None)}
-    return out
+    return {"rows": COINTECH2U_SHEET, "current": cur,
+            "green": COINTECH2U_GREEN, "red": COINTECH2U_RED,
+            "scores": scores["scores"], "scores_updated_at": scores["updated_at"], "ranking": ranking,
+            "projection": _martingale_projection(bot, equity, nxt[1] if nxt else None)}
 
 
 def _martingale_projection(bot, balance: Optional[float], next_bank: Optional[float]) -> Optional[Dict[str, Any]]:
