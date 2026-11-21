@@ -1145,6 +1145,7 @@
         pageEmpties();
         Object.values(charts).forEach(c => c.resize());   // canvas em página oculta nasce com 0px
         closeSidebar();
+        if (typeof marketVisible === 'function') marketVisible(name === 'market');
         if (el && !el.hidden) el.scrollIntoView({ block: 'start' });
     }
     // página sem nenhum card visível (ex.: fora do martingale) mostra um aviso em vez de ficar em branco
@@ -1169,6 +1170,64 @@
     { let key = null; try { key = localStorage.getItem(GROUP_KEY); } catch (e) { /* storage bloqueado */ }
       const active = document.querySelector('.nav-group.has-on'); openGroup(key !== null ? key : (active ? active.dataset.group : 'trading')); }
 
+    // ───────── Mercado › BTC (API pública da Bitget via /api/market/btc) ─────────
+    // Velas em lightweight-charts (Chart.js não tem candlestick); funding e long/short em Chart.js. Só busca com a página visível.
+    const mk = { tf: '1h', chart: null, series: null, timer: null, data: null };
+    const big = (v) => !isNum(v) ? '—' : v >= 1e9 ? (v / 1e9).toFixed(2).replace('.', ',') + ' bi' : v >= 1e6 ? (v / 1e6).toFixed(1).replace('.', ',') + ' mi' : fmt.num(v, 0);
+    function mkChart() {
+        if (mk.chart || typeof LightweightCharts === 'undefined') return;
+        const p = palette();
+        mk.chart = LightweightCharts.createChart($('mk-chart'), { layout: { background: { color: 'transparent' }, textColor: p.mut, fontFamily: 'IBM Plex Mono' },
+            grid: { vertLines: { color: p.grid }, horzLines: { color: p.grid } }, rightPriceScale: { borderColor: p.grid }, timeScale: { borderColor: p.grid, timeVisible: true, secondsVisible: false },
+            crosshair: { mode: 0 }, autoSize: true, localization: { locale: 'pt-BR' } });
+        mk.series = mk.chart.addCandlestickSeries({ upColor: p.good, downColor: p.bad, borderUpColor: p.good, borderDownColor: p.bad, wickUpColor: p.good, wickDownColor: p.bad });
+    }
+    function renderMarket(d) {
+        mk.data = d; const t = d.ticker || {}, f = d.funding || {}, ls = d.long_short, p = palette();
+        $('mk-error').hidden = true;
+        $('mk-last').textContent = fmt.price(t.last); $('mk-last').className = 'kpi-v ' + cls(t.change_24h_pct);
+        $('mk-last-s').textContent = `${fmt.pct(t.change_24h_pct)} em 24h · vol ${big(t.volume_usdt_24h)} USDT`;
+        $('mk-range').innerHTML = `<span class="neg">mín ${esc(fmt.price(t.low_24h))}</span><span class="pos">máx ${esc(fmt.price(t.high_24h))}</span>`;
+        $('mk-mark').textContent = fmt.price(t.mark);
+        $('mk-mark-s').textContent = `índice ${fmt.price(t.index)} · prêmio ${fmt.pct(t.basis_pct, 3)}`;
+        $('mk-funding').textContent = fmt.pct(f.rate_pct, 4); $('mk-funding').className = 'kpi-v ' + cls(f.rate_pct);
+        const left = f.next_at ? (new Date(f.next_at).getTime() - Date.now()) / 1000 : null;
+        $('mk-funding-s').textContent = `${sgn(f.rate_pct) > 0 ? 'long paga short' : sgn(f.rate_pct) < 0 ? 'short paga long' : 'neutro'} · próximo em ${isNum(left) && left > 0 ? fmt.clock(left) : '—'} (a cada ${f.interval_hours || 8}h)`;
+        const fb = $('mk-funding-bar'); fb.firstElementChild.style.width = `${Math.min(100, Math.abs(f.rate_pct || 0) / 0.1 * 100)}%`; fb.className = 'kpi-bar ' + (sgn(f.rate_pct) < 0 ? 'fund-neg' : 'fund-pos');
+        $('mk-oi').textContent = isNum(t.open_interest_btc) ? `${fmt.num(t.open_interest_btc, 0)} BTC` : '—';
+        $('mk-oi-s').textContent = isNum(t.open_interest_usdt) ? `≈ ${big(t.open_interest_usdt)} USDT em aberto` : 'sem dado';
+        if (ls) {
+            $('mk-ls').textContent = `${fmt.pct(ls.accounts_long_pct, 1, false)} long`;
+            $('mk-ls-s').textContent = `razão ${fmt.num(ls.accounts_ratio, 2)} · posições ${fmt.pct(ls.positions_long_pct, 1, false)} long (razão ${fmt.num(ls.positions_ratio, 2)})`;
+            $('mk-ls-bar').firstElementChild.style.width = `${ls.accounts_long_pct || 0}%`;
+        } else { $('mk-ls').textContent = '—'; $('mk-ls-s').textContent = 'sem dado'; }
+        $('mk-sub').textContent = `Bitget USDT-M · ${d.interval} · ${(d.candles || []).length} velas · atualizado ${fmt.time(d.fetched_at)}`;
+        mkChart(); if (mk.series) mk.series.setData((d.candles || []).map(c => ({ time: c.t, open: c.o, high: c.h, low: c.l, close: c.c })));
+        const fh = f.history || [], fl = fh.map(h => fmt.dateTime(h.t)), fd = fh.map(h => h.rate_pct);
+        $('mk-funding-sub').textContent = fh.length ? `${fh.length} liquidações · média ${fmt.pct(sum(fd) / fd.length, 4)}` : 'sem dado';
+        const tt = baseTooltip(p);
+        if (charts.mkFund) { charts.mkFund.data.labels = fl; charts.mkFund.data.datasets[0].data = fd; charts.mkFund.data.datasets[0].backgroundColor = fd.map(v => v < 0 ? p.bad : p.good); charts.mkFund.update('none'); }
+        else if ($('mk-funding-chart') && typeof Chart !== 'undefined') charts.mkFund = new Chart($('mk-funding-chart'), { type: 'bar', data: { labels: fl, datasets: [{ data: fd, backgroundColor: fd.map(v => v < 0 ? p.bad : p.good), borderRadius: 2, maxBarThickness: 14 }] },
+            options: { responsive: true, maintainAspectRatio: false, animation: false, plugins: { legend: { display: false }, tooltip: { ...tt, callbacks: { label: (it) => fmt.pct(it.parsed.y, 4) } } },
+                scales: { x: { ticks: { color: p.mut, font: tickFont, maxTicksLimit: 6 }, grid: { display: false } }, y: { ticks: { color: p.mut, font: tickFont, maxTicksLimit: 5, callback: v => fmt.pct(v, 3) }, grid: { color: p.grid } } } } });
+        const lh = (ls && ls.history) || [], ll = lh.map(h => fmt.dateTime(h.t)), ld = lh.map(h => h.accounts_long_pct);
+        $('mk-ls-sub').textContent = lh.length ? `últimas ${lh.length} h · agora ${fmt.pct(ld[ld.length - 1], 1, false)} das contas long` : 'sem dado';
+        if (charts.mkLs) { charts.mkLs.data.labels = ll; charts.mkLs.data.datasets[0].data = ld; charts.mkLs.update('none'); }
+        else if ($('mk-ls-chart') && typeof Chart !== 'undefined') charts.mkLs = new Chart($('mk-ls-chart'), { type: 'line', data: { labels: ll, datasets: [{ data: ld, borderColor: p.ac, backgroundColor: hexa(p.ac, 0.12), fill: true, borderWidth: 2, pointRadius: 0, tension: 0.3 }] },
+            options: { responsive: true, maintainAspectRatio: false, animation: false, plugins: { legend: { display: false }, tooltip: { ...tt, callbacks: { label: (it) => `${fmt.pct(it.parsed.y, 1, false)} long` } } },
+                scales: { x: { ticks: { color: p.mut, font: tickFont, maxTicksLimit: 6 }, grid: { display: false } }, y: { ticks: { color: p.mut, font: tickFont, maxTicksLimit: 5, callback: v => fmt.pct(v, 0, false) }, grid: { color: p.grid } } } } });
+    }
+    async function fetchMarket() {
+        try {
+            const r = await fetch(`/api/market/btc?interval=${mk.tf}`, { credentials: 'include' });
+            const d = await r.json(); if (!r.ok || d.ok === false) throw new Error(d.error || ('HTTP ' + r.status));
+            renderMarket(d);
+        } catch (err) { console.warn('mercado BTC falhou', err); const e = $('mk-error'); e.textContent = 'Bitget não respondeu: ' + err.message; e.hidden = false; }
+    }
+    function marketVisible(on) { clearInterval(mk.timer); mk.timer = null; if (on) { fetchMarket(); mk.timer = setInterval(fetchMarket, 15000); } }
+    $$('#mk-tf .chip').forEach(b => b.addEventListener('click', () => { mk.tf = b.dataset.tf; fetchMarket(); }));
+    if (!$$('.page').find(p => p.dataset.page === 'market').hidden) marketVisible(true);   // boot já em #market
+
     // Tema: grava em localStorage (o <head> aplica antes do primeiro paint). Os gráficos leem as cores ao nascer: destrói e redesenha.
     const THEME_KEY = 'tradingbot-theme';
     $('theme-toggle').addEventListener('click', () => {
@@ -1176,6 +1235,7 @@
         document.documentElement.dataset.theme = next;
         try { localStorage.setItem(THEME_KEY, next); } catch (e) { /* storage bloqueado */ }
         Object.values(charts).forEach(c => c.destroy()); Object.keys(charts).forEach(k => { delete charts[k]; });
+        if (mk.chart) { mk.chart.remove(); mk.chart = mk.series = null; if (mk.data) renderMarket(mk.data); }
         if (state.live) renderLive(state.live);
         if (state.hist) renderHistory(state.hist);
         if (state.pnl) renderPnl(state.pnl);
