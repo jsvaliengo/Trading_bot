@@ -971,7 +971,7 @@
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !modal.hidden) closeModal(); });
 
     // Gráfico 1m do par (Lightweight Charts) como no app da Bitget: velas + volume + EMAs 5/10/20/50,
-    // linha da média de cada perna (qtd · P&L) e etiquetas no eixo pra alvo/degrau/empate/stop (cores da régua).
+    // linha da média de cada perna (qtd · P&L) e etiquetas no eixo pra alvo/degrau/stop (cores da régua).
     // Velas via /api/klines (exchange do bot) a cada 5s; as linhas acompanham o snapshot (chartSync em applyLive).
     const chart = $('chart-modal');
     const EMAS = [5, 10, 20, 50], EMA_COLORS = ['#f6c343', '#f28b3c', '#c86bf2', '#3987e5'];
@@ -1009,7 +1009,7 @@
         g.loaded = true;
         if (firstView) g.api.timeScale().setVisibleLogicalRange({ from: candles.length - 90, to: candles.length + 6 });
     }
-    // Linhas das pernas do par: média (qtd · P&L), alvo, degrau seguinte, empate e stop (cores da régua).
+    // Linhas das pernas do par: média (qtd · P&L), alvo, degrau seguinte e stop (cores da régua); o empate fica só na régua.
     function chartLevels(g, sym) {
         if (!g || !g.loaded) return;
         g.lines.forEach(l => g.candles.removePriceLine(l)); g.lines = []; g.scale = [];
@@ -1026,7 +1026,6 @@
             add(l.avg_price, long ? cssv('--good') : cssv('--bad'), `${long ? '' : '−'}${fmt.price(l.quantity)}${pnl}`, LS.Solid, 2);
             add(l.tp_price, cssv('--good'), `Alvo ${l.side}`, LS.Dashed);
             add(l.next_add_price, cssv('--warn'), `Degrau ${l.level + 1} ${l.side}`, LS.Dashed);
-            add(l.breakeven_price, cssv('--text-muted'), `Empate ${l.side}`, LS.Dotted);
             add(l.stop_price, cssv('--bad'), `Stop ${l.side}`, LS.LargeDashed, 1, true);   // stop pode estar longe: não estica a escala
         }
         g.candles.applyOptions({ autoscaleInfoProvider: g.candles.options().autoscaleInfoProvider });   // reavalia a escala com os níveis novos
