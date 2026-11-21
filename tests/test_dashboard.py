@@ -214,7 +214,121 @@ def test_index_shows_logged_user_and_platform_placeholders():
     html = client.get("/").data.decode()
     assert 'id="profile"' in html and ">admin<" in html and "1 conta(s)" in html
     nav = html.split('<nav class="nav" id="nav">')[1].split("</nav>")[0]
-    assert "Contas" in nav and "Usuários" in nav and nav.count('aria-disabled="true"') == 3   # + Histórico de fills (PR 3)
+    assert "Contas" in nav and "Usuários" in nav and nav.count('aria-disabled="true"') == 2
+
+
+# ---------- Relatórios › Histórico de fills (endpoint privado da conta, com cache) ----------
+
+_FILLS = [
+    {"time": 1795255260000, "symbol": "ADAUSDT", "side": "buy", "action": "open", "position_side": "LONG", "price": 0.1428,
+     "qty": 130.0, "notional": 18.564, "fee": -0.0111, "fee_coin": "USDT", "profit": 0.0, "role": "taker", "order_id": "o1", "trade_id": "t1"},
+    {"time": 1795258860000, "symbol": "ADAUSDT", "side": "sell", "action": "close", "position_side": "LONG", "price": 0.1442,
+     "qty": 130.0, "notional": 18.746, "fee": -0.0112, "fee_coin": "USDT", "profit": 0.182, "role": "taker", "order_id": "o2", "trade_id": "t2"},
+    {"time": 1795262400000, "symbol": "BNBUSDT", "side": "sell", "action": "open", "position_side": "SHORT", "price": 612.0,
+     "qty": 0.02, "notional": 12.24, "fee": -0.0073, "fee_coin": "USDT", "profit": 0.0, "role": "maker", "order_id": "o3", "trade_id": "t3"},
+]
+
+
+def _bot_with_fills(tmp_path, fills=None):
+    from trading_bot.core.trade_store import TradeStore
+    store = TradeStore(str(tmp_path / "f.db"))
+    # trade do bot aberto 20 s antes do fill de abertura e fechado 30 s depois do fill de fechamento → os dois batem
+    store.record_open({"timestamp": "2026-11-21T10:00:40+00:00", "symbol": "ADAUSDT", "signal": "BUY", "side": "LONG", "qty": 130.0,
+                       "value": 18.56, "entry_price": 0.1428, "stop_loss": None, "take_profit": None, "strategy_name": "primary",
+                       "strategy_type": "martingale_hedge", "double_first": False, "ai_consultive": {}})
+    store.record_close(symbol="ADAUSDT", side="LONG", entry_price=0.1428, exit_price=0.1442, exit_at="2026-11-21T11:01:30+00:00",
+                       pnl_gross=0.182, pnl_net=0.16, fees=0.022, close_reason="tp", strategy_name="primary")
+    bot = _make_bot()
+    bot.trade_store = store
+    calls = []
+
+    def get_fills(symbol=None, start_ms=None, end_ms=None, limit=500):
+        calls.append({"symbol": symbol, "start_ms": start_ms, "end_ms": end_ms, "limit": limit})
+        return [f for f in (fills if fills is not None else _FILLS) if not symbol or f["symbol"] == symbol]
+
+    bot.exchange = SimpleNamespace(get_fills=get_fills, get_open_positions=lambda: [])
+    return bot, calls
+
+
+@pytest.fixture(autouse=True)
+def _fills_cache_clear(monkeypatch):
+    from trading_bot.web import fills
+    monkeypatch.setattr(fills, "_cache", {})
+
+
+def test_fills_route_matches_bot_trades_filters_and_paginates(tmp_path):
+    from trading_bot.web.app import create_app
+    bot, calls = _bot_with_fills(tmp_path)
+    app, _ = create_app(bot)
+    client = app.test_client()
+    assert client.get("/api/fills").status_code == 401
+    _login(client)
+    d = client.get("/api/fills?from=2026-11-20&to=2026-11-21").get_json()
+    assert d["total"] == 3 and [f["trade_id"] for f in d["fills"]] == ["t3", "t2", "t1"]   # mais recente primeiro
+    assert d["matched"] == 2 and {f["trade_id"]: f["bot_trade_id"] for f in d["fills"]} == {"t3": None, "t2": 1, "t1": 1}
+    assert d["symbols"] == ["ADAUSDT", "BNBUSDT"] and d["fee_total"] == pytest.approx(-0.0296) and d["profit_total"] == pytest.approx(0.182)
+    assert d["from"] == "2026-11-20" and d["to"] == "2026-11-21"
+    assert calls[0]["start_ms"] == 1795132800000 and calls[0]["end_ms"] == 1795305599999 and calls[0]["symbol"] is None
+    # filtros: lado e par (o par vai pra exchange; o lado filtra aqui)
+    assert [f["trade_id"] for f in client.get("/api/fills?from=2026-11-20&to=2026-11-21&side=SHORT").get_json()["fills"]] == ["t3"]
+    assert client.get("/api/fills?from=2026-11-20&to=2026-11-21&symbol=adausdt").get_json()["total"] == 2 and calls[-1]["symbol"] == "ADAUSDT"
+    assert client.get("/api/fills?side=UP").status_code == 400 and client.get("/api/fills?page=x").status_code == 400
+    # paginação
+    p = client.get("/api/fills?from=2026-11-20&to=2026-11-21&per_page=2&page=2").get_json()
+    assert p["pages"] == 2 and p["page"] == 2 and [f["trade_id"] for f in p["fills"]] == ["t1"]
+    # cache: mesma consulta não volta na exchange
+    n = len(calls); client.get("/api/fills?from=2026-11-20&to=2026-11-21"); assert len(calls) == n
+
+
+def test_fills_csv_and_exchange_without_fills(tmp_path):
+    from trading_bot.web.app import create_app
+    bot, _ = _bot_with_fills(tmp_path)
+    app, _ = create_app(bot)
+    client = app.test_client(); _login(client)
+    r = client.get("/api/fills?from=2026-11-20&to=2026-11-21&format=csv&per_page=1")
+    assert r.status_code == 200 and r.mimetype == "text/csv" and "attachment" in r.headers["Content-Disposition"]
+    lines = r.data.decode().splitlines()
+    assert lines[0].startswith("time,symbol,position_side,action,side,price,qty") and len(lines) == 4   # CSV traz tudo, não só a página
+    assert lines[1].startswith("2026-11-21T12:00:00+00:00,BNBUSDT,SHORT,open,sell,612.0,0.02") and lines[2].endswith(",o2,t2,1")
+    bot.exchange = SimpleNamespace(get_open_positions=lambda: [])
+    assert client.get("/api/fills").status_code == 501
+
+
+def test_bitget_get_fills_paginates_and_normalizes(monkeypatch):
+    import tests.test_bitget_client as tb
+    conn = tb._make(monkeypatch)
+    pages = {None: {"fillList": [{"tradeId": "t%d" % i, "orderId": "o%d" % i, "symbol": "ADAUSDT", "price": "0.14", "baseVolume": "10",
+                                  "quoteVolume": "1.4", "side": "buy", "tradeSide": "open", "profit": "0", "tradeScope": "taker",
+                                  "feeDetail": [{"feeCoin": "USDT", "totalFee": "-0.00084"}], "cTime": str(1795255260000 - i)} for i in range(100)],
+                    "endId": "t99"},
+             "t99": {"fillList": [{"tradeId": "t100", "orderId": "o100", "symbol": "ADAUSDT", "price": "0.15", "baseVolume": "10",
+                                   "quoteVolume": "", "side": "sell", "tradeSide": "close", "profit": "0.1", "tradeScope": "maker",
+                                   "feeDetail": [{"feeCoin": "BGB", "totalFee": "-0.001"}, {"feeCoin": "USDT", "totalFee": "-0.0002"}],
+                                   "cTime": "1795255000000"}], "endId": "t100"}}
+    conn.http.routes[("GET", "/api/v2/mix/order/fills")] = lambda q, b: {"code": "00000", "data": pages[q.get("idLessThan")]}
+    out = conn.get_fills(symbol="ADAUSDT", start_ms=1, end_ms=2, limit=500)
+    assert len(out) == 101 and conn.http.calls[-2]["query"]["symbol"] == "ADAUSDT" and conn.http.calls[-1]["query"]["idLessThan"] == "t99"
+    assert conn.http.calls[-2]["query"]["startTime"] == "1" and "ACCESS-KEY" in conn.http.calls[-1]["headers"]   # privado: assinado
+    f0, f100 = out[0], out[100]
+    assert f0 == {"time": 1795255260000, "symbol": "ADAUSDT", "side": "buy", "action": "open", "position_side": "LONG", "price": 0.14,
+                  "qty": 10.0, "notional": 1.4, "fee": pytest.approx(-0.00084), "fee_coin": "USDT", "profit": 0.0, "role": "taker",
+                  "order_id": "o0", "trade_id": "t0"}
+    assert f100["action"] == "close" and f100["position_side"] == "LONG" and f100["notional"] == pytest.approx(1.5)   # sell+close = fecha LONG; sem quoteVolume → qty×preço
+    assert f100["fee"] == pytest.approx(-0.0012) and f100["fee_coin"] == "BGB" and f100["profit"] == 0.1 and f100["role"] == "maker"
+    # 2ª chamada com limite menor pára na 1ª página
+    assert len(conn.get_fills(limit=50)) == 50
+
+
+def test_fills_page_and_menu_item_are_wired(tmp_path):
+    from trading_bot.web.app import create_app
+    app, _ = create_app(_make_bot())
+    client = app.test_client(); _login(client)
+    html = client.get("/").data.decode()
+    assert '<a href="#fills" data-page="fills"><span>Histórico de fills</span></a>' in html
+    for i in ("fills-table", "fills-filters", "fl-symbol", "fl-side", "fl-from", "fl-to", "fills-csv", "fills-pager"):
+        assert f'id="{i}"' in html, i
+    js = open("trading_bot/web/static/js/main.js", encoding="utf-8").read()
+    assert "function fetchFills(" in js and "fillsVisible(name === 'fills')" in js and "format: 'csv'" in js
 
 
 # ---------- Mercado › BTC (API pública da Bitget, com cache) ----------
@@ -533,7 +647,7 @@ def test_shell_sidebar_kpis_and_pages():
     assert 'id="sidebar"' in html and 'id="sidebar-toggle"' in html and 'id="sidebar-backdrop"' in html
     assert 'id="sidebar-collapse"' in html and html.count('title="') >= 6   # recolher no desktop; tooltip nos itens
     pages = re.findall(r'<div class="page" data-page="([^"]+)"', html)
-    assert pages == ["overview", "pnl", "sheet", "market", "system"]
+    assert pages == ["overview", "pnl", "sheet", "market", "fills", "system"]
     nav = html.split('<nav class="nav" id="nav">')[1].split("</nav>")[0]
     assert set(re.findall(r'data-page="([^"]+)"', nav)) == set(pages)
     # grupos do menu (accordion) com subitens apontando para página/card existentes
@@ -571,7 +685,7 @@ def test_live_always_carries_sheet_and_js_renders_it_without_runner():
     assert sheet["rows"] and sheet["current"] == 1 and sheet["rows"][1][1] == 300   # $320 → faixa 300
     assert sheet["scores"] == {} and sheet["green"] and sheet["red"]
     html = client.get("/").data.decode()
-    assert html.count('class="empty page-empty"') == 5
+    assert html.count('class="empty page-empty"') == 6
     js = open("trading_bot/web/static/js/main.js", encoding="utf-8").read()
     assert "$('sheet-card').hidden = !sheet; renderSheet(sheet" in js and "function pageEmpties(" in js
 

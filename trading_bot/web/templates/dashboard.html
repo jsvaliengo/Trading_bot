@@ -50,7 +50,7 @@
         <div class="nav-group" data-group="reports">
             <button class="nav-item nav-toggle" type="button" aria-expanded="false" title="Relatórios"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 8h8M8 12h8M8 16h5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><span>Relatórios</span><i class="chev" aria-hidden="true"></i></button>
             <div class="nav-sub">
-            <a class="soon" aria-disabled="true" title="Histórico de fills (em breve)"><span>Histórico de fills</span><small>em breve</small></a>
+            <a href="#fills" data-page="fills"><span>Histórico de fills</span></a>
             <a href="#pnl/pnl-card" data-page="pnl" data-target="pnl-card"><span>Análise de P&amp;L</span></a>
             </div>
         </div>
@@ -492,6 +492,31 @@
                 <header class="ch"><h2 id="mk-ls-h">Contas long × short</h2><span class="cs" id="mk-ls-sub">—</span></header>
                 <div class="cv cv-pnl"><canvas id="mk-ls-chart" role="img" aria-label="Percentual de contas long por hora"></canvas></div>
             </section>
+        </section>
+    </div>
+
+    <!-- Relatórios › Histórico de fills: execuções da CONTA na exchange (fills privados), separadas dos trades do bot -->
+    <div class="page" data-page="fills" hidden>
+        <p class="empty page-empty" hidden>Sem dados do martingale para esta página neste processo.</p>
+        <section class="card" id="fills-card" aria-labelledby="fills-h">
+            <header class="ch"><div><h2 id="fills-h">Histórico de fills da conta</h2><p class="cs" id="fills-sub">execuções na exchange (abertura/fechamento por lado, fee e P&amp;L realizado) · "bot" = fill que bate com um trade do bot</p></div>
+                <a class="btn btn-quiet btn-xs" id="fills-csv" href="/api/fills?format=csv" download>Exportar CSV</a></header>
+            <form class="filters fills-filters" id="fills-filters">
+                <label>Par <select id="fl-symbol"><option value="">todos</option></select></label>
+                <label>Lado <select id="fl-side"><option value="">ambos</option><option value="LONG">LONG</option><option value="SHORT">SHORT</option></select></label>
+                <label>de <input type="date" id="fl-from"></label>
+                <label>até <input type="date" id="fl-to"></label>
+                <button class="btn btn-quiet btn-xs" type="submit">Aplicar</button>
+            </form>
+            <div class="tr-stats" id="fills-stats"></div>
+            <div class="table-scroll">
+                <table class="table" id="fills-table">
+                    <thead><tr><th scope="col">Data</th><th scope="col">Par</th><th scope="col">Lado</th><th scope="col">Ação</th><th scope="col" class="r">Preço</th><th scope="col" class="r">Qtd</th><th scope="col" class="r">Notional</th><th scope="col" class="r">Fee</th><th scope="col" class="r">P&amp;L realizado</th><th scope="col">Papel</th><th scope="col">Trade do bot</th></tr></thead>
+                    <tbody><tr><td colspan="11" class="empty">Carregando…</td></tr></tbody>
+                </table>
+            </div>
+            <div class="pager" id="fills-pager" hidden><button class="btn btn-quiet btn-xs" id="fills-prev">‹ Anterior</button><span class="pg-info" id="fills-page">—</span><button class="btn btn-quiet btn-xs" id="fills-next">Próxima ›</button></div>
+            <p class="empty" id="fills-error" hidden></p>
         </section>
     </div>
 
