@@ -1134,7 +1134,8 @@
         const name = PAGES.includes(raw) ? raw : PAGES[0];
         $$('.page').forEach(p => { p.hidden = p.dataset.page !== name; });
         $$('a[data-page]').forEach(a => {
-            const on = a.dataset.page === name && (!a.dataset.target || a.dataset.target === target || (!target && !a.closest('.nav-sub')));
+            // no menu lateral o item ativo é o que casa página E card (Dashboard só sem card); na tabbar basta a página
+            const on = a.dataset.page === name && (!a.closest('.nav') || (a.dataset.target || '') === (target || ''));
             a.classList.toggle('on', on); if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
         });
         $$('.nav-group').forEach(g => g.classList.toggle('has-on', !!g.querySelector('a.on')));
