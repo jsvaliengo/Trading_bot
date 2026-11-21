@@ -81,9 +81,9 @@ def match_bot_trades(fills: List[Dict[str, Any]], trades: List[Dict[str, Any]]) 
             f["bot_trade_id"] = best[1]
 
 
-def collect_fills(bot, account_id: int, args: Dict[str, Any]) -> Dict[str, Any]:
-    """Payload de /api/fills: fills filtrados e paginados (mais recente primeiro) + totais.
-    args: symbol, side (LONG/SHORT), from/to (YYYY-MM-DD, dia UTC), page, per_page."""
+def collect_fills(bot, account_id: int, args: Dict[str, Any]) -> tuple:
+    """(payload de /api/fills, lista completa filtrada): fills paginados (mais recente primeiro) + totais;
+    a lista completa alimenta o CSV. args: symbol, side (LONG/SHORT), from/to (YYYY-MM-DD, dia UTC), page, per_page."""
     exchange = getattr(bot, "exchange", None)
     if exchange is None or not hasattr(exchange, "get_fills"):
         raise LookupError("a exchange desta conta não expõe fills")
@@ -125,8 +125,7 @@ def collect_fills(bot, account_id: int, args: Dict[str, Any]) -> Dict[str, Any]:
         "profit_total": round(sum(f["profit"] for f in fills), 6),
         "symbols": symbols,
         "from": day_from.strftime("%Y-%m-%d"), "to": day_to.strftime("%Y-%m-%d"),
-        "all": fills,   # o CSV usa; a rota remove antes do JSON
-    }
+    }, fills
 
 
 def fills_csv(fills: List[Dict[str, Any]]) -> str:

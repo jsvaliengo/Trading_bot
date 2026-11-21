@@ -243,7 +243,7 @@ def _register_routes(app: Flask, socketio: SocketIO) -> None:
         bot = account_bot()
         try:
             account_id = int(request.args.get("account") or 0) or next(iter(app.config["BOTS"]))
-            data = collect_fills(bot, account_id, request.args)
+            data, everything = collect_fills(bot, account_id, request.args)
         except ValueError as exc:
             return jsonify({"ok": False, "error": str(exc)}), 400
         except LookupError as exc:
@@ -251,7 +251,6 @@ def _register_routes(app: Flask, socketio: SocketIO) -> None:
         except Exception as exc:
             logger.warning(f"Fills indisponíveis: {exc}")
             return jsonify({"ok": False, "error": "a exchange não respondeu"}), 502
-        everything = data.pop("all")
         if request.args.get("format") == "csv":
             body = fills_csv(everything)
             return Response(body, mimetype="text/csv",

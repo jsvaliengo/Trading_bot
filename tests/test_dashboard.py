@@ -267,7 +267,7 @@ def test_fills_route_matches_bot_trades_filters_and_paginates(tmp_path):
     assert d["total"] == 3 and [f["trade_id"] for f in d["fills"]] == ["t3", "t2", "t1"]   # mais recente primeiro
     assert d["matched"] == 2 and {f["trade_id"]: f["bot_trade_id"] for f in d["fills"]} == {"t3": None, "t2": 1, "t1": 1}
     assert d["symbols"] == ["ADAUSDT", "BNBUSDT"] and d["fee_total"] == pytest.approx(-0.0296) and d["profit_total"] == pytest.approx(0.182)
-    assert "all" not in d and d["from"] == "2026-11-20" and d["to"] == "2026-11-21"
+    assert d["from"] == "2026-11-20" and d["to"] == "2026-11-21"
     assert calls[0]["start_ms"] == 1795132800000 and calls[0]["end_ms"] == 1795305599999 and calls[0]["symbol"] is None
     # filtros: lado e par (o par vai pra exchange; o lado filtra aqui)
     assert [f["trade_id"] for f in client.get("/api/fills?from=2026-11-20&to=2026-11-21&side=SHORT").get_json()["fills"]] == ["t3"]
