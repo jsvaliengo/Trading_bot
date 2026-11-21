@@ -224,14 +224,16 @@ def _register_routes(app: Flask, socketio: SocketIO) -> None:
     def summary():
         return jsonify(collect_summary(account_bot()))
 
-    @app.route("/api/market/btc")
+    @app.route("/api/market/<symbol>")
     @login_required
-    def market_btc():
-        from .market import fetch_btc_market
+    def market(symbol: str):
+        from .market import fetch_market
         try:
-            return jsonify(fetch_btc_market(request.args.get("interval", "1h")))
+            return jsonify(fetch_market(symbol, request.args.get("interval", "1h")))
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
         except Exception as exc:
-            logger.warning(f"Mercado BTC indisponível: {exc}")
+            logger.warning(f"Mercado {symbol} indisponível: {exc}")
             return jsonify({"ok": False, "error": "Bitget não respondeu"}), 502
 
     @app.route("/api/pnl_report")

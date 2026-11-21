@@ -196,6 +196,7 @@
 /* Mercado › BTC: gráfico de velas (lightweight-charts) + KPIs do perpétuo */
 .mk-chart { height:420px; width:100%; border-radius:12px; overflow:hidden; }
 .mk-kpis .kpi { min-height:118px; }
+.mk-pairs { margin-bottom:0; align-self:flex-start; } .mk-pairs .chip { font-weight:600; padding:6px 14px; }
 .kpi-bar.ls-bar i { background:linear-gradient(90deg, var(--good), var(--good)); }
 .kpi-bar.ls-bar { background:var(--bad-soft); }
 .kpi-bar.fund-neg i { background:var(--bad); } .kpi-bar.fund-pos i { background:var(--good); }
