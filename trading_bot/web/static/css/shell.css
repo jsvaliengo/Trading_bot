@@ -6,6 +6,9 @@
 
 .shell { display:flex; min-height:100vh; }
 .main { flex:1; min-width:0; display:flex; flex-direction:column; }
+/* .wrap tem margin:0 auto: num flex column isso cancela o stretch e a largura vira a do conteúdo (tabela larga
+   alargava a página no celular). width:100% devolve a largura do container; o max-width continua centralizando. */
+.main > .wrap { width:100%; }
 
 /* Menu lateral */
 .sidebar { position:sticky; top:0; align-self:flex-start; height:100vh; width:var(--side-w); flex:none; display:flex; flex-direction:column; gap:8px;
@@ -68,7 +71,6 @@
 /* Chrome embrulha o conteúdo do <details> em ::details-content: é ele que vira a coluna flex */
 .two > details.card[open]::details-content { display:flex; flex-direction:column; flex:1; }
 .two > details.card[open] > .cv-eq { flex:1; min-height:220px; }
-.two .kv th, .two .kv td { white-space:normal; } /* tabela chave→valor quebra linha em vez de vazar do card */
 .tabbar a.on { color:var(--accent); }
 
 /* Tablet/celular: menu vira off-canvas */
