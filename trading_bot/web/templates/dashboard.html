@@ -44,7 +44,7 @@
         <div class="nav-group" data-group="market">
             <button class="nav-item nav-toggle" type="button" aria-expanded="false" title="Mercado"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4v16M17 4v16M4 8h6M4 14h6M14 7h6M14 15h6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><span>Mercado</span><i class="chev" aria-hidden="true"></i></button>
             <div class="nav-sub">
-            <a class="soon" aria-disabled="true" title="BTC (em breve)"><span>BTC</span><small>em breve</small></a>
+            <a href="#market" data-page="market"><span>Par ativo</span></a>
             </div>
         </div>
         <div class="nav-group" data-group="reports">
@@ -463,6 +463,38 @@
     </details>
     </div>
 
+    <!-- Mercado: perpétuo USDT-M da Bitget (API pública) do par escolhido — pares ativos do bot + BTC como referência -->
+    <div class="page" data-page="market" hidden>
+        <p class="empty page-empty" hidden>Sem dados do martingale para esta página neste processo.</p>
+        <div class="chips mk-pairs" role="tablist" aria-label="Par" id="mk-pairs"></div>
+        <section class="kpis mk-kpis" aria-label="Perpétuo selecionado">
+            <article class="kpi"><div class="kpi-h"><b class="kpi-v" id="mk-last">—</b><span class="kpi-l" id="mk-last-l">último</span><small class="kpi-s" id="mk-last-s">—</small></div><div class="kpi-legs" id="mk-range"></div></article>
+            <article class="kpi"><div class="kpi-h"><b class="kpi-v" id="mk-mark">—</b><span class="kpi-l">Marca × índice</span><small class="kpi-s" id="mk-mark-s">—</small></div></article>
+            <article class="kpi"><div class="kpi-h"><b class="kpi-v" id="mk-funding">—</b><span class="kpi-l">Funding atual</span><small class="kpi-s" id="mk-funding-s">—</small></div><div class="kpi-bar" id="mk-funding-bar" aria-hidden="true"><i></i></div></article>
+            <article class="kpi"><div class="kpi-h"><b class="kpi-v" id="mk-oi">—</b><span class="kpi-l">Open interest</span><small class="kpi-s" id="mk-oi-s">—</small></div></article>
+            <article class="kpi"><div class="kpi-h"><b class="kpi-v" id="mk-ls">—</b><span class="kpi-l">Long / short (contas)</span><small class="kpi-s" id="mk-ls-s">—</small></div><div class="kpi-bar ls-bar" id="mk-ls-bar" aria-hidden="true"><i></i></div></article>
+        </section>
+        <section class="card" id="mk-chart-card" aria-labelledby="mk-h">
+            <header class="ch"><div><h2 id="mk-h">Perpétuo</h2><p class="cs" id="mk-sub">Bitget USDT-M · velas do timeframe escolhido · atualiza a cada 15 s</p></div>
+                <div class="chips" role="tablist" aria-label="Timeframe" id="mk-tf">
+                    <button class="chip" role="tab" data-tf="1m">1m</button><button class="chip" role="tab" data-tf="5m">5m</button><button class="chip" role="tab" data-tf="15m">15m</button>
+                    <button class="chip on" role="tab" data-tf="1h" aria-selected="true">1h</button><button class="chip" role="tab" data-tf="4h">4h</button><button class="chip" role="tab" data-tf="1d">1D</button>
+                </div></header>
+            <div class="mk-chart" id="mk-chart" role="img" aria-label="Velas do par selecionado"></div>
+            <p class="empty" id="mk-error" hidden></p>
+        </section>
+        <section class="two">
+            <section class="card" id="mk-funding-card" aria-labelledby="mk-funding-h">
+                <header class="ch"><h2 id="mk-funding-h">Histórico de funding</h2><span class="cs" id="mk-funding-sub">—</span></header>
+                <div class="cv cv-pnl"><canvas id="mk-funding-chart" role="img" aria-label="Funding por liquidação (8h)"></canvas></div>
+            </section>
+            <section class="card" id="mk-ls-card" aria-labelledby="mk-ls-h">
+                <header class="ch"><h2 id="mk-ls-h">Contas long × short</h2><span class="cs" id="mk-ls-sub">—</span></header>
+                <div class="cv cv-pnl"><canvas id="mk-ls-chart" role="img" aria-label="Percentual de contas long por hora"></canvas></div>
+            </section>
+        </section>
+    </div>
+
     <div class="page" data-page="system" hidden>
         <p class="empty page-empty" hidden>Sem dados do martingale para esta página neste processo.</p>
     <section class="two">
@@ -487,6 +519,7 @@
     <a href="#overview" data-page="overview">Geral</a>
     <a href="#pnl" data-page="pnl">P&amp;L</a>
     <a href="#sheet" data-page="sheet">Planilha</a>
+    <a href="#market" data-page="market">Mercado</a>
     <a href="#system" data-page="system">Sistema</a>
 </nav>
 </div><!-- /.main -->

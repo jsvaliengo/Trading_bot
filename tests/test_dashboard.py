@@ -214,7 +214,109 @@ def test_index_shows_logged_user_and_platform_placeholders():
     html = client.get("/").data.decode()
     assert 'id="profile"' in html and ">admin<" in html and "1 conta(s)" in html
     nav = html.split('<nav class="nav" id="nav">')[1].split("</nav>")[0]
-    assert "Contas" in nav and "Usuários" in nav and nav.count('aria-disabled="true"') == 4   # + BTC e Histórico de fills (PR 2/3)
+    assert "Contas" in nav and "Usuários" in nav and nav.count('aria-disabled="true"') == 3   # + Histórico de fills (PR 3)
+
+
+# ---------- Mercado › BTC (API pública da Bitget, com cache) ----------
+
+_MK_ROUTES = {
+    "/api/v2/mix/market/candles": [["1795258800000", "57905.3", "58625.4", "57834.2", "58184.1", "2204.9", "1.28e8"],
+                                   ["1795255200000", "57800.0", "57950.0", "57700.0", "57905.3", "1800.0", "1.0e8"]],
+    "/api/v2/mix/market/ticker": [{"lastPr": "58314.6", "markPrice": "58314.6", "indexPrice": "58337.02", "change24h": "-0.05099",
+                                   "high24h": "62150", "low24h": "55098.5", "usdtVolume": "6389433244.35", "baseVolume": "109476.43",
+                                   "fundingRate": "-0.000021", "holdingAmount": "33826.58"}],
+    "/api/v2/mix/market/current-fund-rate": [{"fundingRate": "-0.000021", "fundingRateInterval": "8", "nextUpdate": "1795276800000"}],
+    "/api/v2/mix/market/history-fund-rate": [{"fundingRate": "-0.000029", "fundingTime": "1795248000000"}, {"fundingRate": "0.000010", "fundingTime": "1795219200000"}],
+    "/api/v2/mix/market/open-interest": {"openInterestList": [{"symbol": "BTCUSDT", "size": "33826.58"}], "ts": "1795263440061"},
+    "/api/v2/mix/market/account-long-short": [{"longAccountRatio": "0.8136", "shortAccountRatio": "0.1864", "longShortAccountRatio": "4.3648", "ts": "1795158000000"}],
+    "/api/v2/mix/market/position-long-short": [{"longPositionRatio": "0.4976", "shortPositionRatio": "0.5024", "longShortPositionRatio": "0.9904", "ts": "1795158000000"}],
+}
+
+
+@pytest.fixture
+def _bitget_public(monkeypatch):
+    """requests.get do módulo market responde com fixtures (nada de rede); conta as chamadas por path."""
+    from trading_bot.web import market
+    calls = []
+
+    def fake_get(url, params=None, timeout=None):
+        path = url.replace(market.BASE_URL, "")
+        calls.append((path, dict(params or {})))
+        if path not in _MK_ROUTES:
+            return SimpleNamespace(json=lambda: {"code": "40404", "msg": "Request URL NOT FOUND", "data": None})
+        return SimpleNamespace(json=lambda: {"code": "00000", "msg": "success", "data": _MK_ROUTES[path]})
+
+    monkeypatch.setattr(market.requests, "get", fake_get)
+    monkeypatch.setattr(market, "_cache", {})
+    return calls
+
+
+def test_market_btc_route_parses_public_bitget_payloads(_bitget_public):
+    from trading_bot.web.app import create_app
+    app, _ = create_app(_make_bot())
+    client = app.test_client()
+    assert client.get("/api/market/BTCUSDT").status_code == 401   # exige login/Basic como o resto de /api
+    _login(client)
+    assert client.get("/api/market/btc").status_code == 400 and client.get("/api/market/ADA-USDT").status_code == 400
+    assert client.get("/api/market/ETHBTC").status_code == 400   # só perpétuos USDT-M
+    d = client.get("/api/market/BTCUSDT?interval=4h").get_json()
+    assert d["symbol"] == "BTCUSDT" and d["interval"] == "4h" and [c["t"] for c in d["candles"]] == [1795255200, 1795258800]   # ascendente, em segundos
+    assert d["candles"][1] == {"t": 1795258800, "o": 57905.3, "h": 58625.4, "l": 57834.2, "c": 58184.1, "v": 2204.9}
+    t = d["ticker"]
+    assert t["last"] == 58314.6 and t["change_24h_pct"] == pytest.approx(-5.099) and t["open_interest_btc"] == 33826.58
+    assert t["open_interest_usdt"] == pytest.approx(33826.58 * 58314.6) and t["basis_pct"] == pytest.approx((58314.6 - 58337.02) / 58337.02 * 100)
+    f = d["funding"]
+    assert f["rate_pct"] == pytest.approx(-0.0021) and f["interval_hours"] == 8 and f["next_at"].startswith("2026-11-21T16:00:00")
+    assert [h["rate_pct"] for h in f["history"]] == pytest.approx([0.001, -0.0029])   # cronológico
+    ls = d["long_short"]
+    assert ls["accounts_long_pct"] == pytest.approx(81.36) and ls["positions_ratio"] == 0.9904 and len(ls["history"]) == 1
+    paths = [p for p, _ in _bitget_public]
+    assert paths[0] == "/api/v2/mix/market/candles" and _bitget_public[0][1] == {"symbol": "BTCUSDT", "productType": "USDT-FUTURES", "granularity": "4H", "limit": 200}
+    assert all("ACCESS-KEY" not in str(c) for c in _bitget_public)   # público: sem assinatura
+
+
+def test_market_caches_per_symbol_and_interval(_bitget_public):
+    from trading_bot.web import market
+    a = market.fetch_market("ADAUSDT", "1h"); n = len(_bitget_public)
+    assert a["symbol"] == "ADAUSDT" and all(p[1].get("symbol") == "ADAUSDT" for p in _bitget_public)
+    assert market.fetch_market("adausdt", "1h") is a and len(_bitget_public) == n           # cache (símbolo normalizado)
+    assert market.fetch_market("ADAUSDT", "xx")["interval"] == "1h" and len(_bitget_public) == n   # intervalo inválido → 1h
+    market.fetch_market("ADAUSDT", "1m"); m = len(_bitget_public); assert m > n            # outro timeframe busca de novo
+    market.fetch_market("BTCUSDT", "1h"); assert len(_bitget_public) > m                    # outro par busca de novo
+    with pytest.raises(ValueError):
+        market.fetch_market("BTC", "1h")
+
+
+def test_market_btc_optional_parts_fail_soft_and_candles_fail_hard(_bitget_public, monkeypatch):
+    from trading_bot.web import market
+    from trading_bot.web.app import create_app
+    monkeypatch.setitem(_MK_ROUTES, "/api/v2/mix/market/account-long-short", None)
+    monkeypatch.delitem(_MK_ROUTES, "/api/v2/mix/market/position-long-short")
+    d = market.fetch_market("BTCUSDT", "1h")
+    assert d["long_short"] is None and d["ticker"]["last"] == 58314.6
+    monkeypatch.delitem(_MK_ROUTES, "/api/v2/mix/market/candles")
+    monkeypatch.setattr(market, "_cache", {})
+    app, _ = create_app(_make_bot())
+    client = app.test_client(); _login(client)
+    r = client.get("/api/market/BTCUSDT")
+    assert r.status_code == 502 and r.get_json()["ok"] is False
+
+
+def test_market_page_and_menu_item_are_wired():
+    from trading_bot.web.app import create_app
+    app, _ = create_app(_make_bot())
+    client = app.test_client(); _login(client)
+    html = client.get("/").data.decode()
+    assert '<a href="#market" data-page="market"><span>Par ativo</span></a>' in html
+    for i in ("mk-pairs", "mk-chart", "mk-tf", "mk-funding-chart", "mk-ls-chart", "mk-last", "mk-mark", "mk-funding", "mk-oi", "mk-ls"):
+        assert f'id="{i}"' in html, i
+    assert html.count("lightweight-charts@") == 1   # a mesma lib do modal 1m, carregada uma vez
+    js = open("trading_bot/web/static/js/main.js", encoding="utf-8").read()
+    # mesmo gráfico do modal 1m: buildChart/chartFill/chartLevels (velas + volume + EMAs + linhas das pernas)
+    assert "function buildChart(" in js and js.count("buildChart(") == 3 and "chartLevels(mk.g, mk.sym)" in js
+    assert "function renderMarket(" in js and "/api/market/${encodeURIComponent(mk.sym)}?interval=" in js and "marketVisible(name === 'market')" in js
+    # chips de par: pares ativos do martingale (mesma fonte do anel) + BTC de referência; padrão = 1º ativo
+    assert "function renderMarketPairs(" in js and "[...active, 'BTCUSDT']" in js and "renderMarketPairs(l);" in js
 
 
 # ---------- Rotas HTTP ----------
@@ -425,7 +527,7 @@ def test_shell_sidebar_kpis_and_pages():
     assert 'id="sidebar"' in html and 'id="sidebar-toggle"' in html and 'id="sidebar-backdrop"' in html
     assert 'id="sidebar-collapse"' in html and html.count('title="') >= 6   # recolher no desktop; tooltip nos itens
     pages = re.findall(r'<div class="page" data-page="([^"]+)"', html)
-    assert pages == ["overview", "pnl", "sheet", "system"]
+    assert pages == ["overview", "pnl", "sheet", "market", "system"]
     nav = html.split('<nav class="nav" id="nav">')[1].split("</nav>")[0]
     assert set(re.findall(r'data-page="([^"]+)"', nav)) == set(pages)
     # grupos do menu (accordion) com subitens apontando para página/card existentes
@@ -463,7 +565,7 @@ def test_live_always_carries_sheet_and_js_renders_it_without_runner():
     assert sheet["rows"] and sheet["current"] == 1 and sheet["rows"][1][1] == 300   # $320 → faixa 300
     assert sheet["scores"] == {} and sheet["green"] and sheet["red"]
     html = client.get("/").data.decode()
-    assert html.count('class="empty page-empty"') == 4
+    assert html.count('class="empty page-empty"') == 5
     js = open("trading_bot/web/static/js/main.js", encoding="utf-8").read()
     assert "$('sheet-card').hidden = !sheet; renderSheet(sheet" in js and "function pageEmpties(" in js
 

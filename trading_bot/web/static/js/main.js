@@ -906,6 +906,7 @@
         renderPerf(ft);
         renderPositions(pos);
         renderMartingale(l.martingale, s, pos, l.sheet);
+        renderMarketPairs(l);
         renderEngine(e, pos);
         renderHealth(h, s);
         renderRHist(ft.r_histogram);
@@ -970,54 +971,16 @@
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !modal.hidden) closeModal(); });
 
     // Gráfico 1m do par (Lightweight Charts) como no app da Bitget: velas + volume + EMAs 5/10/20/50,
-    // linha da média de cada perna (qtd · P&L) e etiquetas no eixo pra alvo/degrau/empate/stop (cores da régua).
+    // linha da média de cada perna (qtd · P&L) e etiquetas no eixo pra alvo/degrau/stop (cores da régua).
     // Velas via /api/klines (exchange do bot) a cada 5s; as linhas acompanham o snapshot (chartSync em applyLive).
     const chart = $('chart-modal');
     const EMAS = [5, 10, 20, 50], EMA_COLORS = ['#f6c343', '#f28b3c', '#c86bf2', '#3987e5'];
     let cg = null;   // { sym, api, candles, vol, emas: [series], lines: [priceLine], timer }
     const ema = (closes, n) => { const k = 2 / (n + 1); let v = null; return closes.map(c => (v = v === null ? c : c * k + v * (1 - k))); };
-    async function chartLoad() {
-        if (!cg) return;
-        try {
-            const r = await fetch(`/api/klines?symbol=${encodeURIComponent(cg.sym)}&interval=1m&limit=300`, { credentials: 'include' });
-            if (!r.ok) throw new Error('HTTP ' + r.status);
-            const { candles } = await r.json(); if (!cg || !candles) return;
-            const first = !cg.loaded; cg.loaded = true;
-            cg.candles.setData(candles.map(k => ({ time: k.t, open: k.o, high: k.h, low: k.l, close: k.c })));
-            cg.vol.setData(candles.map(k => ({ time: k.t, value: k.v, color: k.c >= k.o ? 'rgba(47,181,90,.45)' : 'rgba(224,82,79,.45)' })));
-            const closes = candles.map(k => k.c);
-            cg.emas.forEach((s, i) => s.setData(ema(closes, EMAS[i]).map((v, j) => ({ time: candles[j].t, value: v })).slice(EMAS[i])));
-            if (first) { cg.api.timeScale().setVisibleLogicalRange({ from: candles.length - 90, to: candles.length + 6 }); chartSync(); }
-        } catch (err) { console.error('klines falharam', err); }
-    }
-    function chartSync() {
-        if (!cg || !cg.loaded) return;
-        cg.lines.forEach(l => cg.candles.removePriceLine(l)); cg.lines = [];
-        const legs = ((state.live && state.live.martingale && state.live.martingale.legs) || []).filter(l => l.symbol === cg.sym && isNum(l.avg_price));
-        const positions = (state.live && state.live.positions) || [];
-        const LS = LightweightCharts.LineStyle, add = (price, color, title, style, width, offscale) => {
-            if (!isNum(price)) return;
-            cg.lines.push(cg.candles.createPriceLine({ price, color, title, lineWidth: width || 1, lineStyle: style, axisLabelVisible: true }));
-            if (!offscale) cg.scale.push(price);
-        };
-        cg.scale = [];
-        for (const l of legs) {
-            const long = l.side === 'LONG', pos = positions.find(p => p.symbol === l.symbol && p.side === l.side) || {};
-            const pnl = isNum(l.unrealized_pnl_usd) ? ` ${l.unrealized_pnl_usd >= 0 ? '+' : '−'}${Math.abs(l.unrealized_pnl_usd).toFixed(4)} USDT${isNum(pos.unrealized_pnl_percent) ? ` (${pos.unrealized_pnl_percent >= 0 ? '+' : '−'}${Math.abs(pos.unrealized_pnl_percent).toFixed(2)}%)` : ''}` : '';
-            add(l.avg_price, long ? cssv('--good') : cssv('--bad'), `${long ? '' : '−'}${fmt.price(l.quantity)}${pnl}`, LS.Solid, 2);
-            add(l.tp_price, cssv('--good'), `Alvo ${l.side}`, LS.Dashed);
-            add(l.next_add_price, cssv('--warn'), `Degrau ${l.level + 1} ${l.side}`, LS.Dashed);
-            add(l.breakeven_price, cssv('--text-muted'), `Empate ${l.side}`, LS.Dotted);
-            add(l.stop_price, cssv('--bad'), `Stop ${l.side}`, LS.LargeDashed, 1, true);   // stop pode estar longe: não estica a escala
-        }
-        cg.candles.applyOptions({ autoscaleInfoProvider: cg.autoscale });
-    }
-    function openChart(sym) {
-        closeChart(true);
-        $('chart-title').textContent = sym;
-        lastFocus = document.activeElement; chart.hidden = false; $('chart-close').focus();
-        if (!window.LightweightCharts) { $('chart-box').textContent = 'Biblioteca do gráfico não carregou.'; return; }
-        const api = LightweightCharts.createChart($('chart-box'), {
+    // Um gráfico (modal 1m e aba Mercado usam o mesmo): velas + volume + EMAs; `scale` guarda os níveis das pernas
+    // pra escala incluí-los (linhas de preço não entram no autoscale por padrão).
+    function buildChart(box) {
+        const api = LightweightCharts.createChart(box, {
             autoSize: true,
             layout: { background: { type: 'solid', color: cssv('--bg-card') }, textColor: cssv('--text-dim'), fontSize: 11 },
             grid: { vertLines: { color: cssv('--grid') }, horzLines: { color: cssv('--grid') } },
@@ -1025,14 +988,66 @@
             timeScale: { borderColor: cssv('--border-strong'), timeVisible: true, secondsVisible: false },
             crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
         });
-        const candles = api.addCandlestickSeries({ upColor: cssv('--good'), downColor: cssv('--bad'), borderVisible: false, wickUpColor: cssv('--good'), wickDownColor: cssv('--bad'), priceFormat: { type: 'price', precision: 5, minMove: 0.00001 } });
-        const vol = api.addHistogramSeries({ priceFormat: { type: 'volume' }, priceScaleId: 'vol', lastValueVisible: false, priceLineVisible: false });
+        const g = { api, lines: [], scale: [], loaded: false };
+        g.candles = api.addCandlestickSeries({ upColor: cssv('--good'), downColor: cssv('--bad'), borderVisible: false, wickUpColor: cssv('--good'), wickDownColor: cssv('--bad'), priceFormat: { type: 'price', precision: 5, minMove: 0.00001 },
+            autoscaleInfoProvider: (orig) => { const r = orig(); if (!r || !r.priceRange || !g.scale.length) return r;
+                return { ...r, priceRange: { minValue: Math.min(r.priceRange.minValue, ...g.scale), maxValue: Math.max(r.priceRange.maxValue, ...g.scale) } }; } });
+        g.vol = api.addHistogramSeries({ priceFormat: { type: 'volume' }, priceScaleId: 'vol', lastValueVisible: false, priceLineVisible: false });
         api.priceScale('vol').applyOptions({ scaleMargins: { top: 0.82, bottom: 0 }, visible: false });
-        const emas = EMAS.map((n, i) => api.addLineSeries({ color: EMA_COLORS[i], lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false }));
-        // escala inclui média/alvo/degrau/empate das pernas (linhas de preço não entram no autoscale por padrão)
-        const autoscale = (orig) => { const r = orig(); if (!r || !r.priceRange || !cg || !cg.scale.length) return r;
-            return { ...r, priceRange: { minValue: Math.min(r.priceRange.minValue, ...cg.scale), maxValue: Math.max(r.priceRange.maxValue, ...cg.scale) } }; };
-        cg = { sym, api, candles, vol, emas, lines: [], scale: [], autoscale, loaded: false, timer: setInterval(chartLoad, 5000) };
+        g.emas = EMAS.map((n, i) => api.addLineSeries({ color: EMA_COLORS[i], lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false }));
+        return g;
+    }
+    // casas do eixo de preço pelo nível de preço (ADA 5, BNB 2, BTC 1) — como o fmt.price
+    const priceDecimals = (p) => p >= 1000 ? 1 : p >= 10 ? 2 : p >= 1 ? 3 : p >= 0.01 ? 5 : 7;
+    function chartFill(g, candles, firstView) {
+        const last = candles.length ? candles[candles.length - 1].c : 1, dec = priceDecimals(last);
+        g.candles.applyOptions({ priceFormat: { type: 'price', precision: dec, minMove: 10 ** -dec } });
+        g.candles.setData(candles.map(k => ({ time: k.t, open: k.o, high: k.h, low: k.l, close: k.c })));
+        g.vol.setData(candles.map(k => ({ time: k.t, value: k.v, color: k.c >= k.o ? 'rgba(47,181,90,.45)' : 'rgba(224,82,79,.45)' })));
+        const closes = candles.map(k => k.c);
+        g.emas.forEach((s, i) => s.setData(ema(closes, EMAS[i]).map((v, j) => ({ time: candles[j].t, value: v })).slice(EMAS[i])));
+        g.loaded = true;
+        if (firstView) g.api.timeScale().setVisibleLogicalRange({ from: candles.length - 90, to: candles.length + 6 });
+    }
+    // Linhas das pernas do par: média (qtd · P&L), alvo, degrau seguinte e stop (cores da régua); o empate fica só na régua.
+    function chartLevels(g, sym) {
+        if (!g || !g.loaded) return;
+        g.lines.forEach(l => g.candles.removePriceLine(l)); g.lines = []; g.scale = [];
+        const legs = ((state.live && state.live.martingale && state.live.martingale.legs) || []).filter(l => l.symbol === sym && isNum(l.avg_price));
+        const positions = (state.live && state.live.positions) || [];
+        const LS = LightweightCharts.LineStyle, add = (price, color, title, style, width, offscale) => {
+            if (!isNum(price)) return;
+            g.lines.push(g.candles.createPriceLine({ price, color, title, lineWidth: width || 1, lineStyle: style, axisLabelVisible: true }));
+            if (!offscale) g.scale.push(price);
+        };
+        for (const l of legs) {
+            const long = l.side === 'LONG', pos = positions.find(p => p.symbol === l.symbol && p.side === l.side) || {};
+            const pnl = isNum(l.unrealized_pnl_usd) ? ` ${l.unrealized_pnl_usd >= 0 ? '+' : '−'}${Math.abs(l.unrealized_pnl_usd).toFixed(4)} USDT${isNum(pos.unrealized_pnl_percent) ? ` (${pos.unrealized_pnl_percent >= 0 ? '+' : '−'}${Math.abs(pos.unrealized_pnl_percent).toFixed(2)}%)` : ''}` : '';
+            add(l.avg_price, long ? cssv('--good') : cssv('--bad'), `${long ? '' : '−'}${fmt.price(l.quantity)}${pnl}`, LS.Solid, 2);
+            add(l.tp_price, cssv('--good'), `Alvo ${l.side}`, LS.Dashed);
+            add(l.next_add_price, cssv('--warn'), `Degrau ${l.level + 1} ${l.side}`, LS.Dashed);
+            add(l.stop_price, cssv('--bad'), `Stop ${l.side}`, LS.LargeDashed, 1, true);   // stop pode estar longe: não estica a escala
+        }
+        g.candles.applyOptions({ autoscaleInfoProvider: g.candles.options().autoscaleInfoProvider });   // reavalia a escala com os níveis novos
+    }
+    async function chartLoad() {
+        if (!cg) return;
+        try {
+            const r = await fetch(`/api/klines?symbol=${encodeURIComponent(cg.sym)}&interval=1m&limit=300`, { credentials: 'include' });
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            const { candles } = await r.json(); if (!cg || !candles) return;
+            const first = !cg.loaded; chartFill(cg, candles, first);
+            if (first) chartSync();
+        } catch (err) { console.error('klines falharam', err); }
+    }
+    // snapshot novo: as linhas do modal e da aba Mercado acompanham
+    function chartSync() { if (cg) chartLevels(cg, cg.sym); if (mk.g) chartLevels(mk.g, mk.sym); }
+    function openChart(sym) {
+        closeChart(true);
+        $('chart-title').textContent = sym;
+        lastFocus = document.activeElement; chart.hidden = false; $('chart-close').focus();
+        if (!window.LightweightCharts) { $('chart-box').textContent = 'Biblioteca do gráfico não carregou.'; return; }
+        cg = buildChart($('chart-box')); cg.sym = sym; cg.timer = setInterval(chartLoad, 5000);
         chartLoad();
     }
     function closeChart(keepOpen) {
@@ -1074,6 +1089,74 @@
     function reqRefresh() { if (socket && socket.connected) socket.emit('request_snapshot'); else pollOnce(); }
     setInterval(() => { left -= 1; if (left <= 0) { reqRefresh(); left = REFRESH; } if (state.live) renderNext(); }, 1000);
     setInterval(fetchHistory, HISTORY_INTERVAL);
+
+    // ───────── Mercado (API pública da Bitget via /api/market/<par>) ─────────
+    // Par = chips com os pares ativos do martingale (mesma fonte do anel) + BTC como referência; padrão = 1º par ativo.
+    // Velas em lightweight-charts (Chart.js não tem candlestick); funding e long/short em Chart.js. Só busca com a página visível.
+    const mk = { tf: '1h', sym: null, pairs: [], g: null, timer: null, data: null, shown: null };   // shown = par+tf já desenhado (1ª vista)
+    function renderMarketPairs(live) {
+        const active = Object.keys((live && live.martingale && live.martingale.pairs) || {});
+        const pairs = [...active, 'BTCUSDT'].filter((s, i, a) => a.indexOf(s) === i);
+        const changed = pairs.join() !== mk.pairs.join(); mk.pairs = pairs;
+        if (!mk.sym || !pairs.includes(mk.sym)) { mk.sym = pairs[0]; if (mk.timer) fetchMarket(); }   // par ativo mudou: segue o novo
+        if (!changed && $('mk-pairs').children.length) return;
+        $('mk-pairs').innerHTML = pairs.map(s => `<button class="chip${s === mk.sym ? ' on' : ''}" role="tab" data-sym="${esc(s)}" aria-selected="${s === mk.sym}">${esc(s.replace(/USDT$/, ''))}${active.includes(s) ? '' : ' <small>ref.</small>'}</button>`).join('');
+    }
+    $('mk-pairs').addEventListener('click', (e) => {
+        const b = e.target.closest('[data-sym]'); if (!b || b.dataset.sym === mk.sym) return;
+        mk.sym = b.dataset.sym; $$('#mk-pairs .chip').forEach(c => { const on = c === b; c.classList.toggle('on', on); c.setAttribute('aria-selected', String(on)); });
+        fetchMarket();
+    });
+    const big = (v) => !isNum(v) ? '—' : v >= 1e9 ? (v / 1e9).toFixed(2).replace('.', ',') + ' bi' : v >= 1e6 ? (v / 1e6).toFixed(1).replace('.', ',') + ' mi' : fmt.num(v, 0);
+    function renderMarket(d) {
+        mk.data = d; const t = d.ticker || {}, f = d.funding || {}, ls = d.long_short, p = palette();
+        if (d.symbol !== mk.sym) return;   // resposta atrasada de outro par
+        $('mk-error').hidden = true;
+        const base = String(d.symbol).replace(/USDT$/, '');
+        $('mk-h').textContent = `${d.symbol} perpétuo`; $('mk-last-l').textContent = `${d.symbol} · último`;
+        $('mk-last').textContent = fmt.price(t.last); $('mk-last').className = 'kpi-v ' + cls(t.change_24h_pct);
+        $('mk-last-s').textContent = `${fmt.pct(t.change_24h_pct)} em 24h · vol ${big(t.volume_usdt_24h)} USDT`;
+        $('mk-range').innerHTML = `<span class="neg">mín ${esc(fmt.price(t.low_24h))}</span><span class="pos">máx ${esc(fmt.price(t.high_24h))}</span>`;
+        $('mk-mark').textContent = fmt.price(t.mark);
+        $('mk-mark-s').textContent = `índice ${fmt.price(t.index)} · prêmio ${fmt.pct(t.basis_pct, 3)}`;
+        $('mk-funding').textContent = fmt.pct(f.rate_pct, 4); $('mk-funding').className = 'kpi-v ' + cls(f.rate_pct);
+        const left = f.next_at ? (new Date(f.next_at).getTime() - Date.now()) / 1000 : null;
+        $('mk-funding-s').textContent = `${sgn(f.rate_pct) > 0 ? 'long paga short' : sgn(f.rate_pct) < 0 ? 'short paga long' : 'neutro'} · próximo em ${isNum(left) && left > 0 ? fmt.clock(left) : '—'} (a cada ${f.interval_hours || 8}h)`;
+        const fb = $('mk-funding-bar'); fb.firstElementChild.style.width = `${Math.min(100, Math.abs(f.rate_pct || 0) / 0.1 * 100)}%`; fb.className = 'kpi-bar ' + (sgn(f.rate_pct) < 0 ? 'fund-neg' : 'fund-pos');
+        $('mk-oi').textContent = isNum(t.open_interest_btc) ? `${big(t.open_interest_btc)} ${base}` : '—';
+        $('mk-oi-s').textContent = isNum(t.open_interest_usdt) ? `≈ ${big(t.open_interest_usdt)} USDT em aberto` : 'sem dado';
+        if (ls) {
+            $('mk-ls').textContent = `${fmt.pct(ls.accounts_long_pct, 1, false)} long`;
+            $('mk-ls-s').textContent = `razão ${fmt.num(ls.accounts_ratio, 2)} · posições ${fmt.pct(ls.positions_long_pct, 1, false)} long (razão ${fmt.num(ls.positions_ratio, 2)})`;
+            $('mk-ls-bar').firstElementChild.style.width = `${ls.accounts_long_pct || 0}%`;
+        } else { $('mk-ls').textContent = '—'; $('mk-ls-s').textContent = 'sem dado'; }
+        $('mk-sub').textContent = `Bitget USDT-M · ${d.interval} · ${(d.candles || []).length} velas · atualizado ${fmt.time(d.fetched_at)}`;
+        if (!mk.g && window.LightweightCharts) mk.g = buildChart($('mk-chart'));
+        if (mk.g) { const key = `${d.symbol}/${d.interval}`; chartFill(mk.g, d.candles || [], mk.shown !== key); mk.shown = key; chartLevels(mk.g, mk.sym); }
+        const fh = f.history || [], fl = fh.map(h => fmt.dateTime(h.t)), fd = fh.map(h => h.rate_pct);
+        $('mk-funding-sub').textContent = fh.length ? `${fh.length} liquidações · média ${fmt.pct(sum(fd) / fd.length, 4)}` : 'sem dado';
+        const tt = baseTooltip(p);
+        if (charts.mkFund) { charts.mkFund.data.labels = fl; charts.mkFund.data.datasets[0].data = fd; charts.mkFund.data.datasets[0].backgroundColor = fd.map(v => v < 0 ? p.bad : p.good); charts.mkFund.update('none'); }
+        else if ($('mk-funding-chart') && typeof Chart !== 'undefined') charts.mkFund = new Chart($('mk-funding-chart'), { type: 'bar', data: { labels: fl, datasets: [{ data: fd, backgroundColor: fd.map(v => v < 0 ? p.bad : p.good), borderRadius: 2, maxBarThickness: 14 }] },
+            options: { responsive: true, maintainAspectRatio: false, animation: false, plugins: { legend: { display: false }, tooltip: { ...tt, callbacks: { label: (it) => fmt.pct(it.parsed.y, 4) } } },
+                scales: { x: { ticks: { color: p.mut, font: tickFont, maxTicksLimit: 6 }, grid: { display: false } }, y: { ticks: { color: p.mut, font: tickFont, maxTicksLimit: 5, callback: v => fmt.pct(v, 3) }, grid: { color: p.grid } } } } });
+        const lh = (ls && ls.history) || [], ll = lh.map(h => fmt.dateTime(h.t)), ld = lh.map(h => h.accounts_long_pct);
+        $('mk-ls-sub').textContent = lh.length ? `últimas ${lh.length} h · agora ${fmt.pct(ld[ld.length - 1], 1, false)} das contas long` : 'sem dado';
+        if (charts.mkLs) { charts.mkLs.data.labels = ll; charts.mkLs.data.datasets[0].data = ld; charts.mkLs.update('none'); }
+        else if ($('mk-ls-chart') && typeof Chart !== 'undefined') charts.mkLs = new Chart($('mk-ls-chart'), { type: 'line', data: { labels: ll, datasets: [{ data: ld, borderColor: p.ac, backgroundColor: hexa(p.ac, 0.12), fill: true, borderWidth: 2, pointRadius: 0, tension: 0.3 }] },
+            options: { responsive: true, maintainAspectRatio: false, animation: false, plugins: { legend: { display: false }, tooltip: { ...tt, callbacks: { label: (it) => `${fmt.pct(it.parsed.y, 1, false)} long` } } },
+                scales: { x: { ticks: { color: p.mut, font: tickFont, maxTicksLimit: 6 }, grid: { display: false } }, y: { ticks: { color: p.mut, font: tickFont, maxTicksLimit: 5, callback: v => fmt.pct(v, 0, false) }, grid: { color: p.grid } } } } });
+    }
+    async function fetchMarket() {
+        try {
+            if (!mk.sym) renderMarketPairs(state.live);
+            const r = await fetch(`/api/market/${encodeURIComponent(mk.sym)}?interval=${mk.tf}`, { credentials: 'include' });
+            const d = await r.json(); if (!r.ok || d.ok === false) throw new Error(d.error || ('HTTP ' + r.status));
+            renderMarket(d);
+        } catch (err) { console.warn('mercado BTC falhou', err); const e = $('mk-error'); e.textContent = 'Bitget não respondeu: ' + err.message; e.hidden = false; }
+    }
+    function marketVisible(on) { clearInterval(mk.timer); mk.timer = null; if (on) { fetchMarket(); mk.timer = setInterval(fetchMarket, 15000); } }
+    $$('#mk-tf .chip').forEach(b => b.addEventListener('click', () => { mk.tf = b.dataset.tf; fetchMarket(); }));
 
     // ───────── Shell: KPIs com sparkline, páginas do menu, menu off-canvas, tema ─────────
     function sparkline(id, values, color) {
@@ -1145,6 +1228,7 @@
         pageEmpties();
         Object.values(charts).forEach(c => c.resize());   // canvas em página oculta nasce com 0px
         closeSidebar();
+        marketVisible(name === 'market');
         if (el && !el.hidden) el.scrollIntoView({ block: 'start' });
     }
     // página sem nenhum card visível (ex.: fora do martingale) mostra um aviso em vez de ficar em branco
@@ -1176,6 +1260,7 @@
         document.documentElement.dataset.theme = next;
         try { localStorage.setItem(THEME_KEY, next); } catch (e) { /* storage bloqueado */ }
         Object.values(charts).forEach(c => c.destroy()); Object.keys(charts).forEach(k => { delete charts[k]; });
+        if (mk.g) { mk.g.api.remove(); mk.g = null; mk.shown = null; if (mk.data) renderMarket(mk.data); }
         if (state.live) renderLive(state.live);
         if (state.hist) renderHistory(state.hist);
         if (state.pnl) renderPnl(state.pnl);

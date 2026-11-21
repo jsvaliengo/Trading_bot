@@ -193,6 +193,15 @@
     .ruler-anchors { height:64px; } .ruler-anchors .ra { font-size:10px; }
 }
 
+/* Mercado › BTC: gráfico de velas (lightweight-charts) + KPIs do perpétuo */
+.mk-chart { height:460px; width:100%; border-radius:12px; overflow:hidden; background:var(--bg-card); }
+.mk-kpis .kpi { min-height:118px; }
+.mk-pairs { margin-bottom:0; align-self:flex-start; } .mk-pairs .chip { font-weight:600; padding:6px 14px; }
+.kpi-bar.ls-bar i { background:linear-gradient(90deg, var(--good), var(--good)); }
+.kpi-bar.ls-bar { background:var(--bad-soft); }
+.kpi-bar.fund-neg i { background:var(--bad); } .kpi-bar.fund-pos i { background:var(--good); }
+@media (max-width: 760px) { .mk-chart { height:300px; } }
+
 /* Páginas: uma visível por vez (showPage no main.js) */
 .page { display:flex; flex-direction:column; gap:14px; min-width:0; } /* min-width:0: tabela larga rola dentro do card, não alarga a página */
 /* Linhas de dois cards: mesma altura quando os dois estão abertos (o gráfico de equity estica pra preencher);
