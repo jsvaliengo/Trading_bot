@@ -161,7 +161,7 @@ def test_account_balance_and_info(conn):
 def test_open_positions_in_hedge_mode(conn):
     conn.http.routes[("GET", "/api/v2/mix/position/all-position")] = {"code": "00000", "data": [
         {"symbol": "ADAUSDT", "holdSide": "long", "total": "30", "openPriceAvg": "0.49", "markPrice": "0.5",
-         "unrealizedPL": "0.3", "leverage": "20"},
+         "unrealizedPL": "0.3", "leverage": "20", "liquidationPrice": "0.4671", "marginSize": "0.735"},
         {"symbol": "ADAUSDT", "holdSide": "short", "total": "10", "openPriceAvg": "0.51", "markPrice": "0.5",
          "unrealizedPL": "0.1", "leverage": "20"},
         {"symbol": "BNBUSDT", "holdSide": "long", "total": "0", "openPriceAvg": "", "markPrice": "", "unrealizedPL": "",
@@ -170,6 +170,8 @@ def test_open_positions_in_hedge_mode(conn):
     pos = conn.get_open_positions(force_refresh=True)
     assert [(p["symbol"], p["side"], p["quantity"]) for p in pos] == [("ADAUSDT", "LONG", 30.0), ("ADAUSDT", "SHORT", 10.0)]
     assert pos[0]["entry_price"] == 0.49 and pos[0]["unrealized_pnl"] == 0.3 and pos[0]["leverage"] == 20
+    assert pos[0]["liquidation_price"] == 0.4671 and pos[0]["margin"] == 0.735
+    assert pos[1]["liquidation_price"] is None and pos[1]["margin"] is None   # campo ausente/vazio → None
     assert conn.http.calls[-1]["query"] == {"productType": "USDT-FUTURES", "marginCoin": "USDT"}
 
 

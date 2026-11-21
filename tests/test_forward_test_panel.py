@@ -174,7 +174,8 @@ def test_collect_engine_e_health(monkeypatch, tmp_path):
     )
     assert dash.collect_engine(bot)["universe"] == ["ETHUSDT"]
     h = dash.collect_health(bot, {"paused": True})
-    assert h["ws"] == {"subscriptions": 2, "reconnects": 1, "recovering": 1, "max_age_seconds": 30.0}
+    assert "ws" not in h   # a linha "WebSocket de klines" saiu do card Saúde
+    assert h["user_stream"]["started"] is True
     assert h["runtime"]["loop_errors"] == 2 and h["runtime"]["last_error"] == "boom"
     assert h["deploy_sha"] == "abc123456789" and h["uptime_seconds"] >= 0
     assert "drawdown" in h["paused_reason"]
