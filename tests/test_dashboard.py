@@ -310,8 +310,10 @@ def test_market_page_and_menu_item_are_wired():
     assert '<a href="#market" data-page="market"><span>Par ativo</span></a>' in html
     for i in ("mk-pairs", "mk-chart", "mk-tf", "mk-funding-chart", "mk-ls-chart", "mk-last", "mk-mark", "mk-funding", "mk-oi", "mk-ls"):
         assert f'id="{i}"' in html, i
-    assert "lightweight-charts@4.2.0" in html
+    assert html.count("lightweight-charts@") == 1   # a mesma lib do modal 1m, carregada uma vez
     js = open("trading_bot/web/static/js/main.js", encoding="utf-8").read()
+    # mesmo gráfico do modal 1m: buildChart/chartFill/chartLevels (velas + volume + EMAs + linhas das pernas)
+    assert "function buildChart(" in js and js.count("buildChart(") == 3 and "chartLevels(mk.g, mk.sym)" in js
     assert "function renderMarket(" in js and "/api/market/${encodeURIComponent(mk.sym)}?interval=" in js and "marketVisible(name === 'market')" in js
     # chips de par: pares ativos do martingale (mesma fonte do anel) + BTC de referência; padrão = 1º ativo
     assert "function renderMarketPairs(" in js and "[...active, 'BTCUSDT']" in js and "renderMarketPairs(l);" in js
