@@ -277,14 +277,17 @@ def test_fills_route_matches_bot_trades_filters_and_paginates(tmp_path):
     p = client.get("/api/fills?from=2026-11-20&to=2026-11-21&per_page=2&page=2").get_json()
     assert p["pages"] == 2 and p["page"] == 2 and [f["trade_id"] for f in p["fills"]] == ["t1"]
     # cache: mesma consulta não volta na exchange
-    n = len(calls); client.get("/api/fills?from=2026-11-20&to=2026-11-21"); assert len(calls) == n
+    n = len(calls)
+    client.get("/api/fills?from=2026-11-20&to=2026-11-21")
+    assert len(calls) == n
 
 
 def test_fills_csv_and_exchange_without_fills(tmp_path):
     from trading_bot.web.app import create_app
     bot, _ = _bot_with_fills(tmp_path)
     app, _ = create_app(bot)
-    client = app.test_client(); _login(client)
+    client = app.test_client()
+    _login(client)
     r = client.get("/api/fills?from=2026-11-20&to=2026-11-21&format=csv&per_page=1")
     assert r.status_code == 200 and r.mimetype == "text/csv" and "attachment" in r.headers["Content-Disposition"]
     lines = r.data.decode().splitlines()
@@ -322,7 +325,8 @@ def test_bitget_get_fills_paginates_and_normalizes(monkeypatch):
 def test_fills_page_and_menu_item_are_wired(tmp_path):
     from trading_bot.web.app import create_app
     app, _ = create_app(_make_bot())
-    client = app.test_client(); _login(client)
+    client = app.test_client()
+    _login(client)
     html = client.get("/").data.decode()
     assert '<a href="#fills" data-page="fills"><span>Histórico de fills</span></a>' in html
     for i in ("fills-table", "fills-filters", "fl-symbol", "fl-side", "fl-from", "fl-to", "fills-csv", "fills-pager"):
