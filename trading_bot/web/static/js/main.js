@@ -495,6 +495,9 @@
         $('ring-state').className = 'ring-state ' + (s.paused ? 'warn' : (s.running ? 'ok' : 'bad'));
         $('ring-stop').textContent = `stop em ${fmt.money(m.portfolio_stop_equity)}` + (isNum(m.portfolio_stop_room_pct) ? ` · faltam ${fmt.pct(m.portfolio_stop_room_pct, 1, false)}` : '');
         $('ring-stop').className = 'cs ' + (isNum(m.portfolio_stop_room_pct) && m.portfolio_stop_room_pct < 5 ? 'warn' : '');
+        $('tile-stop').hidden = false;
+        setTile('st-stop', fmt.money(m.portfolio_stop_equity), (isNum(m.portfolio_stop_room_pct) ? `faltam ${fmt.pct(m.portfolio_stop_room_pct, 1, false)} da equity` : 'sem equity') + ` · pico ${fmt.money(m.peak_equity)}` + (m.portfolio_stops ? ` · ${m.portfolio_stops} stop(s) de portfólio` : ''),
+            isNum(m.portfolio_stop_room_pct) && m.portfolio_stop_room_pct < 5 ? 'neg' : '', m.portfolio_stop_equity);
         const c = $('ring-center'), sp = pairs[ringSel];
         if (sp) {
             const deep = sp.legs.reduce((x, y) => (y.level > x.level ? y : x));

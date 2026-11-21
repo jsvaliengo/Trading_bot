@@ -61,6 +61,25 @@
 .fut b { color:var(--text-dim); font-weight:500; font-family:'IBM Plex Mono',ui-monospace,monospace; }
 .fut .liq b { color:var(--bad); }
 
+/* Martingale: o painelão do anel vira uma grade de cards no estilo dos KPIs — o anel num card próprio
+   à esquerda (2 linhas de altura) e cada métrica (drawdown, posições, não realizado, realizado hoje,
+   desde o início, stop de portfólio) num card ao lado. O main.js move a linha .status pra dentro. */
+.ring-card { display:grid; grid-template-columns:minmax(300px, 1fr) 2fr; gap:14px; align-items:stretch;
+    background:none; border:0; padding:0; border-radius:0; backdrop-filter:none; -webkit-backdrop-filter:none; }
+.ring-kpi { padding:16px 18px 18px; min-height:0; }
+.ring-kpi .ring-wrap { margin:8px auto 0; }
+.ring-card .status { flex:none; display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:14px; margin:0; overflow:visible; }
+.ring-card .status:where(:has(.tile[hidden])) { grid-template-columns:repeat(3, minmax(0,1fr)); }
+.ring-card .tile { background:var(--glass); border:1px solid var(--glass-border); border-radius:20px; padding:16px 18px; min-height:120px; backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px); gap:2px; }
+.ring-card .tile .tv { order:-1; font-family:'IBM Plex Mono',ui-monospace,monospace; font-size:26px; font-weight:600; letter-spacing:-.02em; }
+.ring-card .tile .tl { font-size:12.5px; color:var(--text-dim); font-weight:500; white-space:nowrap; }
+.ring-card .tile .tf { white-space:normal; }
+@media (max-width: 1100px) { .ring-card { grid-template-columns:1fr; } }
+@media (max-width: 760px) {
+    .ring-card .status { grid-template-columns:repeat(2, minmax(0,1fr)); gap:10px; }
+    .ring-card .tile { padding:12px 14px; min-height:100px; } .ring-card .tile .tv { font-size:22px; }
+}
+
 /* Páginas: uma visível por vez (showPage no main.js) */
 .page { display:flex; flex-direction:column; gap:14px; min-width:0; } /* min-width:0: tabela larga rola dentro do card, não alarga a página */
 /* Linhas de dois cards: mesma altura quando os dois estão abertos (o gráfico de equity estica pra preencher);

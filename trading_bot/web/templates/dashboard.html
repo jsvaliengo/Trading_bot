@@ -78,6 +78,7 @@
         <p class="empty page-empty" hidden>Sem dados do martingale para esta página neste processo.</p>
     <!-- 0. Anel: notional por par (segmentos), saldo no centro; toque num par mostra as pernas dele (só no martingale) -->
     <section class="card ring-card" id="ring-card" aria-label="Carteira" hidden>
+        <div class="kpi ring-kpi">
         <div class="ring-head">
             <span class="ring-state" id="ring-state">—</span>
             <small class="cs" id="ring-stop">—</small>
@@ -96,6 +97,7 @@
             </svg>
             <div class="ring-badges" id="ring-badges"></div>
             <div class="ring-center" id="ring-center" title="Voltar ao total"></div>
+        </div>
         </div>
     </section>
 
@@ -152,6 +154,11 @@
             <span class="tl">Desde o início</span>
             <b class="tv" id="st-net">—</b>
             <span class="tf" id="st-net-f">—</span>
+        </div>
+        <div class="tile" id="tile-stop" hidden>
+            <span class="tl">Stop de portfólio</span>
+            <b class="tv" id="st-stop">—</b>
+            <span class="tf" id="st-stop-f">—</span>
         </div>
     </section>
 
