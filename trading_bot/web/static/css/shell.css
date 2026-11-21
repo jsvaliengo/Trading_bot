@@ -13,7 +13,23 @@
 /* Menu lateral */
 .sidebar { position:sticky; top:0; align-self:flex-start; height:100vh; width:var(--side-w); flex:none; display:flex; flex-direction:column; gap:8px;
     padding:14px 12px calc(14px + env(safe-area-inset-bottom,0px)); background:var(--side-bg); color:var(--side-text); z-index:40; }
-.brand { display:flex; align-items:center; gap:10px; padding:6px 8px 14px; color:#fff; text-decoration:none; font-weight:600; letter-spacing:-.01em; }
+.brand-row { display:flex; align-items:center; gap:6px; padding-bottom:10px; }
+.brand { display:flex; align-items:center; gap:10px; padding:6px 8px; color:#fff; text-decoration:none; font-weight:600; letter-spacing:-.01em; min-width:0; flex:1; }
+.collapse-btn { display:none; width:28px; height:28px; border-radius:8px; border:1px solid rgba(255,255,255,.18); background:transparent; color:var(--side-text); font-size:16px; cursor:pointer; flex:none; }
+.collapse-btn:hover { color:#fff; background:rgba(255,255,255,.08); }
+/* Desktop: menu recolhido (só ícones, 72px; título dos links vira tooltip). O estado fica no localStorage. */
+@media (min-width: 1101px) {
+    .collapse-btn { display:inline-grid; place-items:center; }
+    body.nav-compact { --side-w:72px; }
+    body.nav-compact .brand-row { flex-direction:column; gap:8px; }
+    body.nav-compact .brand { padding:6px 0; justify-content:center; flex:none; }
+    body.nav-compact .brand-name, body.nav-compact .nav a span, body.nav-compact .nav a small, body.nav-compact .nav-sep, body.nav-compact .sidebar-foot .env { display:none; }
+    body.nav-compact .nav a { justify-content:center; padding:10px 0; }
+    body.nav-compact .nav a.soon { opacity:.35; }
+    body.nav-compact .sidebar { padding-left:10px; padding-right:10px; }
+    body.nav-compact .sidebar-foot { justify-content:center; padding:8px 0; }
+    body.nav-compact .collapse-btn { transform:rotate(180deg); }
+}
 .brand-mark { width:34px; height:34px; border-radius:10px; display:grid; place-items:center; background:linear-gradient(135deg,#8b5cf6,#5b3dc9); color:#fff; font-size:12px; font-weight:700; flex:none; }
 .nav { display:flex; flex-direction:column; gap:2px; }
 .nav a { display:flex; align-items:center; gap:12px; padding:10px 12px; border-radius:10px; color:inherit; text-decoration:none; font-size:13.5px; font-weight:500; min-height:44px; }
@@ -86,6 +102,69 @@
 /* Linha de status fora do martingale (6 tiles visíveis): entre 761 e 1180px o style.css põe 4 colunas e sobram 2
    buracos; 3 colunas fecham a conta. (No Donchian são 8 tiles: 4 colunas fecham.) */
 @media (max-width: 1180px) and (min-width: 761px) { .status:where(:has(.tile[hidden])) { grid-template-columns:repeat(3, minmax(0,1fr)); } }
+
+/* Posições do martingale: toolbar + grade de cards de perna. A régua de saída é o centro do card:
+   eixo mais alto, zona de lucro sombreada, rótulos ancorados nos marcadores em duas fileiras. */
+#legs-card > .ch { margin-bottom:8px; }
+#legs-card .pills { display:inline-flex; gap:4px; padding:4px; border-radius:12px; background:var(--bg-elevated); margin-bottom:14px; }
+#legs-card .pills .btn { border:0; background:transparent; border-radius:9px; padding:7px 14px; }
+#legs-card .pills .btn:hover:not(:disabled) { background:var(--accent-soft); }
+#legs-card .pills .btn-danger:hover:not(:disabled) { background:var(--bad-soft); }
+#mg-list { display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:14px; }
+#mg-list > :last-child:nth-child(odd) { grid-column:1 / -1; }   /* regra geral: sem buraco no fim da grade */
+#mg-list > .empty { grid-column:1 / -1; }
+.leg { background:var(--glass); border:1px solid var(--glass-border); border-radius:20px; padding:16px 18px 14px; display:flex; flex-direction:column; gap:12px; min-width:0;
+    box-shadow:inset 4px 0 0 var(--good); }
+.leg.short { box-shadow:inset 4px 0 0 var(--bad); }
+.leg.wait { box-shadow:inset 4px 0 0 var(--border-strong); gap:6px; }
+.leg-h { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+.leg-id { display:flex; align-items:center; gap:8px; min-width:0; }
+.leg-sym { font-size:17px; font-weight:600; letter-spacing:-.01em; text-decoration:none; display:flex; flex-direction:column; line-height:1.1; }
+.leg-sym small { font-size:10.5px; font-weight:400; color:var(--text-muted); }
+.leg-lev { font-family:'IBM Plex Mono',ui-monospace,monospace; font-size:11px; padding:1px 7px; border-radius:4px; background:var(--bg-elevated); color:var(--text-dim); }
+.leg-pnl { margin-left:auto; text-align:right; display:flex; flex-direction:column; line-height:1.1; }
+.leg-pnl b { font-family:'IBM Plex Mono',ui-monospace,monospace; font-size:24px; font-weight:600; letter-spacing:-.02em; }
+.leg-pnl small { font-size:11.5px; color:var(--text-muted); }
+.leg-pnl.pos b { color:var(--good); } .leg-pnl.neg b { color:var(--bad); }
+.leg .pr-close { grid-column:auto; justify-content:flex-end; }
+.leg-ladder { display:grid; grid-template-columns:auto 1fr auto; align-items:center; gap:10px; font-size:11.5px; color:var(--text-muted); }
+.leg-ladder .meter { margin:0; height:5px; }
+.leg-ladder .meter i { background:linear-gradient(90deg, #8b5cf6, #5b3dc9); }
+.leg-ladder b { color:var(--text); font-weight:600; }
+.leg-ruler { padding:26px 4px 4px; }
+.leg-ruler .ruler { height:32px; margin:0 2px; }
+.leg-ruler .ruler .line { top:15px; height:3px; }
+.leg-ruler .ruler .zone { top:12px; height:9px; border-radius:2px; opacity:.28; }
+.leg-ruler .ruler .zone.neg { opacity:.2; }
+.leg-ruler .ruler .mk { top:6px; height:21px; width:3px; }
+.leg-ruler .ruler .mk.mark { top:9px; width:15px; height:15px; border-width:3px; box-shadow:0 0 0 3px var(--accent-soft); }
+.leg-ruler .ruler .now { position:absolute; top:-22px; transform:translateX(-50%); font-family:'IBM Plex Mono',ui-monospace,monospace; font-size:11px; font-weight:600; color:var(--text); white-space:nowrap; background:var(--bg-elevated); padding:1px 7px; border-radius:999px; border:1px solid var(--border-strong); }
+.leg-ruler .ruler .edge { top:-4px; }
+.ruler-anchors { position:relative; height:58px; margin:0 2px; }
+.ruler-anchors .ra { position:absolute; transform:translateX(-50%); display:flex; flex-direction:column; align-items:center; line-height:1.15; white-space:nowrap; font-size:10.5px; color:var(--text-muted); }
+.ruler-anchors .ra::before { content:""; width:1px; height:6px; background:var(--border-strong); margin-bottom:2px; }
+.ruler-anchors .ra.r1 { top:28px; } .ruler-anchors .ra.r1::before { height:34px; margin-top:-28px; }
+.ruler-anchors .ra b { font-family:'IBM Plex Mono',ui-monospace,monospace; font-size:11.5px; color:var(--text-dim); font-weight:500; }
+.ruler-anchors .ra em { font-style:normal; font-weight:500; }
+.ruler-anchors .ra.stop em { color:var(--bad); } .ruler-anchors .ra.tp em { color:var(--good); } .ruler-anchors .ra.add em { color:var(--warn); } .ruler-anchors .ra.entry em { color:var(--text-dim); }
+.ruler-anchors .ra:first-child { transform:none; align-items:flex-start; } .ruler-anchors .ra:last-child { transform:translateX(-100%); align-items:flex-end; }
+.leg-ruler .gain { margin-top:2px; }
+.leg-grid { display:grid; grid-template-columns:repeat(4, minmax(0,1fr)); gap:8px 12px; border-top:1px solid var(--border); padding-top:10px; }
+.leg-grid div { display:flex; flex-direction:column; min-width:0; }
+.leg-grid dt { font-size:10.5px; color:var(--text-muted); }
+.leg-grid dd { font-family:'IBM Plex Mono',ui-monospace,monospace; font-size:12.5px; color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.leg-grid dd small { color:var(--text-muted); font-size:10.5px; }
+.leg-wait { font-size:13px; color:var(--text-dim); display:flex; flex-direction:column; gap:2px; }
+.leg-wait small { color:var(--text-muted); }
+@media (max-width: 1100px) { #mg-list { grid-template-columns:1fr; } #mg-list > :last-child:nth-child(odd) { grid-column:auto; } }
+@media (max-width: 600px) {
+    #legs-card .pills { display:flex; }
+    .leg { padding:14px 12px 12px; }
+    .leg-grid { grid-template-columns:repeat(2, minmax(0,1fr)); }
+    .leg-pnl b { font-size:20px; }
+    .leg .pr-close { grid-column:auto; width:100%; }
+    .ruler-anchors { height:64px; } .ruler-anchors .ra { font-size:10px; }
+}
 
 /* Páginas: uma visível por vez (showPage no main.js) */
 .page { display:flex; flex-direction:column; gap:14px; min-width:0; } /* min-width:0: tabela larga rola dentro do card, não alarga a página */

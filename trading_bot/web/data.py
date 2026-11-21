@@ -246,26 +246,17 @@ def _deploy_info() -> Dict[str, Any]:
 
 
 def collect_health(bot, summary: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Saúde operacional: WS de klines, user stream, erros do loop, deploy, uptime
-    e o motivo provável da pausa (o bot não guarda o motivo; inferido do estado)."""
+    """Saúde operacional: user stream, erros do loop, deploy, uptime e o motivo provável
+    da pausa (o bot não guarda o motivo; inferido do estado)."""
     summary = summary or {}
     exchange = getattr(bot, "exchange", None)
-    ws = user = None
-    for name, target in (("get_ws_stats", "ws"), ("get_user_stream_stats", "user")):
-        try:
-            value = getattr(exchange, name)() if exchange is not None and hasattr(exchange, name) else None
-        except Exception:
-            value = None
-        if target == "ws" and value:
-            streams = value.get("streams") or []
-            ws = {
-                "subscriptions": value.get("subscriptions", len(streams)),
-                "reconnects": value.get("reconnects", 0),
-                "recovering": sum(1 for s in streams if s.get("recovering")),
-                "max_age_seconds": max([_safe_float(s.get("age_seconds")) for s in streams] or [0.0]),
-            }
-        elif target == "user" and value:
-            user = {k: value.get(k) for k in ("started", "error_count", "restart_attempts", "last_message_age_seconds")}
+    user = None
+    try:
+        value = exchange.get_user_stream_stats() if exchange is not None and hasattr(exchange, "get_user_stream_stats") else None
+    except Exception:
+        value = None
+    if value:
+        user = {k: value.get(k) for k in ("started", "error_count", "restart_attempts", "last_message_age_seconds")}
     runtime: Dict[str, Any] = {}
     try:
         if hasattr(bot, "get_runtime_stats_report"):
@@ -293,7 +284,6 @@ def collect_health(bot, summary: Optional[Dict[str, Any]] = None) -> Dict[str, A
             reason = "pausa manual (dashboard ou Telegram)"
     deploy = _deploy_info()
     return {
-        "ws": ws,
         "user_stream": user,
         "runtime": runtime,
         "uptime_seconds": uptime,

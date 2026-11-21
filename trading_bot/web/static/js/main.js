@@ -435,35 +435,47 @@
                     ? gl(pct(z0) < 50 ? z0 : z1, `0 → ${mx}${inside ? ` · agora ${pnlAt(mk)}` : ''}`, pct(z0) < 50 ? 'l' : 'r')
                     : gl(z0, long ? mn : mx, 'l') + gl((z0 + z1) / 2, pnlAt((be + tp) / 2), 'c') + gl(z1, long ? mx : mn, 'r')}
             </div>`;
+            // Rótulos ancorados no próprio marcador (duas fileiras alternadas pra não se sobrepor), preço atual acima do eixo.
+            const anchored = marks.slice().sort((a, b) => a[0] - b[0]).map(([v, c, n], i) =>
+                `<span class="ra ${c} r${i % 2}" style="left:${at(v)}"><em>${arrow(v, n)}</em><b>${fmt.price(v)}</b><small>${pnlAt(v)}</small></span>`).join('');
             return `<div class="ruler" aria-hidden="true">
                 <div class="line"></div>${zone(worst, be, 'neg')}${zone(be, tp, '')}
                 ${marks.map(([v, c, n]) => `<span class="mk ${c}" style="left:${at(v)}" title="${n} ${fmt.price(v)} (${pnlAt(v)})"></span>`).join('')}
-                ${isNum(mk) ? `<span class="mk mark" style="left:${at(mk)}" title="preço ${fmt.price(mk)}"></span>` : ''}
+                ${isNum(mk) ? `<span class="mk mark" style="left:${at(mk)}" title="preço ${fmt.price(mk)}"></span><span class="now" style="left:${at(mk)}">${arrow(mk, 'preço')} ${fmt.price(mk)}</span>` : ''}
                 ${isNum(st) ? edge(st, `Stop ${fmt.price(st)}`) : ''}${isNum(mk) && !(isNum(st) && out(st) === out(mk)) ? edge(mk, `preço ${fmt.price(mk)}`) : ''}
-            </div>${gain}
-            <div class="ruler-l">
-                ${marks.sort((a, b) => a[0] - b[0]).map(([v, , n]) => `<span>${arrow(v, n)} <b>${fmt.price(v)}</b> <small>${pnlAt(v)}</small></span>`).join('')}
-                <span>${arrow(mk, 'preço')} <b>${fmt.price(mk)}</b></span>
-            </div>`;
+            </div>
+            <div class="ruler-anchors" aria-hidden="true">${anchored}</div>${gain}`;
         };
         const unreal = (positions || []).map(p => p.unrealized_pnl_usd).filter(isNum);
         $('legs-sum').textContent = unreal.length ? `não realizado ${fmt.money(sum(unreal), { signed: true })}` : '';
         const draining = new Set(m.draining || []);
+        // Um card por perna, como a tela de posições de uma exchange: cabeçalho (par, lado, alavancagem),
+        // P&L + ROE em destaque, escada N de 9 como barra, a régua de saída grande e a grade de métricas.
+        // Perna sem posição vira um card compacto "aguardando entrada" com a próxima adição e o alvo.
+        const kv = (k, v) => isNum(v) || typeof v === 'string' ? `<div><dt>${k}</dt><dd>${v}</dd></div>` : '';
         $('mg-list').innerHTML = (m.legs || []).map(l => {
             const pos = (positions || []).find(p => p.symbol === l.symbol && p.side === l.side);
             const age = pos && pos.entry_time ? (Date.now() - new Date(pos.entry_time).getTime()) / 36e5 : null;
-            return `<div class="prow">
-            <div class="prow-top">
-                <span class="psym"><button type="button" class="sym-btn" data-chart="${esc(l.symbol)}">${esc(l.symbol)}</button> <span class="side ${l.side === 'LONG' ? 'l' : 's'}">${esc(l.side)}</span>${draining.has(l.symbol) ? ' <span class="badge warn">drenando</span>' : ''}</span>
-                <span class="pr-pnl ${cls(l.unrealized_pnl_usd)}">${fmt.money(l.unrealized_pnl_usd, { signed: true })}${pos ? `<small>${fmt.pct(pos.unrealized_pnl_percent)}</small>` : ''}</span>
-                <span class="pr-r">${l.level} de ${l.max_levels}<small>ordens</small></span>
-                <span class="pr-meta">${isNum(l.quantity) ? `${fmt.price(l.quantity)} contratos · ${fmt.money(l.notional)}` : 'sem posição'}${age != null ? ` · ${fmt.dur(age)}` : ''}</span>
-                <span class="pr-meta">média <b>${fmt.price(l.avg_price)}</b></span>
+            const long = l.side === 'LONG', lev = pos && isNum(pos.leverage) ? `<span class="leg-lev">${pos.leverage}×</span>` : '';
+            const head = `<header class="leg-h">
+                <div class="leg-id"><button type="button" class="sym-btn leg-sym" data-chart="${esc(l.symbol)}">${esc(l.symbol.replace(/USDT$/, ''))}<small>USDT perp</small></button><span class="side ${long ? 'l' : 's'}">${esc(l.side)}</span>${lev}${draining.has(l.symbol) ? '<span class="badge warn">drenando</span>' : ''}</div>
+                ${pos ? `<div class="leg-pnl ${cls(l.unrealized_pnl_usd)}"><b>${fmt.money(l.unrealized_pnl_usd, { signed: true })}</b><small>${isNum(pos.roe_percent) ? `ROE ${fmt.pct(pos.roe_percent, 1)}` : fmt.pct(pos.unrealized_pnl_percent)}</small></div>` : ''}
                 ${pos ? closeCell(pos) : ''}
-            </div>
-            ${mgRuler(l) || `<div class="ruler-l"><span>próx. adição @ ${l.level >= l.max_levels ? '<b>teto da escada</b>' : away(l.next_add_price, l.next_add_pct)}</span><span>TP @ ${away(l.tp_price, l.tp_pct)}</span></div>`}
-            ${futLine(pos)}
-        </div>`; }).join('') || '<p class="empty">Nenhum par na escada (estratégia não iniciou ou nenhum par cabe na ordem base).</p>';
+            </header>`;
+            if (!pos) return `<article class="leg wait">${head}
+                <p class="leg-wait">Aguardando entrada<small>${l.level >= l.max_levels ? 'teto da escada' : `próx. adição @ ${away(l.next_add_price, l.next_add_pct)}`} · alvo @ ${away(l.tp_price, l.tp_pct)}</small></p>
+            </article>`;
+            const ladder = `<div class="leg-ladder"><span>Escada <b>${l.level} de ${l.max_levels}</b> ordens</span><div class="meter"><i style="width:${(l.level / l.max_levels * 100).toFixed(0)}%"></i></div><span>${l.level >= l.max_levels ? 'teto' : `próx. degrau @ ${away(l.next_add_price, l.next_add_pct)}`}</span></div>`;
+            const liq = isNum(pos.liquidation_price) ? `<b class="neg">${fmt.price(pos.liquidation_price)}</b>${isNum(pos.mark_price) && pos.mark_price > 0 ? ` <small>(${fmt.pct(Math.abs(pos.liquidation_price - pos.mark_price) / pos.mark_price * 100, 1, false)})</small>` : ''}` : '—';
+            const grid = `<dl class="leg-grid">
+                ${kv('Contratos', fmt.price(l.quantity))}${kv('Notional', fmt.money(l.notional))}${kv('Margem', fmt.money(pos.margin_usd))}
+                ${kv('Média', fmt.price(l.avg_price))}${kv('Marca', fmt.price(l.mark_price))}${kv('Liquidação', liq)}
+                ${kv('Alvo', away(l.tp_price, l.tp_pct))}${kv('Idade', fmt.dur(age))}
+            </dl>`;
+            return `<article class="leg ${long ? 'long' : 'short'}">${head}${ladder}
+                <div class="leg-ruler">${mgRuler(l) || `<div class="ruler-l"><span>próx. adição @ ${away(l.next_add_price, l.next_add_pct)}</span><span>TP @ ${away(l.tp_price, l.tp_pct)}</span></div>`}</div>
+                ${grid}
+            </article>`; }).join('') || '<p class="empty">Nenhum par na escada (estratégia não iniciou ou nenhum par cabe na ordem base).</p>';
     }
 
     // ───────── Anel da carteira ─────────
@@ -569,10 +581,6 @@
         if (!h) { $('health-list').innerHTML = '<li class="empty">sem dados</li>'; return; }
         let worst = 'ok';
         const bump = (st) => { if (st === 'bad' || (st === 'warn' && worst === 'ok')) worst = st; };
-        const ws = h.ws;
-        if (ws) { const st = ws.recovering > 0 ? 'warn' : (ws.max_age_seconds > 900 ? 'bad' : 'ok'); bump(st);
-            items.push([dot(st) + 'WebSocket de klines', `${ws.subscriptions} streams<small>${ws.reconnects} reconexões · ${ws.recovering} recuperando · último dado há ${fmt.ago(ws.max_age_seconds)}</small>`]); }
-        else items.push([dot('') + 'WebSocket de klines', 'desligado<small>klines via REST</small>']);
         const us = h.user_stream;
         if (us) { const st = !us.started ? 'bad' : (us.error_count > 0 ? 'warn' : 'ok'); bump(st);
             items.push([dot(st) + 'User stream (fills)', `${us.started ? 'ativo' : 'parado'}<small>${us.error_count || 0} erros · ${us.restart_attempts || 0} restarts · última msg há ${fmt.ago(us.last_message_age_seconds)}</small>`]); }
@@ -1130,6 +1138,11 @@
     }
     // página sem nenhum card visível (ex.: fora do martingale) mostra um aviso em vez de ficar em branco
     function pageEmpties() { $$('.page').forEach(p => { const e = p.querySelector('.page-empty'); if (e) e.hidden = Array.from(p.children).some(c => c !== e && !c.hidden); }); }
+    // Desktop: menu recolhido (só ícones); lembrado em localStorage. No celular o menu é off-canvas e isto não se aplica.
+    const NAV_KEY = 'tradingbot-nav';
+    function setCompact(on) { document.body.classList.toggle('nav-compact', on); $('sidebar-collapse').setAttribute('aria-pressed', String(on)); $('sidebar-collapse').title = $('sidebar-collapse').ariaLabel = on ? 'Expandir menu' : 'Recolher menu'; Object.values(charts).forEach(c => c.resize()); }
+    try { setCompact(localStorage.getItem(NAV_KEY) === 'compact'); } catch (e) { /* storage bloqueado */ }
+    $('sidebar-collapse').addEventListener('click', () => { const on = !document.body.classList.contains('nav-compact'); setCompact(on); try { localStorage.setItem(NAV_KEY, on ? 'compact' : 'full'); } catch (e) { /* storage bloqueado */ } });
     function closeSidebar() { document.body.classList.remove('nav-open'); $('sidebar-backdrop').hidden = true; $('sidebar-toggle').setAttribute('aria-expanded', 'false'); }
     $('sidebar-toggle').addEventListener('click', () => { const open = !document.body.classList.contains('nav-open'); document.body.classList.toggle('nav-open', open); $('sidebar-backdrop').hidden = !open; $('sidebar-toggle').setAttribute('aria-expanded', String(open)); });
     $('sidebar-backdrop').addEventListener('click', closeSidebar);

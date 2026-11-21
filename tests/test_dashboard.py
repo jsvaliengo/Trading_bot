@@ -327,6 +327,20 @@ def test_martingale_dashboard_is_ring_legs_sheet_pnl_health():
     assert "$('ft-card').hidden = $('pos-card').hidden = $('tile-equity').hidden = $('rdist-row').hidden = !!m" in js
     assert "$('eqperf-row').hidden" not in js   # Equity × Performance aparecem também no martingale
     assert "rc.appendChild(st)" in js and "$('mg-list').addEventListener('click', onClose)" in js
+    # pernas como cards: cabeçalho, escada em barra, régua com rótulos ancorados, grade de métricas; perna vazia compacta
+    for marker in ('class="leg-h"', 'class="leg-ladder"', 'class="ruler-anchors"', 'class="leg-grid"', 'class="leg wait"'):
+        assert marker in js, marker
+    assert "WebSocket de klines" not in js
+
+
+def test_collect_health_has_no_klines_ws_line():
+    """A linha "WebSocket de klines" saiu do card Saúde: o payload não traz mais `ws` e o badge
+    "tudo ok" não depende dela (get_ws_stats da exchange nem é consultado)."""
+    bot = _make_bot()
+    bot.exchange = SimpleNamespace(get_ws_stats=lambda: (_ for _ in ()).throw(AssertionError("não devia consultar")),
+                                   get_user_stream_stats=lambda: {"started": True, "error_count": 0})
+    h = dashboard_data.collect_health(bot, {"paused": False})
+    assert "ws" not in h and h["user_stream"]["started"] is True
 
 
 def test_ring_card_badges_and_legs_list():
@@ -409,6 +423,7 @@ def test_shell_sidebar_kpis_and_pages():
     _login(client)
     html = client.get("/").data.decode()
     assert 'id="sidebar"' in html and 'id="sidebar-toggle"' in html and 'id="sidebar-backdrop"' in html
+    assert 'id="sidebar-collapse"' in html and html.count('title="') >= 6   # recolher no desktop; tooltip nos itens
     pages = re.findall(r'<div class="page" data-page="([^"]+)"', html)
     assert pages == ["overview", "pnl", "sheet", "system"]
     nav = html.split('<nav class="nav">')[1].split("</nav>")[0]
@@ -428,7 +443,7 @@ def test_shell_sidebar_kpis_and_pages():
     assert client.get("/static/css/shell.css").status_code == 200
     js = open("trading_bot/web/static/js/main.js", encoding="utf-8").read()
     assert "function showPage(" in js and "function renderKpis(" in js and "hashchange" in js
-    assert "function futLine(" in js and js.count("${futLine(") == 2   # posições e pernas do martingale
+    assert "function futLine(" in js and js.count("${futLine(") == 1   # posições Donchian; as pernas do martingale têm a própria grade
 
 
 def test_live_always_carries_sheet_and_js_renders_it_without_runner():
