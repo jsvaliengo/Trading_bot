@@ -310,8 +310,8 @@ def test_static_version_vem_do_deploy_sha_lido_uma_vez_no_boot(monkeypatch, tmp_
 
 
 def test_martingale_dashboard_is_ring_legs_sheet_pnl_health():
-    """Sem card "Escada martingale"; no martingale o main.js esconde ft/pos/equity/perf/rdist/calendário
-    e move a linha de tiles pra dentro do anel (tile Equity some: o saldo já está no centro)."""
+    """Sem card "Escada martingale"; no martingale o main.js esconde ft/pos/rdist/calendário (Equity ×
+    Performance ficam) e move a linha de tiles pra dentro do anel (tile Equity some: o saldo já está no centro)."""
     from trading_bot.web.app import create_app
     app, _ = create_app(_make_bot())
     client = app.test_client()
@@ -324,7 +324,8 @@ def test_martingale_dashboard_is_ring_legs_sheet_pnl_health():
     assert html.index('id="rdist-row"') < html.index('id="cal-card"') < html.index("</section>", html.index('id="rdist-row"'))
     js = open("trading_bot/web/static/js/main.js", encoding="utf-8").read()
     assert "'tradingbot-open:' + d.id" in js
-    assert "$('ft-card').hidden = $('pos-card').hidden = $('tile-equity').hidden = $('eqperf-row').hidden = $('rdist-row').hidden = !!m" in js
+    assert "$('ft-card').hidden = $('pos-card').hidden = $('tile-equity').hidden = $('rdist-row').hidden = !!m" in js
+    assert "$('eqperf-row').hidden" not in js   # Equity × Performance aparecem também no martingale
     assert "rc.appendChild(st)" in js and "$('mg-list').addEventListener('click', onClose)" in js
 
 

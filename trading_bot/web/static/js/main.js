@@ -393,7 +393,8 @@
 
     // ───────── Escada martingale ─────────
     function renderMartingale(m, s, positions, sheet) {
-        $('ft-card').hidden = $('pos-card').hidden = $('tile-equity').hidden = $('eqperf-row').hidden = $('rdist-row').hidden = !!m; $('ring-card').hidden = $('legs-card').hidden = !m;
+        // Equity × Performance ficam em qualquer estratégia (abaixo do anel/pernas no martingale)
+        $('ft-card').hidden = $('pos-card').hidden = $('tile-equity').hidden = $('rdist-row').hidden = !!m; $('ring-card').hidden = $('legs-card').hidden = !m;
         $('trades-card').hidden = !!m;
         // a planilha é estática: renderiza sempre, com a faixa da equity atual (o runner só acrescenta score/pares ativos)
         $('sheet-card').hidden = !sheet; renderSheet(sheet, Object.keys((m && m.pairs) || {}));
