@@ -213,8 +213,8 @@ def test_index_shows_logged_user_and_platform_placeholders():
     _login(client)
     html = client.get("/").data.decode()
     assert 'id="profile"' in html and ">admin<" in html and "1 conta(s)" in html
-    nav = html.split('<nav class="nav">')[1].split("</nav>")[0]
-    assert "Contas" in nav and "Usuários" in nav and nav.count('aria-disabled="true"') == 2
+    nav = html.split('<nav class="nav" id="nav">')[1].split("</nav>")[0]
+    assert "Contas" in nav and "Usuários" in nav and nav.count('aria-disabled="true"') == 4   # + BTC e Histórico de fills (PR 2/3)
 
 
 # ---------- Rotas HTTP ----------
@@ -426,8 +426,12 @@ def test_shell_sidebar_kpis_and_pages():
     assert 'id="sidebar-collapse"' in html and html.count('title="') >= 6   # recolher no desktop; tooltip nos itens
     pages = re.findall(r'<div class="page" data-page="([^"]+)"', html)
     assert pages == ["overview", "pnl", "sheet", "system"]
-    nav = html.split('<nav class="nav">')[1].split("</nav>")[0]
-    assert re.findall(r'data-page="([^"]+)"', nav) == pages
+    nav = html.split('<nav class="nav" id="nav">')[1].split("</nav>")[0]
+    assert set(re.findall(r'data-page="([^"]+)"', nav)) == set(pages)
+    # grupos do menu (accordion) com subitens apontando para página/card existentes
+    assert re.findall(r'data-group="([^"]+)"', nav) == ["trading", "market", "reports", "system", "platform"]
+    for target in re.findall(r'data-target="([^"]+)"', nav):
+        assert f'id="{target}"' in html, target
     assert html.count('class="page" data-page="overview"') == 1 and ' hidden' in re.findall(r'<div class="page" data-page="pnl"[^>]*>', html)[0]
     for k in ("equity", "margin", "unreal", "pnl", "funding"):
         assert f'id="kpi-{k}"' in html, k
