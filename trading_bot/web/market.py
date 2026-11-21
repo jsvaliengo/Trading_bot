@@ -1,12 +1,13 @@
 """
-Mercado BTCUSDT perpétuo (aba Mercado › BTC): velas, ticker (último/marca/índice, 24h, open
-interest), funding atual/próximo/histórico e long/short ratio — tudo da API PÚBLICA da Bitget,
-sem assinatura e independente da exchange do bot. Cache de MARKET_TTL_S por timeframe pra não
-martelar a API com o poll do dashboard.
+Mercado de um perpétuo USDT-M (aba Mercado: pares ativos do bot + BTC): velas, ticker
+(último/marca/índice, 24h, open interest), funding atual/próximo/histórico e long/short ratio —
+tudo da API PÚBLICA da Bitget, sem assinatura e independente da exchange do bot. Cache de
+MARKET_TTL_S por (símbolo, timeframe) pra não martelar a API com o poll do dashboard.
 """
 
 from __future__ import annotations
 
+import re
 import threading
 import time
 from datetime import datetime, timezone
@@ -16,7 +17,7 @@ import requests
 
 from ..infra.bitget_client import BAR_MAP, BASE_URL
 
-SYMBOL = "BTCUSDT"
+SYMBOL_RE = re.compile(r"^[A-Z0-9]{2,20}USDT$")
 PRODUCT = "USDT-FUTURES"
 INTERVALS = ("1m", "5m", "15m", "1h", "4h", "1d")
 CANDLES = 200
@@ -24,7 +25,7 @@ MARKET_TTL_S = 10.0
 TIMEOUT_S = 8.0
 
 _lock = threading.Lock()
-_cache: Dict[str, Dict[str, Any]] = {}   # interval -> {"at": monotonic, "data": payload}
+_cache: Dict[tuple, Dict[str, Any]] = {}   # (symbol, interval) -> {"at": monotonic, "data": payload}
 
 
 def _f(v: Any, default: Optional[float] = None) -> Optional[float]:
@@ -57,15 +58,20 @@ def _optional(path: str, params: Dict[str, Any]) -> Any:
         return None
 
 
-def fetch_btc_market(interval: str = "1h") -> Dict[str, Any]:
-    """Payload da aba (velas + ticker + funding + long/short). Cache de 10s por timeframe;
-    velas são obrigatórias, o resto é opcional (None se a API falhar)."""
+def fetch_market(symbol: str, interval: str = "1h") -> Dict[str, Any]:
+    """Payload da aba (velas + ticker + funding + long/short) de um perpétuo USDT-M. Cache de 10s
+    por (símbolo, timeframe); velas são obrigatórias, o resto é opcional (None se a API falhar).
+    ValueError se o símbolo não tem o formato XXXUSDT (o chamador devolve 400)."""
+    symbol = str(symbol or "").upper()
+    if not SYMBOL_RE.match(symbol):
+        raise ValueError(f"símbolo inválido: {symbol!r}")
     interval = interval if interval in INTERVALS else "1h"
+    key = (symbol, interval)
     with _lock:
-        hit = _cache.get(interval)
+        hit = _cache.get(key)
         if hit and time.monotonic() - hit["at"] < MARKET_TTL_S:
             return hit["data"]
-    mkt = {"symbol": SYMBOL, "productType": PRODUCT}
+    mkt = {"symbol": symbol, "productType": PRODUCT}
     rows = _get("/api/v2/mix/market/candles", {**mkt, "granularity": BAR_MAP[interval], "limit": CANDLES}) or []
     candles: List[Dict[str, Any]] = sorted(
         ({"t": int(k[0]) // 1000, "o": _f(k[1]), "h": _f(k[2]), "l": _f(k[3]), "c": _f(k[4]), "v": _f(k[5], 0.0)} for k in rows),
@@ -79,7 +85,7 @@ def fetch_btc_market(interval: str = "1h") -> Dict[str, Any]:
     last, mark, index = _f(tk.get("lastPr")), _f(tk.get("markPrice")), _f(tk.get("indexPrice"))
     oi_btc = _f(oi[0].get("size")) if oi else _f(tk.get("holdingAmount"))
     data = {
-        "symbol": SYMBOL, "interval": interval, "candles": candles,
+        "symbol": symbol, "interval": interval, "candles": candles,
         "ticker": {
             "last": last, "mark": mark, "index": index,
             "basis_pct": (mark - index) / index * 100.0 if mark and index else None,   # marca − índice: prêmio do perpétuo
@@ -107,5 +113,5 @@ def fetch_btc_market(interval: str = "1h") -> Dict[str, Any]:
         "fetched_at": datetime.now(timezone.utc).isoformat(),
     }
     with _lock:
-        _cache[interval] = {"at": time.monotonic(), "data": data}
+        _cache[key] = {"at": time.monotonic(), "data": data}
     return data

@@ -906,6 +906,7 @@
         renderPerf(ft);
         renderPositions(pos);
         renderMartingale(l.martingale, s, pos, l.sheet);
+        renderMarketPairs(l);
         renderEngine(e, pos);
         renderHealth(h, s);
         renderRHist(ft.r_histogram);
@@ -1075,9 +1076,24 @@
     setInterval(() => { left -= 1; if (left <= 0) { reqRefresh(); left = REFRESH; } if (state.live) renderNext(); }, 1000);
     setInterval(fetchHistory, HISTORY_INTERVAL);
 
-    // ───────── Mercado › BTC (API pública da Bitget via /api/market/btc) ─────────
+    // ───────── Mercado (API pública da Bitget via /api/market/<par>) ─────────
+    // Par = chips com os pares ativos do martingale (mesma fonte do anel) + BTC como referência; padrão = 1º par ativo.
     // Velas em lightweight-charts (Chart.js não tem candlestick); funding e long/short em Chart.js. Só busca com a página visível.
-    const mk = { tf: '1h', chart: null, series: null, timer: null, data: null };
+    const mk = { tf: '1h', sym: null, pairs: [], chart: null, series: null, timer: null, data: null };
+    function renderMarketPairs(live) {
+        const active = Object.keys((live && live.martingale && live.martingale.pairs) || {});
+        const pairs = [...active, 'BTCUSDT'].filter((s, i, a) => a.indexOf(s) === i);
+        const changed = pairs.join() !== mk.pairs.join(); mk.pairs = pairs;
+        if (!mk.sym || !pairs.includes(mk.sym)) { mk.sym = pairs[0]; if (mk.timer) fetchMarket(); }   // par ativo mudou: segue o novo
+        if (!changed && $('mk-pairs').children.length) return;
+        $('mk-pairs').innerHTML = pairs.map(s => `<button class="chip${s === mk.sym ? ' on' : ''}" role="tab" data-sym="${esc(s)}" aria-selected="${s === mk.sym}">${esc(s.replace(/USDT$/, ''))}${active.includes(s) ? '' : ' <small>ref.</small>'}</button>`).join('');
+    }
+    $('mk-pairs').addEventListener('click', (e) => {
+        const b = e.target.closest('[data-sym]'); if (!b || b.dataset.sym === mk.sym) return;
+        mk.sym = b.dataset.sym; $$('#mk-pairs .chip').forEach(c => { const on = c === b; c.classList.toggle('on', on); c.setAttribute('aria-selected', String(on)); });
+        if (mk.series) mk.series.setData([]);
+        fetchMarket();
+    });
     const big = (v) => !isNum(v) ? '—' : v >= 1e9 ? (v / 1e9).toFixed(2).replace('.', ',') + ' bi' : v >= 1e6 ? (v / 1e6).toFixed(1).replace('.', ',') + ' mi' : fmt.num(v, 0);
     function mkChart() {
         if (mk.chart || typeof LightweightCharts === 'undefined') return;
@@ -1089,7 +1105,10 @@
     }
     function renderMarket(d) {
         mk.data = d; const t = d.ticker || {}, f = d.funding || {}, ls = d.long_short, p = palette();
+        if (d.symbol !== mk.sym) return;   // resposta atrasada de outro par
         $('mk-error').hidden = true;
+        const base = String(d.symbol).replace(/USDT$/, '');
+        $('mk-h').textContent = `${d.symbol} perpétuo`; $('mk-last-l').textContent = `${d.symbol} · último`;
         $('mk-last').textContent = fmt.price(t.last); $('mk-last').className = 'kpi-v ' + cls(t.change_24h_pct);
         $('mk-last-s').textContent = `${fmt.pct(t.change_24h_pct)} em 24h · vol ${big(t.volume_usdt_24h)} USDT`;
         $('mk-range').innerHTML = `<span class="neg">mín ${esc(fmt.price(t.low_24h))}</span><span class="pos">máx ${esc(fmt.price(t.high_24h))}</span>`;
@@ -1099,7 +1118,7 @@
         const left = f.next_at ? (new Date(f.next_at).getTime() - Date.now()) / 1000 : null;
         $('mk-funding-s').textContent = `${sgn(f.rate_pct) > 0 ? 'long paga short' : sgn(f.rate_pct) < 0 ? 'short paga long' : 'neutro'} · próximo em ${isNum(left) && left > 0 ? fmt.clock(left) : '—'} (a cada ${f.interval_hours || 8}h)`;
         const fb = $('mk-funding-bar'); fb.firstElementChild.style.width = `${Math.min(100, Math.abs(f.rate_pct || 0) / 0.1 * 100)}%`; fb.className = 'kpi-bar ' + (sgn(f.rate_pct) < 0 ? 'fund-neg' : 'fund-pos');
-        $('mk-oi').textContent = isNum(t.open_interest_btc) ? `${fmt.num(t.open_interest_btc, 0)} BTC` : '—';
+        $('mk-oi').textContent = isNum(t.open_interest_btc) ? `${big(t.open_interest_btc)} ${base}` : '—';
         $('mk-oi-s').textContent = isNum(t.open_interest_usdt) ? `≈ ${big(t.open_interest_usdt)} USDT em aberto` : 'sem dado';
         if (ls) {
             $('mk-ls').textContent = `${fmt.pct(ls.accounts_long_pct, 1, false)} long`;
@@ -1124,7 +1143,8 @@
     }
     async function fetchMarket() {
         try {
-            const r = await fetch(`/api/market/btc?interval=${mk.tf}`, { credentials: 'include' });
+            if (!mk.sym) renderMarketPairs(state.live);
+            const r = await fetch(`/api/market/${encodeURIComponent(mk.sym)}?interval=${mk.tf}`, { credentials: 'include' });
             const d = await r.json(); if (!r.ok || d.ok === false) throw new Error(d.error || ('HTTP ' + r.status));
             renderMarket(d);
         } catch (err) { console.warn('mercado BTC falhou', err); const e = $('mk-error'); e.textContent = 'Bitget não respondeu: ' + err.message; e.hidden = false; }

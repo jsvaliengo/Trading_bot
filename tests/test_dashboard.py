@@ -255,10 +255,12 @@ def test_market_btc_route_parses_public_bitget_payloads(_bitget_public):
     from trading_bot.web.app import create_app
     app, _ = create_app(_make_bot())
     client = app.test_client()
-    assert client.get("/api/market/btc").status_code == 401   # exige login/Basic como o resto de /api
+    assert client.get("/api/market/BTCUSDT").status_code == 401   # exige login/Basic como o resto de /api
     _login(client)
-    d = client.get("/api/market/btc?interval=4h").get_json()
-    assert d["interval"] == "4h" and [c["t"] for c in d["candles"]] == [1795255200, 1795258800]   # ascendente, em segundos
+    assert client.get("/api/market/btc").status_code == 400 and client.get("/api/market/ADA-USDT").status_code == 400
+    assert client.get("/api/market/ETHBTC").status_code == 400   # só perpétuos USDT-M
+    d = client.get("/api/market/BTCUSDT?interval=4h").get_json()
+    assert d["symbol"] == "BTCUSDT" and d["interval"] == "4h" and [c["t"] for c in d["candles"]] == [1795255200, 1795258800]   # ascendente, em segundos
     assert d["candles"][1] == {"t": 1795258800, "o": 57905.3, "h": 58625.4, "l": 57834.2, "c": 58184.1, "v": 2204.9}
     t = d["ticker"]
     assert t["last"] == 58314.6 and t["change_24h_pct"] == pytest.approx(-5.099) and t["open_interest_btc"] == 33826.58
@@ -269,16 +271,20 @@ def test_market_btc_route_parses_public_bitget_payloads(_bitget_public):
     ls = d["long_short"]
     assert ls["accounts_long_pct"] == pytest.approx(81.36) and ls["positions_ratio"] == 0.9904 and len(ls["history"]) == 1
     paths = [p for p, _ in _bitget_public]
-    assert paths[0] == "/api/v2/mix/market/candles" and _bitget_public[0][1]["granularity"] == "4H"
+    assert paths[0] == "/api/v2/mix/market/candles" and _bitget_public[0][1] == {"symbol": "BTCUSDT", "productType": "USDT-FUTURES", "granularity": "4H", "limit": 200}
     assert all("ACCESS-KEY" not in str(c) for c in _bitget_public)   # público: sem assinatura
 
 
-def test_market_btc_caches_per_interval_and_defaults_interval(_bitget_public):
+def test_market_caches_per_symbol_and_interval(_bitget_public):
     from trading_bot.web import market
-    a = market.fetch_btc_market("1h"); n = len(_bitget_public)
-    assert market.fetch_btc_market("1h") is a and len(_bitget_public) == n           # cache: nenhuma chamada nova
-    assert market.fetch_btc_market("xx")["interval"] == "1h" and len(_bitget_public) == n   # intervalo inválido → 1h (cacheado)
-    market.fetch_btc_market("1m"); assert len(_bitget_public) > n                       # outro timeframe busca de novo
+    a = market.fetch_market("ADAUSDT", "1h"); n = len(_bitget_public)
+    assert a["symbol"] == "ADAUSDT" and all(p[1].get("symbol") == "ADAUSDT" for p in _bitget_public)
+    assert market.fetch_market("adausdt", "1h") is a and len(_bitget_public) == n           # cache (símbolo normalizado)
+    assert market.fetch_market("ADAUSDT", "xx")["interval"] == "1h" and len(_bitget_public) == n   # intervalo inválido → 1h
+    market.fetch_market("ADAUSDT", "1m"); m = len(_bitget_public); assert m > n            # outro timeframe busca de novo
+    market.fetch_market("BTCUSDT", "1h"); assert len(_bitget_public) > m                    # outro par busca de novo
+    with pytest.raises(ValueError):
+        market.fetch_market("BTC", "1h")
 
 
 def test_market_btc_optional_parts_fail_soft_and_candles_fail_hard(_bitget_public, monkeypatch):
@@ -286,13 +292,13 @@ def test_market_btc_optional_parts_fail_soft_and_candles_fail_hard(_bitget_publi
     from trading_bot.web.app import create_app
     monkeypatch.setitem(_MK_ROUTES, "/api/v2/mix/market/account-long-short", None)
     monkeypatch.delitem(_MK_ROUTES, "/api/v2/mix/market/position-long-short")
-    d = market.fetch_btc_market("1h")
+    d = market.fetch_market("BTCUSDT", "1h")
     assert d["long_short"] is None and d["ticker"]["last"] == 58314.6
     monkeypatch.delitem(_MK_ROUTES, "/api/v2/mix/market/candles")
     monkeypatch.setattr(market, "_cache", {})
     app, _ = create_app(_make_bot())
     client = app.test_client(); _login(client)
-    r = client.get("/api/market/btc")
+    r = client.get("/api/market/BTCUSDT")
     assert r.status_code == 502 and r.get_json()["ok"] is False
 
 
@@ -301,12 +307,14 @@ def test_market_page_and_menu_item_are_wired():
     app, _ = create_app(_make_bot())
     client = app.test_client(); _login(client)
     html = client.get("/").data.decode()
-    assert '<a href="#market" data-page="market"><span>BTC</span></a>' in html
-    for i in ("mk-chart", "mk-tf", "mk-funding-chart", "mk-ls-chart", "mk-last", "mk-mark", "mk-funding", "mk-oi", "mk-ls"):
+    assert '<a href="#market" data-page="market"><span>Par ativo</span></a>' in html
+    for i in ("mk-pairs", "mk-chart", "mk-tf", "mk-funding-chart", "mk-ls-chart", "mk-last", "mk-mark", "mk-funding", "mk-oi", "mk-ls"):
         assert f'id="{i}"' in html, i
     assert "lightweight-charts@4.2.0" in html
     js = open("trading_bot/web/static/js/main.js", encoding="utf-8").read()
-    assert "function renderMarket(" in js and "/api/market/btc?interval=" in js and "marketVisible(name === 'market')" in js
+    assert "function renderMarket(" in js and "/api/market/${encodeURIComponent(mk.sym)}?interval=" in js and "marketVisible(name === 'market')" in js
+    # chips de par: pares ativos do martingale (mesma fonte do anel) + BTC de referência; padrão = 1º ativo
+    assert "function renderMarketPairs(" in js and "[...active, 'BTCUSDT']" in js and "renderMarketPairs(l);" in js
 
 
 # ---------- Rotas HTTP ----------
