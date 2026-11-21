@@ -447,6 +447,43 @@ class BitgetConnection:
             logger.warning(f"⚠️ Falha ao cancelar ordens abertas de {symbol}: {e}")
             return False
 
+    # ---- fills da conta (dashboard: Relatórios › Histórico de fills) ----
+    def get_fills(self, symbol: Optional[str] = None, start_ms: Optional[int] = None, end_ms: Optional[int] = None,
+                  limit: int = 500) -> List[Dict[str, Any]]:
+        """Execuções da conta (/api/v2/mix/order/fills), mais recente primeiro, paginadas por idLessThan.
+        Cada fill: time, symbol, side (buy/sell), action (open/close), position_side (LONG/SHORT), price, qty,
+        notional, fee (negativo = pago), fee_coin, profit (realizado no fill), role (taker/maker), ids."""
+        params: Dict[str, Any] = {"productType": self.product_type, "limit": PAGE}
+        if symbol:
+            params["symbol"] = self.to_bitget(symbol)
+        if start_ms:
+            params["startTime"] = int(start_ms)
+        if end_ms:
+            params["endTime"] = int(end_ms)
+        rows: List[Dict[str, Any]] = []
+        while len(rows) < limit:
+            data = self._request("GET", "/api/v2/mix/order/fills", params) or {}
+            page = data.get("fillList") or []
+            rows.extend(page)
+            if len(page) < PAGE or not data.get("endId"):
+                break
+            params["idLessThan"] = data["endId"]
+        out = []
+        for r in rows[:limit]:
+            side, trade_side = str(r.get("side") or "").lower(), str(r.get("tradeSide") or "").lower()
+            action = "close" if "close" in trade_side else "open"
+            # hedge: abre LONG comprando / SHORT vendendo; fecha LONG vendendo / SHORT comprando
+            position_side = "LONG" if (side == "buy") == (action == "open") else "SHORT"
+            fee = sum(_f(d.get("totalFee")) for d in (r.get("feeDetail") or []))
+            fee_coin = next((d.get("feeCoin") for d in (r.get("feeDetail") or []) if d.get("feeCoin")), self.margin_coin)
+            qty, price = _f(r.get("baseVolume")), _f(r.get("price"))
+            out.append({"time": int(r.get("cTime") or 0), "symbol": self.from_bitget(r.get("symbol") or ""),
+                        "side": side, "action": action, "position_side": position_side, "price": price, "qty": qty,
+                        "notional": _f(r.get("quoteVolume")) or qty * price, "fee": fee, "fee_coin": fee_coin,
+                        "profit": _f(r.get("profit")), "role": str(r.get("tradeScope") or ""),
+                        "order_id": str(r.get("orderId") or ""), "trade_id": str(r.get("tradeId") or "")})
+        return out
+
     # ---- income / P&L (bills) ----
     def _bills(self, start_ms: Optional[int], limit: int) -> List[Dict[str, Any]]:
         """Bills de start_ms até agora em janelas de 30 dias (limite da API), paginadas por

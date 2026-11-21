@@ -1158,6 +1158,39 @@
     function marketVisible(on) { clearInterval(mk.timer); mk.timer = null; if (on) { fetchMarket(); mk.timer = setInterval(fetchMarket, 15000); } }
     $$('#mk-tf .chip').forEach(b => b.addEventListener('click', () => { mk.tf = b.dataset.tf; fetchMarket(); }));
 
+    // ───────── Relatórios › Histórico de fills (/api/fills: execuções da conta na exchange) ─────────
+    const fl = { page: 1, symbol: '', side: '', from: '', to: '', loaded: false };
+    const flQuery = (extra) => { const q = new URLSearchParams(); if (fl.symbol) q.set('symbol', fl.symbol); if (fl.side) q.set('side', fl.side); if (fl.from) q.set('from', fl.from); if (fl.to) q.set('to', fl.to); Object.entries(extra || {}).forEach(([k, v]) => q.set(k, v)); return q.toString(); };
+    async function fetchFills() {
+        const tb = $('fills-table').querySelector('tbody'), err = $('fills-error');
+        try {
+            const r = await fetch(`/api/fills?${flQuery({ page: fl.page, per_page: 50 })}`, { credentials: 'include' });
+            const d = await r.json(); if (!r.ok || d.ok === false) throw new Error(d.error || ('HTTP ' + r.status));
+            err.hidden = true; fl.loaded = true;
+            const sel = $('fl-symbol'), cur = sel.value;
+            sel.innerHTML = '<option value="">todos</option>' + (d.symbols || []).map(s => `<option value="${esc(s)}">${esc(s)}</option>`).join(''); sel.value = cur;
+            $('fl-from').value = d.from; $('fl-to').value = d.to;
+            $('fills-stats').innerHTML = `<span><b>${d.total}</b> fill(s) de ${fmt.day(d.from)} a ${fmt.day(d.to)}</span><span>fees <b class="${cls(d.fee_total)}">${esc(fmt.money(d.fee_total, { signed: true }))}</b></span><span>P&L realizado <b class="${cls(d.profit_total)}">${esc(fmt.money(d.profit_total, { signed: true }))}</b></span><span><b>${d.matched}</b> batem com trades do bot</span>`;
+            $('fills-csv').href = `/api/fills?${flQuery({ format: 'csv' })}`;
+            tb.innerHTML = (d.fills || []).map(f => `<tr>
+                <td>${esc(fmt.dateTime(new Date(f.time).toISOString()))}</td><td class="sans"><b>${esc(f.symbol)}</b></td>
+                <td><span class="side ${f.position_side === 'LONG' ? 'l' : 's'}">${esc(f.position_side)}</span></td>
+                <td class="sans act ${esc(f.action)}">${f.action === 'open' ? 'abre' : 'fecha'} <small>(${esc(f.side)})</small></td>
+                <td class="r">${esc(fmt.price(f.price))}</td><td class="r">${esc(fmt.price(f.qty))}</td><td class="r">${esc(fmt.money(f.notional))}</td>
+                <td class="r ${cls(f.fee)}">${esc(fmt.money(f.fee, { signed: true }))}${f.fee_coin && f.fee_coin !== 'USDT' ? ` <small>${esc(f.fee_coin)}</small>` : ''}</td>
+                <td class="r ${cls(f.profit)}">${f.action === 'close' ? esc(fmt.money(f.profit, { signed: true })) : '—'}</td>
+                <td class="sans">${esc(f.role || '—')}</td>
+                <td class="sans">${f.bot_trade_id != null ? `<span class="bot">bot #${esc(f.bot_trade_id)}</span>` : '<span class="nobot">manual / fora do bot</span>'}</td>
+            </tr>`).join('') || '<tr><td colspan="11" class="empty sans">Nenhum fill no período.</td></tr>';
+            $('fills-pager').hidden = d.pages <= 1; $('fills-page').textContent = `${d.page} / ${d.pages}`;
+            $('fills-prev').disabled = d.page <= 1; $('fills-next').disabled = d.page >= d.pages;
+        } catch (e) { err.textContent = 'Fills indisponíveis: ' + e.message; err.hidden = false; tb.innerHTML = '<tr><td colspan="11" class="empty sans">—</td></tr>'; }
+    }
+    $('fills-filters').addEventListener('submit', (e) => { e.preventDefault(); fl.symbol = $('fl-symbol').value; fl.side = $('fl-side').value; fl.from = $('fl-from').value; fl.to = $('fl-to').value; fl.page = 1; fetchFills(); });
+    $('fills-prev').addEventListener('click', () => { fl.page -= 1; fetchFills(); });
+    $('fills-next').addEventListener('click', () => { fl.page += 1; fetchFills(); });
+    function fillsVisible(on) { if (on && !fl.loaded) fetchFills(); }
+
     // ───────── Shell: KPIs com sparkline, páginas do menu, menu off-canvas, tema ─────────
     function sparkline(id, values, color) {
         const el = $(id); if (!el || typeof Chart === 'undefined') return;
@@ -1229,6 +1262,7 @@
         Object.values(charts).forEach(c => c.resize());   // canvas em página oculta nasce com 0px
         closeSidebar();
         marketVisible(name === 'market');
+        fillsVisible(name === 'fills');
         if (el && !el.hidden) el.scrollIntoView({ block: 'start' });
     }
     // página sem nenhum card visível (ex.: fora do martingale) mostra um aviso em vez de ficar em branco

@@ -18,7 +18,7 @@ import os
 import secrets
 from datetime import timedelta
 
-from flask import Flask, abort, jsonify, redirect, render_template, request, session, url_for
+from flask import Flask, Response, abort, jsonify, redirect, render_template, request, session, url_for
 from flask_socketio import SocketIO
 
 from ..core.config import config, exchange_label
@@ -235,6 +235,28 @@ def _register_routes(app: Flask, socketio: SocketIO) -> None:
         except Exception as exc:
             logger.warning(f"Mercado {symbol} indisponível: {exc}")
             return jsonify({"ok": False, "error": "Bitget não respondeu"}), 502
+
+    @app.route("/api/fills")
+    @login_required
+    def fills():
+        from .fills import collect_fills, fills_csv
+        bot = account_bot()
+        try:
+            account_id = int(request.args.get("account") or 0) or next(iter(app.config["BOTS"]))
+            data = collect_fills(bot, account_id, request.args)
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        except LookupError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 501
+        except Exception as exc:
+            logger.warning(f"Fills indisponíveis: {exc}")
+            return jsonify({"ok": False, "error": "a exchange não respondeu"}), 502
+        everything = data.pop("all")
+        if request.args.get("format") == "csv":
+            body = fills_csv(everything)
+            return Response(body, mimetype="text/csv",
+                            headers={"Content-Disposition": f"attachment; filename=fills_{data['from']}_{data['to']}.csv"})
+        return jsonify(data)
 
     @app.route("/api/pnl_report")
     @login_required
