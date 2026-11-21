@@ -277,12 +277,16 @@ def test_market_btc_route_parses_public_bitget_payloads(_bitget_public):
 
 def test_market_caches_per_symbol_and_interval(_bitget_public):
     from trading_bot.web import market
-    a = market.fetch_market("ADAUSDT", "1h"); n = len(_bitget_public)
+    a = market.fetch_market("ADAUSDT", "1h")
+    n = len(_bitget_public)
     assert a["symbol"] == "ADAUSDT" and all(p[1].get("symbol") == "ADAUSDT" for p in _bitget_public)
     assert market.fetch_market("adausdt", "1h") is a and len(_bitget_public) == n           # cache (símbolo normalizado)
     assert market.fetch_market("ADAUSDT", "xx")["interval"] == "1h" and len(_bitget_public) == n   # intervalo inválido → 1h
-    market.fetch_market("ADAUSDT", "1m"); m = len(_bitget_public); assert m > n            # outro timeframe busca de novo
-    market.fetch_market("BTCUSDT", "1h"); assert len(_bitget_public) > m                    # outro par busca de novo
+    market.fetch_market("ADAUSDT", "1m")
+    m = len(_bitget_public)
+    assert m > n                                                                             # outro timeframe busca de novo
+    market.fetch_market("BTCUSDT", "1h")
+    assert len(_bitget_public) > m                                                           # outro par busca de novo
     with pytest.raises(ValueError):
         market.fetch_market("BTC", "1h")
 
@@ -297,7 +301,8 @@ def test_market_btc_optional_parts_fail_soft_and_candles_fail_hard(_bitget_publi
     monkeypatch.delitem(_MK_ROUTES, "/api/v2/mix/market/candles")
     monkeypatch.setattr(market, "_cache", {})
     app, _ = create_app(_make_bot())
-    client = app.test_client(); _login(client)
+    client = app.test_client()
+    _login(client)
     r = client.get("/api/market/BTCUSDT")
     assert r.status_code == 502 and r.get_json()["ok"] is False
 
@@ -305,7 +310,8 @@ def test_market_btc_optional_parts_fail_soft_and_candles_fail_hard(_bitget_publi
 def test_market_page_and_menu_item_are_wired():
     from trading_bot.web.app import create_app
     app, _ = create_app(_make_bot())
-    client = app.test_client(); _login(client)
+    client = app.test_client()
+    _login(client)
     html = client.get("/").data.decode()
     assert '<a href="#market" data-page="market"><span>Par ativo</span></a>' in html
     for i in ("mk-pairs", "mk-chart", "mk-tf", "mk-funding-chart", "mk-ls-chart", "mk-last", "mk-mark", "mk-funding", "mk-oi", "mk-ls"):
