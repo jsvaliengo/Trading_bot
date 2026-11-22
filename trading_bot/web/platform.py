@@ -40,7 +40,11 @@ CREATE TABLE IF NOT EXISTS accounts (
     api_key_enc TEXT NOT NULL DEFAULT '',
     api_secret_enc TEXT NOT NULL DEFAULT '',
     passphrase_enc TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1,
+    last_check_at TEXT,
+    last_check_ok INTEGER,
+    last_check_msg TEXT NOT NULL DEFAULT ''
 );
 """
 
@@ -71,6 +75,17 @@ class PlatformStore:
             if "active" not in cols:
                 self._conn.execute("ALTER TABLE users ADD COLUMN active INTEGER NOT NULL DEFAULT 1")
             self._conn.execute("UPDATE users SET role = 'admin' WHERE id = 1")
+            acols = {r["name"] for r in self._conn.execute("PRAGMA table_info(accounts)")}
+            for col, ddl in (("active", "INTEGER NOT NULL DEFAULT 1"), ("last_check_at", "TEXT"),
+                             ("last_check_ok", "INTEGER"), ("last_check_msg", "TEXT NOT NULL DEFAULT ''")):
+                if col not in acols:
+                    self._conn.execute(f"ALTER TABLE accounts ADD COLUMN {col} {ddl}")
+
+    def _select(self, sql: str, params: tuple = ()) -> list:
+        """Leitura serializada: a conexão é uma só (check_same_thread=False) e o Flask atende em threads —
+        duas consultas em paralelo no mesmo cursor devolviam None uma pra outra (401 aleatório no painel)."""
+        with self._lock:
+            return self._conn.execute(sql, params).fetchall()
 
     # ---- cifra ----
     def encrypt(self, plain: str) -> str:
@@ -103,17 +118,16 @@ class PlatformStore:
             return user_id
 
     def user_by_name(self, username: str) -> Optional[Dict[str, Any]]:
-        row = self._conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
-        return dict(row) if row else None
+        rows = self._select("SELECT * FROM users WHERE username = ?", (username,))
+        return dict(rows[0]) if rows else None
 
     def user(self, user_id: int) -> Optional[Dict[str, Any]]:
         """Usuário sem o hash; None se não existe."""
-        row = self._conn.execute(
-            "SELECT id, username, display_name, created_at, role, active FROM users WHERE id = ?", (user_id,)).fetchone()
-        return dict(row) if row else None
+        rows = self._select("SELECT id, username, display_name, created_at, role, active FROM users WHERE id = ?", (user_id,))
+        return dict(rows[0]) if rows else None
 
     def users(self) -> List[Dict[str, Any]]:
-        rows = self._conn.execute(
+        rows = self._select(
             "SELECT u.id, u.username, u.display_name, u.created_at, u.role, u.active,"
             " (SELECT COUNT(*) FROM accounts a WHERE a.user_id = u.id) AS accounts FROM users u ORDER BY u.id")
         return [dict(r) for r in rows]
@@ -126,8 +140,8 @@ class PlatformStore:
         return {k: v for k, v in row.items() if k != "password_hash"}
 
     def verify_password(self, user_id: int, password: str) -> bool:
-        row = self._conn.execute("SELECT password_hash FROM users WHERE id = ?", (user_id,)).fetchone()
-        return bool(row) and check_password_hash(row["password_hash"], password)
+        rows = self._select("SELECT password_hash FROM users WHERE id = ?", (user_id,))
+        return bool(rows) and check_password_hash(rows[0]["password_hash"], password)
 
     def set_password(self, user_id: int, password: str) -> None:
         with self._lock, self._conn:
@@ -156,21 +170,57 @@ class PlatformStore:
             )
             return int(cur.lastrowid)
 
+    _ACCOUNT_COLS = ("a.id, a.user_id, a.exchange, a.label, a.created_at, a.active, a.last_check_at, a.last_check_ok,"
+                     " a.last_check_msg, a.api_key_enc, u.username AS owner")
+
+    def _account_row(self, row) -> Dict[str, Any]:
+        """Linha pública da conta: nunca secret/passphrase; da key só os 4 últimos caracteres."""
+        key = self.decrypt(row["api_key_enc"])
+        out = {k: row[k] for k in row.keys() if k != "api_key_enc"}
+        out.update(active=bool(row["active"]), has_keys=bool(key), key_last4=key[-4:] if key else "",
+                   last_check_ok=None if row["last_check_ok"] is None else bool(row["last_check_ok"]))
+        return out
+
     def account(self, account_id: int) -> Optional[Dict[str, Any]]:
-        row = self._conn.execute("SELECT id, user_id, exchange, label, created_at FROM accounts WHERE id = ?",
-                                 (account_id,)).fetchone()
-        return dict(row) if row else None
+        rows = self._select(f"SELECT {self._ACCOUNT_COLS} FROM accounts a JOIN users u ON u.id = a.user_id WHERE a.id = ?",
+                            (account_id,))
+        return self._account_row(rows[0]) if rows else None
 
     def accounts_for(self, user_id: int) -> List[Dict[str, Any]]:
-        rows = self._conn.execute(
-            "SELECT id, user_id, exchange, label, created_at FROM accounts WHERE user_id = ? ORDER BY id", (user_id,))
-        return [dict(r) for r in rows]
+        rows = self._select(f"SELECT {self._ACCOUNT_COLS} FROM accounts a JOIN users u ON u.id = a.user_id"
+                            " WHERE a.user_id = ? ORDER BY a.id", (user_id,))
+        return [self._account_row(r) for r in rows]
+
+    def all_accounts(self) -> List[Dict[str, Any]]:
+        rows = self._select(f"SELECT {self._ACCOUNT_COLS} FROM accounts a JOIN users u ON u.id = a.user_id ORDER BY a.id")
+        return [self._account_row(r) for r in rows]
+
+    def set_account_label(self, account_id: int, label: str) -> None:
+        with self._lock, self._conn:
+            self._conn.execute("UPDATE accounts SET label = ? WHERE id = ?", (label, account_id))
+
+    def set_account_keys(self, account_id: int, api_key: str, api_secret: str, passphrase: str) -> None:
+        """Substitui as 3 chaves de uma vez (cifradas) e zera a última checagem."""
+        with self._lock, self._conn:
+            self._conn.execute(
+                "UPDATE accounts SET api_key_enc = ?, api_secret_enc = ?, passphrase_enc = ?, last_check_at = NULL,"
+                " last_check_ok = NULL, last_check_msg = '' WHERE id = ?",
+                (self.encrypt(api_key), self.encrypt(api_secret), self.encrypt(passphrase), account_id))
+
+    def set_account_active(self, account_id: int, active: bool) -> None:
+        with self._lock, self._conn:
+            self._conn.execute("UPDATE accounts SET active = ? WHERE id = ?", (1 if active else 0, account_id))
+
+    def record_account_check(self, account_id: int, ok: bool, msg: str) -> None:
+        with self._lock, self._conn:
+            self._conn.execute("UPDATE accounts SET last_check_at = ?, last_check_ok = ?, last_check_msg = ? WHERE id = ?",
+                               (datetime.now(timezone.utc).isoformat(), 1 if ok else 0, msg[:200], account_id))
 
     def account_credentials(self, account_id: int) -> Dict[str, str]:
-        row = self._conn.execute("SELECT api_key_enc, api_secret_enc, passphrase_enc FROM accounts WHERE id = ?",
-                                 (account_id,)).fetchone()
-        if not row:
+        rows = self._select("SELECT api_key_enc, api_secret_enc, passphrase_enc FROM accounts WHERE id = ?", (account_id,))
+        if not rows:
             return {}
+        row = rows[0]
         return {"api_key": self.decrypt(row["api_key_enc"]), "api_secret": self.decrypt(row["api_secret_enc"]),
                 "passphrase": self.decrypt(row["passphrase_enc"])}
 

@@ -214,7 +214,7 @@ def test_index_shows_logged_user_and_platform_placeholders():
     html = client.get("/").data.decode()
     assert 'id="profile"' in html and ">admin<" in html and "1 conta(s)" in html
     nav = html.split('<nav class="nav" id="nav">')[1].split("</nav>")[0]
-    assert "Contas" in nav and 'href="#users"' in nav and nav.count('aria-disabled="true"') == 1
+    assert 'href="#accounts"' in nav and 'href="#users"' in nav and nav.count('aria-disabled="true"') == 0
     assert 'data-page="users"' in html and 'id="profile-btn"' in html and 'data-role="admin"' in html
 
 
@@ -763,7 +763,7 @@ def test_shell_sidebar_kpis_and_pages():
     assert 'id="sidebar"' in html and 'id="sidebar-toggle"' in html and 'id="sidebar-backdrop"' in html
     assert 'id="sidebar-collapse"' in html and html.count('title="') >= 6   # recolher no desktop; tooltip nos itens
     pages = re.findall(r'<div class="page" data-page="([^"]+)"', html)
-    assert pages == ["overview", "pnl", "sheet", "market", "fills", "users", "system"]
+    assert pages == ["overview", "pnl", "sheet", "market", "fills", "accounts", "users", "system"]
     nav = html.split('<nav class="nav" id="nav">')[1].split("</nav>")[0]
     assert set(re.findall(r'data-page="([^"]+)"', nav)) == set(pages)
     # grupos do menu (accordion) com subitens apontando para página/card existentes
@@ -1885,3 +1885,203 @@ def test_klines_endpoint_serves_exchange_candles_for_chart():
     js = open("trading_bot/web/static/js/main.js", encoding="utf-8").read()
     assert "fetch(`/api/klines?symbol=${encodeURIComponent(cg.sym)}&interval=1m&limit=300`" in js
     assert "try { chartSync(); }" in js and "if (cg) { clearInterval(cg.timer); cg.api.remove(); cg = null;" in js
+
+
+# ---------- Plataforma › Contas (fase 2, PR B) ----------
+
+
+class _FakeExchange:
+    """Cliente só-leitura fake (o que ReadOnlyAccount/collect_* chamam), sem rede."""
+
+    def __init__(self, creds):
+        self.creds = creds
+        self.calls = 0
+
+    def _fetch_account(self):
+        return {"wallet": 95.0, "available": 80.0, "unrealized": 1.5, "margin_balance": 96.5, "initial_margin": 15.0}
+
+    def get_account_info(self):
+        return {"wallet_balance": 95.0, "available_balance": 80.0, "unrealized_pnl": 1.5, "margin_balance": 96.5, "total_initial_margin": 15.0}
+
+    def get_open_positions(self, force_refresh=False):
+        self.calls += 1
+        return [{"symbol": "ADAUSDT", "side": "LONG", "quantity": 100.0, "entry_price": 0.5, "mark_price": 0.51,
+                 "unrealized_pnl": 1.0, "leverage": 10, "liquidation_price": 0.45, "margin": 5.0}]
+
+    def get_daily_pnl_from_binance(self):
+        return {"total": 0.4, "realized_pnl": 0.5, "funding_fee": -0.05, "commission": -0.05}
+
+    def get_cumulative_income_from_binance(self, start_ms=0):
+        return {"funding_fee": -0.1, "commission": -0.2}
+
+    def get_fills(self, symbol=None, start_ms=None, end_ms=None, limit=500):
+        return []
+
+
+_FAKE_KEYS = {"api_key": "bg_fake_key_AB12", "api_secret": "fake-secret", "passphrase": "fake-pass"}
+
+
+def _app_with_secret(monkeypatch):
+    from trading_bot.web import accounts as acc_mod
+    from trading_bot.web.app import create_app
+    monkeypatch.setattr(global_config, "PLATFORM_SECRET", "segredo-de-teste", raising=False)
+    monkeypatch.setattr(global_config, "BITGET_API_KEY", "k1", raising=False)
+    monkeypatch.setattr(global_config, "BITGET_API_SECRET", "s1", raising=False)
+    monkeypatch.setattr(global_config, "BITGET_PASSPHRASE", "p1", raising=False)
+    monkeypatch.setattr(global_config, "EXCHANGE", "bitget", raising=False)
+    made = []
+    monkeypatch.setattr(acc_mod, "exchange_client", lambda exchange, creds: made.append(_FakeExchange(creds)) or made[-1])
+    app, _ = create_app(_make_bot())
+    return app, made
+
+
+def test_platform_accounts_migration_public_rows_and_key_replacement(tmp_path):
+    """Banco da fase 1 ganha active/last_check_*; linha pública nunca traz secret/passphrase, só os 4 últimos da key."""
+    import sqlite3
+    from trading_bot.web.platform import PlatformStore
+    db = tmp_path / "p.db"
+    first = PlatformStore(str(db), secret="s")
+    uid = first.create_user("admin", "secret")
+    aid = first.create_account(uid, "bitget", "principal", **_FAKE_KEYS)
+    con = sqlite3.connect(db)
+    con.executescript("ALTER TABLE accounts RENAME TO accounts_old;"
+                      "CREATE TABLE accounts AS SELECT id, user_id, exchange, label, api_key_enc, api_secret_enc, passphrase_enc, created_at FROM accounts_old;"
+                      "DROP TABLE accounts_old;")
+    con.commit()
+    con.close()
+    store = PlatformStore(str(db), secret="s")   # migra as colunas novas
+    acc = store.account(aid)
+    assert acc["active"] is True and acc["has_keys"] is True and acc["key_last4"] == "AB12" and acc["owner"] == "admin"
+    assert not {"api_key_enc", "api_secret_enc", "passphrase_enc", "api_key"} & set(acc)
+    store.record_account_check(aid, False, "apikey inválida")
+    assert store.account(aid)["last_check_ok"] is False and store.account(aid)["last_check_msg"] == "apikey inválida"
+    store.set_account_keys(aid, "nova_key_ZZ99", "s2", "p2")
+    acc = store.account(aid)
+    assert acc["key_last4"] == "ZZ99" and acc["last_check_ok"] is None and store.account_credentials(aid)["api_secret"] == "s2"
+    store.set_account_label(aid, "renomeada")
+    store.set_account_active(aid, False)
+    assert store.account(aid)["label"] == "renomeada" and store.account(aid)["active"] is False
+    assert [a["id"] for a in store.all_accounts()] == [aid]
+
+
+def test_accounts_api_crud_ownership_test_connection_and_no_secret_leak(monkeypatch):
+    from trading_bot.web import accounts as acc_mod
+    app, made = _app_with_secret(monkeypatch)
+    store = app.config["PLATFORM"]
+    uid = store.create_user("maria", "senha-forte")
+    admin, maria = app.test_client(), app.test_client()
+    _login(admin)
+    _login(maria, user="maria", pw="senha-forte")
+    assert admin.post("/api/accounts", json={}).status_code == 400   # CSRF
+    assert _post(admin, "/api/accounts", {"label": "x", "api_key": "k"}).status_code == 400   # chaves incompletas
+    assert _post(admin, "/api/accounts", {"exchange": "okx", **_FAKE_KEYS}).status_code == 400
+    # admin cria conta para a maria
+    r = _post(admin, "/api/accounts", {"label": "Bitget da Maria", "user_id": uid, **_FAKE_KEYS})
+    assert r.status_code == 201
+    acc = r.get_json()["account"]
+    aid = acc["id"]
+    assert acc["owner"] == "maria" and acc["key_last4"] == "AB12" and "api_secret" not in acc and "fake-secret" not in r.data.decode()
+    # user comum só vê as próprias; admin vê todas com o dono; a conta do bot vem marcada
+    mine = maria.get("/api/accounts").get_json()["accounts"]
+    assert [a["id"] for a in mine] == [aid] and mine[0]["has_bot"] is False
+    everything = admin.get("/api/accounts").get_json()["accounts"]
+    assert [(a["id"], a["owner"], a["has_bot"]) for a in everything] == [(1, "admin", True), (aid, "maria", False)]
+    # maria não mexe na conta 1 (do admin); mexe na dela
+    assert _post(maria, "/api/accounts/1/label", {"label": "hack"}).status_code == 404
+    assert _post(maria, f"/api/accounts/{aid}/label", {"label": "Minha Bitget"}).get_json()["account"]["label"] == "Minha Bitget"
+    assert _post(maria, f"/api/accounts/{aid}/label", {"label": ""}).status_code == 400
+    # testar conexão: read-only fake; resultado gravado como última checagem
+    r = _post(maria, f"/api/accounts/{aid}/test", {})
+    assert r.status_code == 200 and r.get_json()["ok"] is True and r.get_json()["positions"] == 1 and r.get_json()["equity"] == 96.5
+    assert made[-1].creds == _FAKE_KEYS and r.get_json()["account"]["last_check_ok"] is True
+    # erro da corretora volta como mensagem, sem a chave
+    monkeypatch.setattr(acc_mod, "exchange_client", lambda exchange, creds: (_ for _ in ()).throw(ConnectionError("Não foi possível conectar à Bitget: apikey inválida")))
+    r = _post(maria, f"/api/accounts/{aid}/test", {})
+    assert r.get_json()["ok"] is False and "apikey inválida" in r.get_json()["error"] and "bg_fake" not in r.data.decode()
+    assert r.get_json()["account"]["last_check_ok"] is False
+    # substituir chaves: só os 4 últimos mudam na resposta; checagem zera
+    r = _post(maria, f"/api/accounts/{aid}/keys", {"api_key": "outra_key_CD34", "api_secret": "s2", "passphrase": "p2"})
+    assert r.get_json()["account"]["key_last4"] == "CD34" and r.get_json()["account"]["last_check_ok"] is None
+    assert _post(maria, f"/api/accounts/{aid}/keys", {"api_key": "só-key"}).status_code == 400
+    # desativar: some de /api/me e das rotas de dados; a conta do bot não desativa
+    assert _post(admin, "/api/accounts/1/active", {"active": False}).status_code == 400
+    assert _post(maria, f"/api/accounts/{aid}/active", {"active": False}).status_code == 200
+    assert maria.get("/api/me").get_json()["accounts"][0]["active"] is False
+    assert maria.get(f"/api/live?account={aid}").status_code == 404
+    assert _post(maria, f"/api/accounts/{aid}/active", {"active": True}).status_code == 200
+
+
+def test_account_without_bot_serves_readonly_snapshot_and_blocks_controls(monkeypatch):
+    """Conta cadastrada sem bot neste processo: /api/live, /api/summary e /api/fills leem da exchange com as
+    chaves da conta (handle só-leitura, cache de posições); Pausar/Retomar/Fechar respondem 409."""
+    from trading_bot.web import accounts as acc_mod
+    app, made = _app_with_secret(monkeypatch)
+    store = app.config["PLATFORM"]
+    uid = store.create_user("maria", "senha-forte")
+    aid = store.create_account(uid, "bitget", "da maria", **_FAKE_KEYS)
+    empty = store.create_account(uid, "bitget", "sem chaves")
+    client = app.test_client()
+    _login(client, user="maria", pw="senha-forte")
+    html = client.get("/").data.decode()
+    assert 'id="acct-sel"' in html and 'data-has-bot="0"' in html and html.split('id="acct-sel"')[1].split("</select>")[0].count("<option") == 2
+    live = client.get("/api/live").get_json()   # default: 1ª conta ativa da maria (sem bot) → só-leitura
+    assert len(made) == 1 and made[0].creds == _FAKE_KEYS
+    assert live["summary"]["running"] is False and live["summary"]["unrealized_pnl"] == 1.5
+    assert [p["symbol"] for p in live["positions"]] == ["ADAUSDT"] and live["positions"][0]["mark_price"] == 0.51
+    assert live["martingale"] is None
+    assert client.get(f"/api/summary?account={aid}").status_code == 200
+    assert len(made) == 1 and made[0].calls <= 3   # handle reaproveitado; posições em cache de 5 s
+    assert client.get(f"/api/fills?account={aid}").status_code == 200
+    assert client.get(f"/api/live?account={empty}").status_code == 404   # sem chaves: nada a ler
+    for path in ("/api/control/pause", "/api/control/resume", "/api/control/close_all"):
+        assert client.post(f"{path}?account={aid}").status_code == 409
+    assert client.post(f"/api/positions/ADAUSDT/close?account={aid}", json={"confirm": "ADAUSDT"}).status_code == 409
+    # trocar as chaves descarta o handle: o próximo poll cria outro cliente com as chaves novas
+    _post(client, f"/api/accounts/{aid}/keys", {"api_key": "outra_key_CD34", "api_secret": "s2", "passphrase": "p2"})
+    client.get(f"/api/live?account={aid}")
+    assert len(made) == 2 and made[1].creds["api_key"] == "outra_key_CD34"
+    assert acc_mod.probe("bitget", {"api_key": "", "api_secret": "", "passphrase": ""})["ok"] is False
+
+
+def test_socket_connect_only_for_owner_of_the_bot_account(monkeypatch):
+    """Eventos do socket são broadcast do bot deste processo: usuário sem conta com bot não conecta (fica no polling)."""
+    from trading_bot.web.app import create_app
+    app, socketio = create_app(_make_bot())
+    store = app.config["PLATFORM"]
+    store.create_user("maria", "senha-forte")
+    admin, maria = app.test_client(), app.test_client()
+    _login(admin)
+    _login(maria, user="maria", pw="senha-forte")
+    assert socketio.test_client(app, flask_test_client=admin).is_connected()
+    assert not socketio.test_client(app, flask_test_client=maria).is_connected()
+
+
+def test_bitget_connection_with_platform_credentials_skips_boot_probe(monkeypatch):
+    from trading_bot.infra import bitget_client as bg
+    monkeypatch.setattr(bg.config, "BITGET_API_KEY", "env-key", raising=False)
+    monkeypatch.setattr(bg.config, "BITGET_DEMO", False, raising=False)
+    monkeypatch.setattr(bg.requests.Session, "request", lambda self, *a, **k: (_ for _ in ()).throw(AssertionError("sem rede no construtor")))
+    c = bg.BitgetConnection(credentials={"api_key": "acct-key", "api_secret": "acct-secret", "passphrase": "acct-pass"})
+    assert c.api_key == "acct-key" and c.passphrase == "acct-pass" and c.demo is False
+
+
+def test_platform_store_reads_are_thread_safe(tmp_path):
+    """Flask atende em threads com UMA conexão sqlite: leituras paralelas sem lock devolviam None (401 aleatório)."""
+    import threading
+    from trading_bot.web.platform import PlatformStore
+    store = PlatformStore(str(tmp_path / "p.db"), secret="s")
+    uid = store.create_user("admin", "secret")
+    store.create_account(uid, "bitget", "a", api_key="k", api_secret="s", passphrase="p")
+    misses = []
+
+    def worker():
+        for _ in range(200):
+            if store.user(uid) is None or not store.accounts_for(uid) or store.user_by_name("admin") is None:
+                misses.append(1)
+
+    threads = [threading.Thread(target=worker) for _ in range(6)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert not misses

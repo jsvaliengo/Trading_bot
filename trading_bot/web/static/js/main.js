@@ -8,10 +8,19 @@
 (function () {
     'use strict';
 
+    // Conta exibida: o seletor do topo (só com >1 conta) define o ?account=N de toda rota de dados.
+    // Lembrada em localStorage; sem seletor, o servidor usa a 1ª conta do usuário.
+    const ACCT_KEY = 'tradingbot-account', acctSel = document.getElementById('acct-sel');
+    if (acctSel) { try { const v = localStorage.getItem(ACCT_KEY); if (v && acctSel.querySelector(`option[value="${v}"]`)) acctSel.value = v; } catch (e) { /* storage bloqueado */ } }
+    const accountId = () => acctSel ? acctSel.value : null;
+    const accountHasBot = () => (acctSel ? acctSel.selectedOptions[0].dataset.hasBot : document.body.dataset.hasBot) === '1';
+    const ACCT_FREE = /^\/api\/(me|users|accounts|market|klines|healthz)\b/;
+    const withAccount = (url) => { const u = String(url); if (!acctSel || !u.startsWith('/api/') || ACCT_FREE.test(u) || /[?&]account=/.test(u)) return u; return u + (u.includes('?') ? '&' : '?') + 'account=' + encodeURIComponent(accountId()); };
+    if (acctSel) acctSel.addEventListener('change', () => { try { localStorage.setItem(ACCT_KEY, acctSel.value); } catch (e) { /* storage bloqueado */ } location.reload(); });
     // Sessão expirou: qualquer /api/* com 401 manda pro login e volta pra cá depois.
     const rawFetch = window.fetch.bind(window);
     window.fetch = async (url, opts) => {
-        const r = await rawFetch(url, opts);
+        const r = await rawFetch(withAccount(url), opts);
         if (r.status === 401 && String(url).startsWith('/api/')) location.href = '/login?next=' + encodeURIComponent(location.pathname);
         return r;
     };
@@ -101,9 +110,9 @@
     const BAR_MS = 4 * 3600e3;
     function renderTop(s, h, e) {
         const pill = $('state-pill');
-        const run = s.running && !s.paused;
-        pill.textContent = s.paused ? 'pausado' : (run ? 'rodando' : 'parado');
-        pill.className = 'state ' + (s.paused ? 'warn' : (run ? 'ok' : 'bad'));
+        const run = s.running && !s.paused, ro = !accountHasBot();
+        pill.textContent = ro ? 'conta' : s.paused ? 'pausado' : (run ? 'rodando' : 'parado');
+        pill.className = 'state ' + (ro ? 'ok' : s.paused ? 'warn' : (run ? 'ok' : 'bad'));
         $('top-title').textContent = s.strategy === 'donchian_4h' ? 'Forward test · Donchian 4h' : `Trading bot · ${s.strategy || 'pullback'}`;
         $('top-meta').textContent = `sinais ${s.signal_data_source || '—'} · deploy ${(h && h.deploy_sha) || '—'} · no ar há ${h ? fmt.ago(h.uptime_seconds) : '—'} · ${connLabel()} · atualizado ${fmt.time(state.live.server_time)}`;
         const fx = state.fx || {}; $('fx-badge').hidden = !isNum(fx.usd_brl);
@@ -1171,7 +1180,7 @@
             sel.innerHTML = '<option value="">todos</option>' + (d.symbols || []).map(s => `<option value="${esc(s)}">${esc(s)}</option>`).join(''); sel.value = cur;
             $('fl-from').value = d.from; $('fl-to').value = d.to;
             $('fills-stats').innerHTML = `<span><b>${d.total}</b> fill(s) de ${fmt.day(d.from)} a ${fmt.day(d.to)}</span><span>fees <b class="${cls(d.fee_total)}">${esc(fmt.money(d.fee_total, { signed: true }))}</b></span><span>P&L realizado <b class="${cls(d.profit_total)}">${esc(fmt.money(d.profit_total, { signed: true }))}</b></span><span><b>${d.matched}</b> batem com trades do bot</span>`;
-            $('fills-csv').href = `/api/fills?${flQuery({ format: 'csv' })}`;
+            $('fills-csv').href = withAccount(`/api/fills?${flQuery({ format: 'csv' })}`);
             tb.innerHTML = (d.fills || []).map(f => `<tr>
                 <td>${esc(fmt.dateTime(new Date(f.time).toISOString()))}</td><td class="sans"><b>${esc(f.symbol)}</b></td>
                 <td><span class="side ${f.position_side === 'LONG' ? 'l' : 's'}">${esc(f.position_side)}</span></td>
@@ -1357,6 +1366,67 @@
     }
     function usersVisible(on) { if (on) loadUsers(); }
 
+    // Contas (todos; admin vê todas com o dono). Chaves só na criação/substituição; nunca voltam.
+    const acctTable = $('accounts-table'), IS_ADMIN = document.body.dataset.role === 'admin';
+    const KEY_FIELDS = [{ name: 'api_key', label: 'API key', required: true, autocomplete: 'off' },
+                        { name: 'api_secret', label: 'Secret', type: 'password', required: true, autocomplete: 'off' },
+                        { name: 'passphrase', label: 'Passphrase', type: 'password', required: true, autocomplete: 'off', hint: 'chave só-leitura basta: o painel não envia ordens por esta conta' }];
+    let usersForOwner = null;
+    async function loadAccounts() {
+        try {
+            const r = await fetch('/api/accounts', { credentials: 'include' }); if (!r.ok) throw new Error('HTTP ' + r.status);
+            renderAccounts((await r.json()).accounts || []); $('accounts-error').hidden = true;
+        } catch (e) { $('accounts-error').textContent = 'Não deu pra carregar as contas: ' + e.message; $('accounts-error').hidden = false; }
+    }
+    function renderAccounts(list) {
+        const tb = acctTable.querySelector('tbody'), cols = IS_ADMIN ? 7 : 6;
+        if (!list.length) { tb.innerHTML = `<tr><td colspan="${cols}" class="empty">Nenhuma conta. Cadastre a primeira em "+ Nova conta".</td></tr>`; return; }
+        tb.innerHTML = list.map(a => {
+            const chk = a.last_check_at ? `<span class="tag ${a.last_check_ok ? 'on' : 'off'}">${a.last_check_ok ? 'ok' : 'erro'}</span> <small class="dim">${esc(fmt.dateTime(a.last_check_at))}</small>${a.last_check_ok ? '' : `<br><small class="neg">${esc(a.last_check_msg)}</small>`}` : '<span class="dim">nunca</span>';
+            return `<tr class="${a.active ? '' : 'off'}" data-id="${a.id}" data-label="${esc(a.label)}">
+                <td class="who"><b>${esc(a.label)}</b><small class="dim">${esc(a.exchange)} · #${a.id}</small></td>
+                ${IS_ADMIN ? `<td class="sans">${esc(a.owner)}</td>` : ''}
+                <td class="key">${a.has_keys ? '····' + esc(a.key_last4) : '<span class="tag warn">sem chaves</span>'}</td>
+                <td class="sans"><span class="tag ${a.active ? 'on' : 'off'}">${a.active ? 'ativa' : 'desativada'}</span> <span class="tag ${a.has_bot ? 'admin' : ''}">${a.has_bot ? 'bot' : 'só leitura'}</span></td>
+                <td class="sans">${chk}</td>
+                <td class="sans">${esc(fmt.date(a.created_at))}</td>
+                <td class="sans"><div class="row-acts">
+                    <button class="btn good" data-act="test" type="button" ${a.has_keys ? '' : 'disabled'}>Testar conexão</button>
+                    <button class="btn" data-act="label" type="button">Editar rótulo</button>
+                    <button class="btn warn" data-act="keys" type="button">Substituir chaves</button>
+                    <button class="btn ${a.active ? 'bad' : 'good'}" data-act="active" type="button" ${a.has_bot && a.active ? 'disabled title="conta do bot deste processo"' : ''}>${a.active ? 'Desativar' : 'Ativar'}</button>
+                </div></td></tr>`;
+        }).join('');
+    }
+    if (acctTable) {
+        $('accounts-new').addEventListener('click', async () => {
+            if (IS_ADMIN && !usersForOwner) { try { const r = await fetch('/api/users', { credentials: 'include' }); usersForOwner = ((await r.json()).users || []).filter(u => u.active); } catch (e) { usersForOwner = []; } }
+            const fields = [{ name: 'exchange', label: 'Exchange', type: 'select', value: 'bitget', options: [['bitget', 'Bitget (futuros USDT-M)']] },
+                            { name: 'label', label: 'Rótulo', placeholder: 'ex.: Bitget principal', hint: 'como a conta aparece no seletor do topo' }];
+            if (IS_ADMIN && usersForOwner.length) fields.push({ name: 'user_id', label: 'Dono', type: 'select', value: String(ME_ID), options: usersForOwner.map(u => [String(u.id), `${u.display_name || u.username} (${u.username})`]) });
+            const out = await formModal({ title: 'Nova conta', hint: 'As chaves são cifradas ao salvar e não são exibidas depois.', submit: 'Cadastrar', fields: fields.concat(KEY_FIELDS), onSubmit: (v) => apiPost('/api/accounts', v) });
+            if (out) { loadAccounts(); formModal({ title: 'Conta cadastrada', hint: 'Use "Testar conexão" para validar as chaves. O seletor de conta no topo aparece depois de recarregar a página.' }); }
+        });
+        acctTable.addEventListener('click', async (e) => {
+            const b = e.target.closest('button[data-act]'); if (!b || b.disabled) return;
+            const tr = b.closest('tr'), id = tr.dataset.id, name = tr.dataset.label, act = b.dataset.act;
+            if (act === 'test') {
+                b.disabled = true; b.textContent = 'Testando…';
+                try { const r = await apiPost(`/api/accounts/${id}/test`); formModal({ title: `Conexão ok — ${name}`, hint: `Equity <b>${esc(fmt.money(r.equity))}</b> · disponível <b>${esc(fmt.money(r.available))}</b> · <b>${r.positions}</b> posição(ões) aberta(s).` }); }
+                catch (err) { formModal({ title: `Falhou — ${name}`, hint: `A corretora respondeu: <b>${esc(err.message)}</b>` }); }
+                loadAccounts();
+            } else if (act === 'label') {
+                if (await formModal({ title: `Rótulo de ${name}`, fields: [{ name: 'label', label: 'Rótulo', value: name, required: true }], onSubmit: (v) => apiPost(`/api/accounts/${id}/label`, v) })) loadAccounts();
+            } else if (act === 'keys') {
+                if (await formModal({ title: `Substituir chaves de ${name}`, hint: 'As três chaves são trocadas juntas; as antigas deixam de valer no painel.', submit: 'Substituir', fields: KEY_FIELDS, onSubmit: (v) => apiPost(`/api/accounts/${id}/keys`, v) })) loadAccounts();
+            } else if (act === 'active') {
+                const off = b.textContent === 'Desativar';
+                ask(off ? `Desativar ${name}` : `Ativar ${name}`, off ? 'Some do seletor e das rotas de dados; as chaves ficam guardadas. Dá pra reativar depois.' : 'Volta ao seletor e às rotas de dados.', async () => { try { await apiPost(`/api/accounts/${id}/active`, { active: !off }); loadAccounts(); } catch (err) { formModal({ title: 'Não deu', hint: esc(err.message) }); } });
+            }
+        });
+    }
+    function accountsVisible(on) { if (on) loadAccounts(); }
+
     const PAGES = $$('.page').map(p => p.dataset.page);
     // hash = "pagina" ou "pagina/id-do-card" (subitem do menu: mostra a página e rola até o card, abrindo-o)
     function showPage(hash) {
@@ -1378,6 +1448,7 @@
         marketVisible(name === 'market');
         fillsVisible(name === 'fills');
         usersVisible(name === 'users');
+        accountsVisible(name === 'accounts');
         if (el && !el.hidden) el.scrollIntoView({ block: 'start' });
     }
     // página sem nenhum card visível (ex.: fora do martingale) mostra um aviso em vez de ficar em branco
@@ -1418,7 +1489,10 @@
     // ───────── Boot ─────────
     initChips(); initTrades(); initPnl();
     fetchHistory();   // também dispara o primeiro fetchPnl()
-    if (typeof io !== 'undefined') {
+    // conta só-leitura: etiqueta no topo, sem botões de controle/Fechar, sem cards do bot (forward test, equity, trades)
+    $('ro-tag').hidden = accountHasBot();
+    document.body.classList.toggle('readonly', !accountHasBot());
+    if (typeof io !== 'undefined' && accountHasBot()) {
         socket = io({ transports: ['polling', 'websocket'], reconnectionDelayMax: 10000 });
         socket.on('connect', () => { setConn('connected'); stopPolling(); socket.emit('request_snapshot'); });
         socket.on('disconnect', () => { setConn('polling'); startPolling(); });
