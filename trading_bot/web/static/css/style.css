@@ -123,7 +123,7 @@ details.card > :not(summary):first-of-type { margin-top:10px; }
 .ring-card { padding:14px 18px 18px; display:flex; flex-wrap:wrap; align-items:center; gap:4px 28px; }
 .ring-head { flex-basis:100%; }
 /* a linha de status (tiles) é movida pra cá pelo main.js no martingale: vira um grid de métricas ao lado do anel */
-.ring-card .status { flex:1 1 360px; grid-template-columns:repeat(3, minmax(0,1fr)); gap:14px 18px; background:none; border:0; border-radius:0; margin-top:8px; }
+.ring-card .status { flex:1 1 360px; grid-template-columns:repeat(2, minmax(0,1fr)); gap:14px 18px; background:none; border:0; border-radius:0; margin-top:8px; }
 .ring-card .tile { background:none; backdrop-filter:none; -webkit-backdrop-filter:none; padding:0; }
 .ring-card .tl { white-space:normal; }
 .ring-head { display:flex; align-items:center; justify-content:space-between; gap:10px; }

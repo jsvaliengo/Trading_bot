@@ -537,20 +537,24 @@ def test_static_version_vem_do_deploy_sha_lido_uma_vez_no_boot(monkeypatch, tmp_
 
 def test_martingale_dashboard_is_ring_legs_sheet_pnl_health():
     """Sem card "Escada martingale"; no martingale o main.js esconde ft/pos/rdist/calendário (Equity ×
-    Performance ficam) e move a linha de tiles pra dentro do anel (tile Equity some: o saldo já está no centro)."""
+    Performance ficam) e move a linha de tiles pra dentro do anel (tiles Equity, Não realizado e Realizado hoje
+    somem: saldo no centro do anel, P&L nos KPIs do topo)."""
     from trading_bot.web.app import create_app
     app, _ = create_app(_make_bot())
     client = app.test_client()
     _login(client)
     html = client.get("/").data.decode()
     assert "mg-card" not in html and "mg-params" not in html and "Escada martingale" not in html
-    for i in ("status", "tile-equity", "pos-card", "eqperf-row", "rdist-row", "legs-sum"):
+    for i in ("status", "tile-equity", "tile-unreal", "tile-today", "pos-card", "eqperf-row", "rdist-row", "legs-sum"):
         assert f'id="{i}"' in html, i
     assert html.index('id="eqperf-row"') < html.index('id="eq-card"') < html.index('id="perf-card"') < html.index("</section>", html.index('id="eqperf-row"'))
     assert html.index('id="rdist-row"') < html.index('id="cal-card"') < html.index("</section>", html.index('id="rdist-row"'))
     js = open("trading_bot/web/static/js/main.js", encoding="utf-8").read()
     assert "'tradingbot-open:' + d.id" in js
-    assert "$('ft-card').hidden = $('pos-card').hidden = $('tile-equity').hidden = $('rdist-row').hidden = !!m" in js
+    # Não realizado/Realizado hoje somem no martingale (duplicam os KPIs do topo): ficam 4 tiles, 2×2 ao lado do anel
+    assert "$('ft-card').hidden = $('pos-card').hidden = $('tile-equity').hidden = $('tile-unreal').hidden = $('tile-today').hidden = $('rdist-row').hidden = !!m" in js
+    css = open("trading_bot/web/static/css/shell.css", encoding="utf-8").read()
+    assert ".ring-card .status { flex:none; display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); grid-auto-rows:1fr;" in css
     assert "$('eqperf-row').hidden" not in js   # Equity × Performance aparecem também no martingale
     assert "rc.appendChild(st)" in js and "$('mg-list').addEventListener('click', onClose)" in js
     # pernas como cards: cabeçalho, escada em barra, régua com rótulos ancorados, grade de métricas; perna vazia compacta
