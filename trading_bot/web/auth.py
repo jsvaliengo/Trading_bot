@@ -63,22 +63,16 @@ ANON = {"id": 0, "username": "", "display_name": "", "role": "", "active": False
 
 
 def current_user() -> dict:
-    """{id, username, display_name, role, active} da sessão ou do Basic Auth já validado. Com a tabela,
-    relê a linha a cada request: papel trocado ou usuário desativado valem na hora, sem esperar o logout."""
-    store = current_app.config.get("PLATFORM")
+    """{id, username, display_name, role, active} da sessão ou do Basic Auth já validado. Relê a linha da
+    tabela a cada request: papel trocado ou usuário desativado valem na hora, sem esperar o logout."""
     if session.get(SESSION_KEY):
-        user_id = int(session.get("user_id") or 1)
-        fresh = store.user(user_id) if store is not None else None
-        if fresh is not None:
-            return {**fresh, "active": bool(fresh["active"])}
-        return {"id": user_id, "username": str(session.get("username") or ""),
-                "display_name": str(session.get("display_name") or session.get("username") or ""),
-                "role": "admin" if user_id == 1 else "user", "active": True}
-    auth = request.authorization
-    user = authenticate(auth.username, auth.password) if auth and auth.username and auth.password else None
+        user = current_app.config["PLATFORM"].user(int(session.get("user_id") or 1))
+    else:
+        auth = request.authorization
+        user = authenticate(auth.username, auth.password) if auth and auth.username and auth.password else None
     if user is None:
         return dict(ANON)
-    return {**user, "role": user.get("role") or ("admin" if int(user["id"]) == 1 else "user"), "active": True}
+    return {**user, "role": user.get("role") or "user", "active": bool(user.get("active", True))}
 
 
 def is_admin() -> bool:
