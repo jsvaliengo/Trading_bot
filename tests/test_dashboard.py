@@ -214,7 +214,115 @@ def test_index_shows_logged_user_and_platform_placeholders():
     html = client.get("/").data.decode()
     assert 'id="profile"' in html and ">admin<" in html and "1 conta(s)" in html
     nav = html.split('<nav class="nav" id="nav">')[1].split("</nav>")[0]
-    assert "Contas" in nav and "Usuários" in nav and nav.count('aria-disabled="true"') == 2
+    assert "Contas" in nav and 'href="#users"' in nav and nav.count('aria-disabled="true"') == 1
+    assert 'data-page="users"' in html and 'id="profile-btn"' in html and 'data-role="admin"' in html
+
+
+# ---------- Plataforma › Usuários (admin) e Meu perfil ----------
+
+
+def _post(client, path, body):
+    """POST JSON com o CSRF da sessão no header (o token nasce no render da página, como no browser)."""
+    if not _csrf(client):
+        client.get("/")
+    return client.post(path, json=body, headers={"X-CSRF-Token": _csrf(client)})
+
+
+def test_platform_migration_adds_role_and_active_and_user_1_is_admin(tmp_path):
+    """Banco da fase 1 (sem role/active) ganha as colunas no boot; usuário 1 vira admin; login recusa inativo."""
+    import sqlite3
+    from trading_bot.web.platform import PlatformStore
+    from werkzeug.security import generate_password_hash
+    db = tmp_path / "p.db"
+    con = sqlite3.connect(db)
+    con.executescript("CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL,"
+                      " display_name TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL);")
+    con.execute("INSERT INTO users VALUES (1, 'admin', ?, 'admin', '2026-01-01')", (generate_password_hash("secret"),))
+    con.commit()
+    con.close()
+    store = PlatformStore(str(db), secret="s")
+    assert store.user(1)["role"] == "admin" and store.user(1)["active"] == 1
+    uid = store.create_user("maria", "senha-forte", role="user")
+    assert store.verify_login("maria", "senha-forte")["role"] == "user"
+    store.set_active(uid, False)
+    assert store.verify_login("maria", "senha-forte") is None   # desativado não loga
+    store.set_active(uid, True)
+    store.set_role(uid, "admin")
+    assert store.verify_login("maria", "senha-forte")["role"] == "admin"
+    with pytest.raises(ValueError):
+        store.set_role(uid, "root")
+    assert [u["username"] for u in store.users()] == ["admin", "maria"] and store.users()[0]["accounts"] == 0
+    assert PlatformStore(str(db), secret="s").user(1)["role"] == "admin"   # 2º boot: migração idempotente
+
+
+def test_users_api_admin_only_csrf_and_self_protection():
+    from trading_bot.web.app import create_app
+    app, _ = create_app(_make_bot())
+    client = app.test_client()
+    _login(client)
+    # CSRF obrigatório nos POSTs da plataforma
+    assert client.post("/api/users", json={"username": "x"}).status_code == 400
+    r = _post(client, "/api/users", {"username": "maria", "display_name": "Maria", "role": "user"})
+    assert r.status_code == 201 and r.get_json()["user"]["role"] == "user"
+    generated = r.get_json()["password"]
+    assert generated and len(generated) >= 8
+    assert _post(client, "/api/users", {"username": "maria"}).status_code == 409
+    assert _post(client, "/api/users", {"username": "a b"}).status_code == 400
+    assert _post(client, "/api/users", {"username": "joao", "password": "curta"}).status_code == 400
+    users = client.get("/api/users").get_json()["users"]
+    assert [u["username"] for u in users] == ["admin", "maria"] and "password_hash" not in users[0]
+    uid = users[1]["id"]
+    # admin não mexe no próprio papel/status
+    assert _post(client, "/api/users/1/active", {"active": False}).status_code == 400
+    assert _post(client, "/api/users/1/role", {"role": "user"}).status_code == 400
+    assert _post(client, f"/api/users/{uid}/role", {"role": "admin"}).get_json()["user"]["role"] == "admin"
+    assert _post(client, f"/api/users/{uid}/role", {"role": "user"}).status_code == 200
+    assert _post(client, "/api/users/999/password", {}).status_code == 404
+    # senha definida pelo admin não volta na resposta; gerada volta uma vez
+    assert _post(client, f"/api/users/{uid}/password", {"password": "nova-senha-1"}).get_json()["password"] is None
+    client.get("/")
+    client.post("/logout", data={"csrf": _csrf(client)})
+    assert _login(client, user="maria", pw=generated).status_code == 200   # senha antiga já não vale
+    assert _login(client, user="maria", pw="nova-senha-1").status_code == 302
+    # user comum: sem menu Usuários, 403 na API, página não existe no HTML
+    html = client.get("/").data.decode()
+    assert 'href="#users"' not in html and 'data-page="users"' not in html and 'data-role="user"' in html
+    assert client.get("/api/users").status_code == 403
+    assert _post(client, "/api/users", {"username": "z"}).status_code == 403
+    # meu perfil: senha atual confere, nova 2x
+    assert _post(client, "/api/me/password", {"current": "errada", "new": "outra-senha", "again": "outra-senha"}).status_code == 403
+    assert _post(client, "/api/me/password", {"current": "nova-senha-1", "new": "outra-senha", "again": "diferente"}).status_code == 400
+    assert _post(client, "/api/me/password", {"current": "nova-senha-1", "new": "outra-senha", "again": "outra-senha"}).status_code == 200
+    client.get("/")
+    client.post("/logout", data={"csrf": _csrf(client)})
+    assert _login(client, user="maria", pw="outra-senha").status_code == 302
+
+
+def test_deactivated_user_loses_open_session_and_cannot_login():
+    from trading_bot.web.app import create_app
+    app, _ = create_app(_make_bot())
+    store = app.config["PLATFORM"]
+    uid = store.create_user("maria", "senha-forte")
+    admin, maria = app.test_client(), app.test_client()
+    _login(admin)
+    _login(maria, user="maria", pw="senha-forte")
+    assert maria.get("/api/me").status_code == 200
+    assert _post(admin, f"/api/users/{uid}/active", {"active": False}).status_code == 200
+    assert maria.get("/api/me").status_code == 401            # sessão aberta cai na hora
+    assert maria.get("/").status_code == 302
+    r = _login(maria, user="maria", pw="senha-forte")
+    assert r.status_code == 200 and b"inv" in r.data           # não loga mais
+    assert maria.get("/api/me", headers=_basic_auth("maria", "senha-forte")).status_code == 401
+
+
+def test_login_rate_limit_per_username_too():
+    from trading_bot.web.app import create_app
+    app, _ = create_app(_make_bot())
+    client = app.test_client()
+    for _ in range(5):
+        _login(client, pw="errada", environ_base={"REMOTE_ADDR": f"10.0.0.{_}"})
+    r = _login(client, pw="secret", environ_base={"REMOTE_ADDR": "10.0.0.99"})
+    assert r.status_code == 429   # IPs diferentes, mesmo usuário: bloqueado
 
 
 # ---------- Relatórios › Histórico de fills (endpoint privado da conta, com cache) ----------
@@ -655,7 +763,7 @@ def test_shell_sidebar_kpis_and_pages():
     assert 'id="sidebar"' in html and 'id="sidebar-toggle"' in html and 'id="sidebar-backdrop"' in html
     assert 'id="sidebar-collapse"' in html and html.count('title="') >= 6   # recolher no desktop; tooltip nos itens
     pages = re.findall(r'<div class="page" data-page="([^"]+)"', html)
-    assert pages == ["overview", "pnl", "sheet", "market", "fills", "system"]
+    assert pages == ["overview", "pnl", "sheet", "market", "fills", "users", "system"]
     nav = html.split('<nav class="nav" id="nav">')[1].split("</nav>")[0]
     assert set(re.findall(r'data-page="([^"]+)"', nav)) == set(pages)
     # grupos do menu (accordion) com subitens apontando para página/card existentes
@@ -844,7 +952,8 @@ def test_login_rate_limit_uses_forwarded_for_only_with_trust_proxy(monkeypatch):
     for _ in range(5):
         _login(client2, pw="wrong", headers={"X-Forwarded-For": "10.0.0.1"})
     assert client2.post("/login", data={"username": "admin", "password": "wrong", "csrf": _csrf(client2)}, headers={"X-Forwarded-For": "10.0.0.1"}).status_code == 429
-    assert client2.post("/login", data={"username": "admin", "password": "wrong", "csrf": _csrf(client2)}, headers={"X-Forwarded-For": "10.0.0.2"}).status_code == 200
+    # outro IP e outro usuário: passa (o mesmo usuário de outro IP continua bloqueado: limite também por nome)
+    assert client2.post("/login", data={"username": "outro", "password": "wrong", "csrf": _csrf(client2)}, headers={"X-Forwarded-For": "10.0.0.2"}).status_code == 200
 
 
 def test_socket_rejects_connection_without_session():

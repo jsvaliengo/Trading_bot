@@ -22,7 +22,7 @@ from flask import Flask, Response, abort, jsonify, redirect, render_template, re
 from flask_socketio import SocketIO
 
 from ..core.config import config, exchange_label
-from . import auth, klines
+from . import auth, klines, users
 from .auth import login_required
 from .data import _deploy_info, collect_history, collect_live, collect_snapshot, collect_summary
 from .platform import PlatformStore
@@ -111,6 +111,7 @@ def create_app(bot) -> tuple[Flask, SocketIO]:
 
     _register_routes(app, socketio)
     klines.register(app)
+    users.register(app)
     _register_sockets(socketio)
     return app, socketio
 
@@ -161,11 +162,12 @@ def _register_routes(app: Flask, socketio: SocketIO) -> None:
             user = request.form.get("username", "")[:128]
             if not auth.csrf_ok():
                 error, status = "Sessão expirada, tente de novo.", 400
-            elif limiter.blocked(ip):
-                logger.warning(f"Login do dashboard bloqueado por rate limit: ip={ip}")
+            elif limiter.blocked(ip) or limiter.blocked(f"user:{user}"):
+                logger.warning(f"Login do dashboard bloqueado por rate limit: ip={ip} usuário={user!r}")
                 error, status = "Muitas tentativas. Aguarde 15 minutos.", 429
             elif (found := auth.authenticate(user, request.form.get("password", ""))) is not None:
                 limiter.reset(ip)
+                limiter.reset(f"user:{user}")
                 session.clear()
                 session[auth.SESSION_KEY] = True
                 session["user_id"] = int(found["id"])
@@ -176,6 +178,7 @@ def _register_routes(app: Flask, socketio: SocketIO) -> None:
                 return redirect(auth.safe_next(request.form.get("next")))
             else:
                 limiter.record_failure(ip)
+                limiter.record_failure(f"user:{user}")
                 logger.warning(f"Login do dashboard falhou: usuário={user!r} ip={ip}")
                 error, status = "Usuário ou senha inválidos.", 200
         return render_template(
