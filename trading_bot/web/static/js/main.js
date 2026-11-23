@@ -744,7 +744,22 @@
             state.pnl = await r.json();
             if (state.pnl.fx) state.fx = state.pnl.fx;
             try { renderPnl(state.pnl); } catch (err) { console.error('render do P&L falhou', err); }
+            if (!accountHasBot()) renderRoPnl(state.pnl);
         } catch (err) { console.warn('P&L falhou:', err); $('pnl-sub').textContent = 'sem resposta do servidor'; }
+    }
+    // Conta sem bot: card "P&L da conta" na visão geral (hoje/7d/30d + por símbolo), pelo extrato da corretora (últimos 30 dias)
+    function renderRoPnl(p) {
+        const w = p.windows || {};
+        [['today', p.today_pnl], ['7d', w.d7], ['30d', w.d30]].forEach(([k, v]) => {
+            const usd = v && v.usd, b = $(`ro-pnl-${k}`); b.innerHTML = fmt.money(usd, { signed: true }) + brlTag(usd); b.className = cls(usd);
+            const sm = $(`ro-pnl-${k}-pct`); sm.textContent = pctTxt(v); sm.className = cls(usd);
+        });
+        $('ro-pnl-sub').firstChild.textContent = p.income_ok ? `extrato da ${exchangeName()}: realizado + taxas + funding · ${fmt.day(p.from)} → ${fmt.day(p.to)} · dia UTC · ` : `extrato da ${exchangeName()} indisponível no momento · `;
+        const rows = p.by_symbol || [], tb = $('ro-pnl-symbols').querySelector('tbody');
+        if (!rows.length) { tb.innerHTML = `<tr><td colspan="6" class="empty">${p.income_ok ? 'Nenhum fechamento no período.' : 'Sem dados.'}</td></tr>`; return; }
+        tb.innerHTML = rows.map(r => `<tr><td class="sans"><b>${esc(r.symbol)}</b></td><td class="r">${r.trades}</td><td class="r">${fmt.pct(r.win_rate, 0, false)}</td>
+            <td class="r ${cls(r.net)}">${fmt.money(r.net, { signed: true })}${brlTag(r.net)}</td>
+            <td class="r dim">${fmt.money(-(r.fees || 0), { signed: true })}</td><td class="r dim">${fmt.money(r.funding, { signed: true })}</td></tr>`).join('');
     }
     function pctTxt(w) { return isNum(w && w.pct) ? fmt.pct(w.pct) : '—'; }
     function renderPnl(p) {
@@ -1511,7 +1526,7 @@
     initChips(); initTrades(); initPnl();
     fetchHistory();   // também dispara o primeiro fetchPnl()
     // conta só-leitura: etiqueta no topo, sem botões de controle/Fechar, sem cards do bot (forward test, equity, trades)
-    $('ro-tag').hidden = accountHasBot();
+    $('ro-tag').hidden = accountHasBot(); $('ro-pnl-card').hidden = accountHasBot();
     document.body.classList.toggle('readonly', !accountHasBot());
     if (typeof io !== 'undefined' && accountHasBot()) {
         socket = io({ transports: ['polling', 'websocket'], reconnectionDelayMax: 10000 });
