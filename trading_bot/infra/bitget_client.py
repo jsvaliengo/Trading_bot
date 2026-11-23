@@ -75,11 +75,15 @@ def _is_close(side: str, position_side: str) -> bool:
 
 
 class BitgetConnection:
-    def __init__(self):
+    def __init__(self, credentials: Optional[Dict[str, str]] = None):
+        """Sem `credentials` é a conexão do bot (chaves do .env, testa a conexão no boot). Com `credentials`
+        ({api_key, api_secret, passphrase}) é um cliente só-leitura de outra conta da plataforma: não loga
+        o ambiente nem testa no construtor (quem chama trata o erro)."""
         self.config = config
-        self.api_key = str(getattr(config, "BITGET_API_KEY", "") or "")
-        self.api_secret = str(getattr(config, "BITGET_API_SECRET", "") or "")
-        self.passphrase = str(getattr(config, "BITGET_PASSPHRASE", "") or "")
+        creds = credentials or {}
+        self.api_key = str(creds.get("api_key") or getattr(config, "BITGET_API_KEY", "") or "")
+        self.api_secret = str(creds.get("api_secret") or getattr(config, "BITGET_API_SECRET", "") or "")
+        self.passphrase = str(creds.get("passphrase") or getattr(config, "BITGET_PASSPHRASE", "") or "")
         self.demo = bool(getattr(config, "BITGET_DEMO", True))
         self.product_type = "USDT-FUTURES"
         self.margin_coin = "USDT"
@@ -90,6 +94,8 @@ class BitgetConnection:
         self._realized_close_buffer: Dict[str, List[Dict[str, float]]] = {}
         self._daily_pnl_cache: Optional[Dict[str, Any]] = None
         self._cumulative_cache: Optional[Dict[str, Any]] = None
+        if credentials:
+            return
         logger.warning("🧪 Bitget em DEMO trading (header paptrading)" if self.demo
                        else "💰 ATENÇÃO: Bitget em PRODUÇÃO (dinheiro REAL)!")
         self._test_connection()

@@ -22,7 +22,7 @@ from flask import Flask, Response, abort, jsonify, redirect, render_template, re
 from flask_socketio import SocketIO
 
 from ..core.config import config, exchange_label
-from . import auth, klines, users
+from . import accounts, auth, klines, users
 from .auth import login_required
 from .data import _deploy_info, collect_history, collect_live, collect_snapshot, collect_summary
 from .platform import PlatformStore
@@ -112,6 +112,7 @@ def create_app(bot) -> tuple[Flask, SocketIO]:
     _register_routes(app, socketio)
     klines.register(app)
     users.register(app)
+    accounts.register(app)
     _register_sockets(socketio)
     return app, socketio
 
@@ -122,19 +123,31 @@ def create_app(bot) -> tuple[Flask, SocketIO]:
 
 def _register_routes(app: Flask, socketio: SocketIO) -> None:
 
-    def account_bot():
-        """Bot da conta pedida (?account=N; default = a 1ª conta do usuário logado). 404 se a conta
-        não existe, não é do usuário ou não tem bot neste processo."""
+    def account_bot(control: bool = False):
+        """Bot da conta pedida (?account=N; default = a 1ª conta ativa do usuário logado). 404 se a conta
+        não existe, está inativa ou não é do usuário. Conta sem bot neste processo → handle só-leitura
+        (saldo/posições/fills direto da exchange); com `control=True` essa conta responde 409."""
         user = auth.current_user()
-        accounts = app.config["PLATFORM"].accounts_for(user["id"])
+        mine = [a for a in app.config["PLATFORM"].accounts_for(user["id"]) if a["active"]]
         raw = request.args.get("account")
         try:
-            account_id = int(raw) if raw else (accounts[0]["id"] if accounts else 0)
+            account_id = int(raw) if raw else (mine[0]["id"] if mine else 0)
         except ValueError:
             abort(400)
-        if account_id not in {a["id"] for a in accounts} or account_id not in app.config["BOTS"]:
+        acc = next((a for a in mine if a["id"] == account_id), None)
+        if acc is None:
             abort(404)
-        return app.config["BOTS"][account_id]
+        if account_id in app.config["BOTS"]:
+            return app.config["BOTS"][account_id]
+        if control:
+            abort(409)
+        handles = app.config["HANDLES"]
+        if account_id not in handles:
+            creds = app.config["PLATFORM"].account_credentials(account_id)
+            if not all(creds.values()):
+                abort(404)   # sem chaves não há o que ler
+            handles[account_id] = accounts.ReadOnlyAccount(accounts.exchange_client(acc["exchange"], creds))
+        return handles[account_id]
 
     @app.route("/")
     @login_required
@@ -148,7 +161,8 @@ def _register_routes(app: Flask, socketio: SocketIO) -> None:
             strategy=str(getattr(config, "STRATEGY", "pullback") or "pullback"),
             csrf_token=auth.csrf_token(),
             user=user,
-            accounts=app.config["PLATFORM"].accounts_for(user["id"]),
+            accounts=[a for a in app.config["PLATFORM"].accounts_for(user["id"]) if a["active"]],
+            bots=set(app.config["BOTS"]),
         )
 
     @app.route("/login", methods=["GET", "POST"])
@@ -205,7 +219,8 @@ def _register_routes(app: Flask, socketio: SocketIO) -> None:
     @login_required
     def me():
         user = auth.current_user()
-        return jsonify({"user": user, "accounts": app.config["PLATFORM"].accounts_for(user["id"])})
+        accounts = [{**a, "has_bot": a["id"] in app.config["BOTS"]} for a in app.config["PLATFORM"].accounts_for(user["id"])]
+        return jsonify({"user": user, "accounts": accounts})
 
     @app.route("/api/snapshot")
     @login_required
@@ -269,7 +284,7 @@ def _register_routes(app: Flask, socketio: SocketIO) -> None:
     @app.route("/api/control/pause", methods=["POST"])
     @login_required
     def pause():
-        bot = account_bot()
+        bot = account_bot(control=True)
         bot.paused = True
         logger.info("⏸️  Bot pausado via dashboard")
         socketio.emit("control_changed", {"paused": True})
@@ -278,7 +293,7 @@ def _register_routes(app: Flask, socketio: SocketIO) -> None:
     @app.route("/api/control/resume", methods=["POST"])
     @login_required
     def resume():
-        bot = account_bot()
+        bot = account_bot(control=True)
         bot.paused = False
         logger.warning("▶️ Bot retomado via dashboard /api/control/resume")
         socketio.emit("control_changed", {"paused": False})
@@ -287,7 +302,7 @@ def _register_routes(app: Flask, socketio: SocketIO) -> None:
     @app.route("/api/control/close_all", methods=["POST"])
     @login_required
     def close_all():
-        bot = account_bot()
+        bot = account_bot(control=True)
         payload = request.get_json(silent=True) or {}
         reason = str(payload.get("reason", "Close all via dashboard"))[:120]
         # Mesmo método usado pelo /closeall do Telegram.
@@ -302,7 +317,7 @@ def _register_routes(app: Flask, socketio: SocketIO) -> None:
     @app.route("/api/positions/<symbol>/close", methods=["POST"])
     @login_required
     def close_position(symbol: str):
-        bot = account_bot()
+        bot = account_bot(control=True)
         payload = request.get_json(silent=True) or {}
         if payload.get("confirm") != symbol:
             return jsonify({"ok": False, "error": "confirm precisa ser igual ao símbolo"}), 400
@@ -331,10 +346,15 @@ def _register_sockets(socketio: SocketIO) -> None:
     @socketio.on("connect")
     def on_connect():
         # Sem sessão o handshake é recusado (o cookie da sessão vem no polling do socket.io).
+        # Os eventos do socket são do bot deste processo (broadcast): só quem é dono da conta dele conecta;
+        # os demais usuários ficam no polling HTTP, que resolve a conta deles.
+        from flask import current_app
         if not auth.has_session():
             return False
+        mine = {a["id"] for a in current_app.config["PLATFORM"].accounts_for(auth.current_user()["id"])}
+        if not mine & set(current_app.config["BOTS"]):
+            return False
         # No connect, envia o estado vivo; o histórico o client pede por HTTP.
-        from flask import current_app
         bot = current_app.config["BOT"]
         socketio.emit("snapshot", collect_live(bot))
 

@@ -21,7 +21,7 @@
     <!-- tema antes do primeiro paint (sem flash); o botão do topo grava a escolha -->
     <script>try{var t=localStorage.getItem('tradingbot-theme');if(t==="light"||t==="dark")document.documentElement.dataset.theme=t;}catch(e){}</script>
 </head>
-<body data-environment="{{ environment }}" data-poll-interval="{{ poll_interval }}" data-strategy="{{ strategy }}" data-csrf="{{ csrf_token }}" data-user-id="{{ user.id }}" data-role="{{ user.role }}">
+<body data-environment="{{ environment }}" data-poll-interval="{{ poll_interval }}" data-strategy="{{ strategy }}" data-csrf="{{ csrf_token }}" data-user-id="{{ user.id }}" data-role="{{ user.role }}" data-has-bot="{{ '1' if accounts and accounts[0].id in bots else '0' }}">
 
 <div class="shell">
 <!-- Menu lateral (fixo no desktop; off-canvas no celular pelo botão ☰ do topo) -->
@@ -64,7 +64,7 @@
         <div class="nav-group" data-group="platform">
             <button class="nav-item nav-toggle" type="button" aria-expanded="false" title="Plataforma"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4" fill="none" stroke="currentColor" stroke-width="2"/><path d="M4 20c0-4 4-6 8-6s8 2 8 6" fill="none" stroke="currentColor" stroke-width="2"/></svg><span>Plataforma</span><i class="chev" aria-hidden="true"></i></button>
             <div class="nav-sub">
-            <a class="soon" aria-disabled="true" title="Contas (em breve)"><span>Contas</span><small>em breve</small></a>
+            <a href="#accounts" data-page="accounts"><span>Contas</span></a>
             {% if user.role == 'admin' %}<a href="#users" data-page="users"><span>Usuários</span></a>{% endif %}
             </div>
         </div>
@@ -80,6 +80,7 @@
         <h1 class="top-title" id="top-title">Forward test · Donchian 4h</h1>
         <span class="env env-{{ environment }}">{{ exchange_label }}</span>
         <span class="state" id="state-pill" aria-live="polite">carregando</span>
+        <span class="tag warn" id="ro-tag" hidden title="Conta sem bot neste processo: saldo e posições lidos da corretora; sem Pausar/Retomar/Fechar">só leitura</span>
         <span class="fx" id="fx-badge" hidden><b id="fx-rate"></b><span class="fx-pill" id="fx-at"></span><button class="fx-toggle" id="fx-toggle" type="button" aria-label="Trocar moeda principal">ver em R$</button></span>
     </div>
     <p class="top-meta" id="top-meta">—</p>
@@ -89,6 +90,7 @@
     </div>
     <time class="clock" id="clock" aria-label="Hora em São Paulo">--:--:--</time>
     <button class="icon-btn" id="theme-toggle" type="button" aria-label="Alternar tema claro/escuro" title="Tema">◐</button>
+    {% if accounts|length > 1 %}<select class="acct-sel" id="acct-sel" aria-label="Conta" title="Conta exibida no painel">{% for a in accounts %}<option value="{{ a.id }}" data-has-bot="{{ '1' if a.id in bots else '0' }}">{{ a.label }}</option>{% endfor %}</select>{% endif %}
     <div class="profile" id="profile"><button class="profile-btn" id="profile-btn" type="button" title="Meu perfil: trocar a senha"><span class="avatar" aria-hidden="true">{{ (user.display_name or user.username or '?')[:1]|upper }}</span><span class="profile-name">{{ user.display_name or user.username }}<small>{{ 'admin · ' if user.role == 'admin' else '' }}{{ accounts|length }} conta(s)</small></span></button>
         <form class="user-menu" action="/logout" method="post"><input type="hidden" name="csrf" value="{{ csrf_token }}"><button class="btn btn-quiet btn-xs" type="submit">Sair</button></form></div>
 </header>
@@ -517,6 +519,21 @@
             </div>
             <div class="pager" id="fills-pager" hidden><button class="btn btn-quiet btn-xs" id="fills-prev">‹ Anterior</button><span class="pg-info" id="fills-page">—</span><button class="btn btn-quiet btn-xs" id="fills-next">Próxima ›</button></div>
             <p class="empty" id="fills-error" hidden></p>
+        </section>
+    </div>
+
+    <!-- Plataforma › Contas: contas de exchange do usuário (admin vê todas). Chaves cifradas; nunca voltam ao browser. -->
+    <div class="page" data-page="accounts" hidden>
+        <section class="card" id="accounts-card" aria-labelledby="accounts-h">
+            <header class="ch"><div><h2 id="accounts-h">Contas</h2><p class="cs">contas de exchange ligadas ao painel · a conta com <b>bot</b> é a deste processo; as outras são <b>só leitura</b> (saldo, posições e fills direto da corretora) · secret e passphrase nunca são exibidos</p></div>
+                <button class="btn pill-btn" id="accounts-new" type="button">+ Nova conta</button></header>
+            <div class="table-scroll">
+                <table class="table" id="accounts-table">
+                    <thead><tr><th scope="col">Conta</th>{% if user.role == 'admin' %}<th scope="col">Dono</th>{% endif %}<th scope="col">Chave</th><th scope="col">Status</th><th scope="col">Última checagem</th><th scope="col">Criada em</th><th scope="col">Ações</th></tr></thead>
+                    <tbody><tr><td colspan="7" class="empty">Carregando…</td></tr></tbody>
+                </table>
+            </div>
+            <p class="empty" id="accounts-error" hidden></p>
         </section>
     </div>
 

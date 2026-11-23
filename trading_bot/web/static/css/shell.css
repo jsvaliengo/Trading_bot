@@ -291,3 +291,14 @@
 .secret-box { display:flex; align-items:center; gap:8px; padding:10px 12px; border-radius:8px; background:var(--bg-elevated); border:1px dashed var(--border-strong); }
 .secret-box code { font-family:'IBM Plex Mono',ui-monospace,monospace; font-size:15px; font-weight:600; letter-spacing:.03em; flex:1; word-break:break-all; }
 @media (max-width: 760px) { .form-fields input, .form-fields select { font-size:16px; } .form-card .modal-actions .btn { flex:1; min-height:44px; } }
+/* Plataforma › Contas: seletor de conta no topo (só com >1 conta) e etiqueta "só leitura" */
+.acct-sel { font:inherit; font-size:12.5px; font-weight:600; color:var(--text); background:var(--bg-elevated); border:1px solid var(--border-strong); border-radius:999px; padding:6px 30px 6px 12px; max-width:170px; cursor:pointer; appearance:none; -webkit-appearance:none;
+    background-image:linear-gradient(45deg, transparent 50%, var(--text-dim) 50%), linear-gradient(135deg, var(--text-dim) 50%, transparent 50%); background-position:calc(100% - 16px) 50%, calc(100% - 11px) 50%; background-size:5px 5px; background-repeat:no-repeat; }
+.acct-sel:hover { border-color:var(--accent); }
+#ro-tag { font-size:11px; }
+.table td.key { font-family:'IBM Plex Mono',ui-monospace,monospace; }
+/* o seletor rouba ~170px do topo: até 1500px a linha de meta (deploy/no ar há) sai pra não quebrar em 2 linhas */
+@media (max-width: 1500px) { .top:has(.acct-sel) .top-meta { display:none; } }
+@media (max-width: 760px) { .acct-sel { flex-basis:100%; order:3; max-width:none; min-height:40px; } }
+body.readonly #pause-banner, body.readonly [data-action], body.readonly .pr-close, body.readonly #ft-card, body.readonly #eqperf-row,
+body.readonly #rdist-row, body.readonly #trades-card, body.readonly #eng-card { display:none !important; }

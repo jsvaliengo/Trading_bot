@@ -64,20 +64,39 @@ mercado é público (sem conta).
 Fora da fase 1: telas de cadastro de usuário/conta, seletor de conta no topo (só há uma),
 papéis/permissões, multi-processo.
 
-## 3. Fase 2 — contas de terceiros, só leitura
+## 3. Fase 2 — contas de terceiros, só leitura (feita: PRs #316 e o seguinte)
 
-Exige:
+Entregue:
 
-1. UI de **Contas**: cadastrar exchange + chaves (cifradas na gravação; nunca devolvidas ao browser),
-   testar conexão (`/api/v2/mix/account/accounts` com as chaves da conta), rótulo, ativar/desativar.
-2. UI de **Usuários** (admin): criar usuário, redefinir senha, vincular contas.
-3. **Coleta por conta sem bot**: `collect_positions/fills/summary` passam a aceitar um *cliente de
-   exchange da conta* (`BitgetConnection` construído com `account_credentials(id)`) quando não há bot
-   no processo — leitura de posições, saldo, fills e P&L da Bitget de qualquer conta cadastrada.
-4. Seletor de conta no topo; `?account=N` já existe nas rotas.
-5. Rate limit por conta nas chamadas privadas (Bitget: 10 req/s por chave) e cache curto por conta.
+1. **Usuários** (`web/users.py`, página `#users`, só admin): papéis `admin`/`user` (coluna `role`; usuário 1 é
+   sempre admin), `active` (desativado não loga e a sessão aberta cai), criar usuário com senha gerada
+   mostrada **uma** vez ou definida pelo admin, redefinir senha, promover/rebaixar; admin não age sobre si.
+   **Meu perfil** (avatar do topo): trocar a própria senha. CSRF nos POSTs JSON pelo header `X-CSRF-Token`
+   (mesmo token da sessão); rate limit do login por IP **e** por usuário.
+2. **Contas** (`web/accounts.py`, página `#accounts`): cadastrar exchange + rótulo + chaves (cifradas na
+   gravação; nunca devolvidas — só `key_last4`), editar rótulo, **substituir chaves** (as 3 juntas),
+   **Testar conexão** (`/api/v2/mix/account/accounts` + posições com as chaves da conta; resultado gravado em
+   `last_check_*`), ativar/desativar (a conta do bot deste processo não desativa). Admin vê todas as contas com
+   o dono e pode criar conta para outro usuário; `user` só as próprias.
+3. **Seletor de conta no topo** (só com >1 conta ativa; lembrado em `localStorage`): o `main.js` anexa
+   `?account=N` a toda rota de dados (`/api/me|users|accounts|market|klines|healthz` ficam fora).
+4. **Conta sem bot = só leitura**: `account_bot()` devolve um `ReadOnlyAccount` (`web/accounts.py`) com o
+   mesmo shape que `collect_*` lê do bot — `exchange` = `BitgetConnection(credentials=...)` da conta,
+   `known_positions` = posições abertas na corretora (cache 5 s), `trade_store=None`. Assim `/api/live`,
+   `/api/summary`, `/api/fills` funcionam (saldo, margem, não realizado, realizado do dia, funding, posições,
+   fills); `/api/history`, `/api/pnl_report` respondem vazios (sem TradeStore). Pausar/Retomar/Fechar → **409**.
+   Conta sem chaves → 404. A etiqueta "só leitura" aparece no topo e os botões de controle somem.
+5. Socket.IO só conecta para quem é dono da conta do bot (os eventos são broadcast do bot deste processo);
+   os demais usuários ficam no polling HTTP, que resolve a conta deles.
 
-Sem execução de ordens: botões Pausar/Retomar/Fechar aparecem só para contas com bot.
+Fica para a **fase 2b**:
+
+- Rate limit por conta nas chamadas privadas e cache curto **por conta** (hoje o cache de 15 s dos KPIs é um
+  só e troca de dono quando o painel alterna entre contas: funciona, mas chama mais a API).
+- Histórico/P&L de conta sem bot (precisa de um TradeStore por conta ou de ler income/fills da corretora
+  como fonte de trades).
+- Ambiente (demo/produção) **por conta**: hoje todas as contas seguem `BITGET_DEMO` do processo.
+- Outras exchanges no cadastro (só Bitget hoje).
 
 ## 4. Fase 3 — um bot por conta (multi-processo)
 
