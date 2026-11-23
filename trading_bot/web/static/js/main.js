@@ -614,10 +614,12 @@
             (f.side === 'all' || t.side === f.side) &&
             (f.reason === 'all' || reasonKind(t.close_reason) === f.reason));
     }
+    const TEXT_KEYS = ['symbol', 'side', 'close_reason'];
+    // comparador das tabelas de trades: data por timestamp, texto por string, resto numérico; nulos sempre no fim
+    const byKey = (k, dir) => (a, b) => { let x = a[k], y = b[k]; if (k === 'exit_time' || k === 'exit_at') { x = new Date(x).getTime(); y = new Date(y).getTime(); } if (x == null) return 1; if (y == null) return -1; return (x > y ? 1 : x < y ? -1 : 0) * dir; };
     function renderTrades(all) {
         const rows = filteredTrades(all);
-        const k = state.sortKey, dir = state.sortDir;
-        rows.sort((a, b) => { let x = a[k], y = b[k]; if (k === 'exit_time') { x = new Date(x).getTime(); y = new Date(y).getTime(); } if (x == null) return 1; if (y == null) return -1; return (x > y ? 1 : x < y ? -1 : 0) * dir; });
+        rows.sort(byKey(state.sortKey, state.sortDir));
         const n = rows.length, net = sum(rows.map(t => t.pnl_net || 0)), wins = rows.filter(t => t.pnl_net > 0).length;
         const rs = rows.map(t => t.r_multiple).filter(isNum), costs = sum(rows.map(t => (t.fees || 0) + (t.funding || 0)));
         $('tr-sub').textContent = `${n} trade(s) no filtro`;
@@ -650,7 +652,7 @@
     function initTrades() {
         $$('#trades-table th[data-sort]').forEach(th => th.querySelector('button').addEventListener('click', () => {
             const k = th.dataset.sort;
-            if (state.sortKey === k) state.sortDir *= -1; else { state.sortKey = k; state.sortDir = k === 'symbol' || k === 'side' || k === 'close_reason' ? 1 : -1; }
+            if (state.sortKey === k) state.sortDir *= -1; else { state.sortKey = k; state.sortDir = TEXT_KEYS.includes(k) ? 1 : -1; }
             $$('#trades-table th[data-sort]').forEach(x => x.removeAttribute('aria-sort'));
             th.setAttribute('aria-sort', state.sortDir > 0 ? 'ascending' : 'descending');
             state.page = 1; if (state.hist) renderTrades(state.hist.recent_trades);
@@ -731,7 +733,7 @@
     const dayStr = (d) => d.toISOString().slice(0, 10);
     const addDays = (iso, n) => { const d = new Date(iso + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return dayStr(d); };
     const dayRange = (from, to) => { const out = []; for (let d = from; d <= to; d = addDays(d, 1)) out.push(d); return out; };
-    const pnlState = { days: 30, from: null, to: null, tab: 'account', month: null, page: {}, len: {}, symDir: -1 };
+    const pnlState = { days: 30, from: null, to: null, tab: 'account', month: null, page: {}, len: {}, symDir: -1, trKey: 'exit_at', trDir: -1 };
     // presets mandam só `days`: o servidor ancora no dia UTC dele (como a Bitget), não na data do navegador
     const pnlQuery = () => pnlState.days === 'custom' ? (pnlState.from && pnlState.to ? `?from=${pnlState.from}&to=${pnlState.to}` : '') : `?days=${pnlState.days}`;
     async function fetchPnl() {
@@ -859,7 +861,7 @@
         return rows.slice((page - 1) * PNL_PAGE, page * PNL_PAGE);
     }
     function renderPnlTrades(p) {
-        const rows = pnlPaginate('details', p.trades || []), tb = $('pnl-trades').querySelector('tbody');
+        const rows = pnlPaginate('details', [...(p.trades || [])].sort(byKey(pnlState.trKey, pnlState.trDir))), tb = $('pnl-trades').querySelector('tbody');
         if (!rows.length) { tb.innerHTML = '<tr><td colspan="9" class="empty sans">Nenhum trade fechado no período.</td></tr>'; return; }
         tb.innerHTML = rows.map(t => `<tr>
             <td><small>${fmt.dateTime(t.exit_at)}</small></td>
@@ -903,6 +905,13 @@
             $(`pnl-${tab}-prev`).addEventListener('click', () => { pnlState.page[tab]--; render(state.pnl); });
             $(`pnl-${tab}-next`).addEventListener('click', () => { pnlState.page[tab]++; render(state.pnl); });
         });
+        $$('#pnl-trades th[data-sort]').forEach(th => th.querySelector('button').addEventListener('click', () => {
+            const k = th.dataset.sort;
+            if (pnlState.trKey === k) pnlState.trDir *= -1; else { pnlState.trKey = k; pnlState.trDir = TEXT_KEYS.includes(k) ? 1 : -1; }
+            $$('#pnl-trades th[data-sort]').forEach(x => x.removeAttribute('aria-sort'));
+            th.setAttribute('aria-sort', pnlState.trDir > 0 ? 'ascending' : 'descending');
+            pnlState.page.details = 1; if (state.pnl) renderPnlTrades(state.pnl);
+        }));
         $('pnl-symbols').querySelector('th[data-sort] button').addEventListener('click', (e) => { pnlState.symDir *= -1; e.target.closest('th').setAttribute('aria-sort', pnlState.symDir > 0 ? 'ascending' : 'descending'); renderPnlSymbols(state.pnl); });
     }
 

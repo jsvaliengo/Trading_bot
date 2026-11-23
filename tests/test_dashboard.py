@@ -1858,7 +1858,7 @@ def test_pnl_details_and_income_tabs_paginate_client_side():
     assert "const PNL_PAGE = 10;" in js
     assert "if (pnlState.len[tab] !== rows.length) { pnlState.len[tab] = rows.length; pnlState.page[tab] = 1; }" in js
     assert "$(`pnl-${tab}-pager`).hidden = pages <= 1; $(`pnl-${tab}-page`).textContent = `página ${page} de ${pages}`;" in js
-    assert "pnlPaginate('details', p.trades || [])" in js and "pnlPaginate('income', p.income || [])" in js
+    assert "pnlPaginate('details', [...(p.trades || [])].sort(byKey(pnlState.trKey, pnlState.trDir)))" in js and "pnlPaginate('income', p.income || [])" in js
     assert "pnlState.tab = b.dataset.tab; pnlState.page = {};" in js
 
 
@@ -2085,3 +2085,16 @@ def test_platform_store_reads_are_thread_safe(tmp_path):
     for t in threads:
         t.join()
     assert not misses
+
+
+def test_pnl_details_table_headers_are_sortable():
+    from trading_bot.web.app import create_app
+    app, _ = create_app(_make_bot())
+    client = app.test_client()
+    _login(client)
+    thead = client.get("/").data.decode().split('id="pnl-trades"')[1].split("</thead>")[0]
+    for k in ("exit_at", "symbol", "side", "qty", "entry_price", "exit_price", "pnl_net", "fees", "close_reason"):
+        assert f'data-sort="{k}"' in thead and thead.count('<button>') == 9, k
+    assert 'data-sort="exit_at" aria-sort="descending"' in thead
+    js = open("trading_bot/web/static/js/main.js", encoding="utf-8").read()
+    assert "sort(byKey(pnlState.trKey, pnlState.trDir))" in js and "#pnl-trades th[data-sort]" in js
