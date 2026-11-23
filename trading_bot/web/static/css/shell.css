@@ -277,6 +277,7 @@
 .tag.admin { background:var(--accent-soft); color:var(--accent); }
 .tag.on { background:var(--good-soft); color:var(--good); } .tag.off { background:var(--bad-soft); color:var(--bad); }
 .tag.warn { background:var(--warn-soft); color:var(--warn); }
+.tag.env-demo { background:var(--warn-soft); color:var(--warn); } .tag.env-prod { background:var(--bad-soft); color:var(--bad); }
 .table tr.off td { opacity:.55; } .table tr.off td:last-child { opacity:1; }
 .table td.who b { display:block; font-family:'IBM Plex Sans',system-ui,sans-serif; font-weight:600; } .table td.who small { display:block; }
 .form-card { width:min(460px,100%); display:flex; flex-direction:column; gap:12px; }
@@ -299,6 +300,6 @@
 .table td.key { font-family:'IBM Plex Mono',ui-monospace,monospace; }
 /* o seletor rouba ~170px do topo: até 1500px a linha de meta (deploy/no ar há) sai pra não quebrar em 2 linhas */
 @media (max-width: 1500px) { .top:has(.acct-sel) .top-meta { display:none; } }
-@media (max-width: 760px) { .acct-sel { flex-basis:100%; order:3; max-width:none; min-height:40px; } }
+@media (max-width: 760px) { .acct-sel { flex-basis:100%; order:3; max-width:none; min-height:40px; } #acct-env { display:none; } }   /* no celular o texto da opção já traz · DEMO/PROD */
 body.readonly #pause-banner, body.readonly [data-action], body.readonly .pr-close, body.readonly #ft-card, body.readonly #eqperf-row,
 body.readonly #rdist-row, body.readonly #trades-card, body.readonly #eng-card { display:none !important; }

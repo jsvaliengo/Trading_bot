@@ -89,13 +89,24 @@ Entregue:
 5. Socket.IO só conecta para quem é dono da conta do bot (os eventos são broadcast do bot deste processo);
    os demais usuários ficam no polling HTTP, que resolve a conta deles.
 
-Fica para a **fase 2b**:
+## 3b. Fase 2b — ambiente por conta, cache por conta (PR C)
 
-- Rate limit por conta nas chamadas privadas e cache curto **por conta** (hoje o cache de 15 s dos KPIs é um
-  só e troca de dono quando o painel alterna entre contas: funciona, mas chama mais a API).
-- Histórico/P&L de conta sem bot (precisa de um TradeStore por conta ou de ler income/fills da corretora
-  como fonte de trades).
-- Ambiente (demo/produção) **por conta**: hoje todas as contas seguem `BITGET_DEMO` do processo.
+Entregue:
+
+1. **Ambiente por conta**: coluna `accounts.environment` (`demo`|`prod`, ALTER idempotente no boot). A conta do
+   bot (conta 1) segue o processo: o seed grava `BITGET_DEMO` do `.env` nela (na criação e na migração da coluna)
+   e `POST /api/accounts/<id>/environment` responde 400 para ela. As outras escolhem no cadastro (campo
+   Ambiente) ou em **Editar**; trocar o ambiente zera a última checagem e descarta o handle só-leitura.
+   `BitgetConnection(credentials=..., demo=...)`: `demo` por conta (header `paptrading`); `None` = processo.
+   Badge DEMO (amarelo) / PROD (vermelho) na tabela de Contas e ao lado do seletor do topo.
+2. **Cache dos KPIs por conta**: `data._binance_summary` guarda uma entrada por objeto exchange (bot e cada
+   handle só-leitura têm o seu) com TTL de 15 s; **rate limit** simples: mesmo com falha da corretora, no mínimo
+   5 s entre rajadas de chamadas privadas da mesma conta (antes, a falha era re-tentada a cada poll de 5 s).
+   Entradas vencidas são descartadas a cada chamada (handle trocado não vaza).
+
+Fica para a **fase 2b (PR D)** e depois:
+
+- Histórico/P&L de conta sem bot (ler income/fills da corretora como fonte de trades; sem TradeStore por conta).
 - Outras exchanges no cadastro (só Bitget hoje).
 
 ## 4. Fase 3 — um bot por conta (multi-processo)
