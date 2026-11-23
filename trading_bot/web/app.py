@@ -146,7 +146,7 @@ def _register_routes(app: Flask, socketio: SocketIO) -> None:
             creds = app.config["PLATFORM"].account_credentials(account_id)
             if not all(creds.values()):
                 abort(404)   # sem chaves não há o que ler
-            handles[account_id] = accounts.ReadOnlyAccount(accounts.exchange_client(acc["exchange"], creds))
+            handles[account_id] = accounts.ReadOnlyAccount(accounts.exchange_client(acc["exchange"], creds, acc["environment"]))
         return handles[account_id]
 
     @app.route("/")

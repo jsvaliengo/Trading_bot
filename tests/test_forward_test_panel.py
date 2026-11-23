@@ -268,14 +268,16 @@ def test_binance_summary_cacheia_por_15s_por_exchange(monkeypatch):
     )
     t = [100.0]
     monkeypatch.setattr(dash.time, "monotonic", lambda: t[0])
-    dash._binance_cache.update(exchange=None, data=None)
+    dash._binance_cache.clear()
     a = dash._binance_summary(ex, None)
     assert a["daily_realized"] == -1.0 and a["wallet_balance"] == 95.0 and a["unrealized"] == 0.5
     assert dash._binance_summary(ex, None) is a and len(calls) == 2           # hit
     t[0] += 16
     assert dash._binance_summary(ex, None) is not a and len(calls) == 4       # expirou
+    b = dash._binance_summary(ex, None)
     other = SimpleNamespace(get_daily_pnl_from_binance=lambda: {"total": 7.0}, get_account_info=lambda: {})
-    assert dash._binance_summary(other, None)["daily_realized"] == 7.0       # outra exchange não usa o cache
+    assert dash._binance_summary(other, None)["daily_realized"] == 7.0       # outra exchange (conta) não usa o cache
+    assert dash._binance_summary(ex, None) is b and len(calls) == 4          # ...e não derruba o cache da primeira
 
 
 def test_summarize_counts_manual_closes_separately():

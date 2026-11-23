@@ -18,6 +18,7 @@ from flask import Flask, current_app, jsonify, request
 
 from . import auth
 from .auth import login_required
+from .platform import ENVIRONMENTS
 
 logger = logging.getLogger(__name__)
 
@@ -29,20 +30,20 @@ def _bad(msg: str, status: int = 400):
     return jsonify({"ok": False, "error": msg}), status
 
 
-def exchange_client(exchange: str, creds: Dict[str, str]):
-    """Cliente privado da exchange com as chaves da conta (sem testar no construtor)."""
+def exchange_client(exchange: str, creds: Dict[str, str], environment: str = "demo"):
+    """Cliente privado da exchange com as chaves da conta (sem testar no construtor), no ambiente DA CONTA."""
     if exchange != "bitget":
         raise LookupError(f"exchange {exchange!r} sem cliente de plataforma")
     from ..infra.bitget_client import BitgetConnection
-    return BitgetConnection(credentials=creds)
+    return BitgetConnection(credentials=creds, demo=environment != "prod")
 
 
-def probe(exchange: str, creds: Dict[str, str]) -> Dict[str, Any]:
+def probe(exchange: str, creds: Dict[str, str], environment: str = "demo") -> Dict[str, Any]:
     """Chamada read-only (saldo USDT-M + nº de posições). {ok, equity, available, positions} ou {ok: False, error}."""
     if not all(creds.get(k) for k in ("api_key", "api_secret", "passphrase")):
         return {"ok": False, "error": "conta sem chaves cadastradas"}
     try:
-        client = exchange_client(exchange, creds)
+        client = exchange_client(exchange, creds, environment)
         acct = client._fetch_account()
         positions = client.get_open_positions()
     except Exception as exc:   # BitgetApiError/ConnectionError/requests: a mensagem da corretora vai pro usuário
@@ -128,8 +129,12 @@ def register(app: Flask) -> None:
         owner = int(body.get("user_id") or user["id"]) if user["role"] == "admin" else int(user["id"])
         if store.user(owner) is None:
             return _bad("dono não existe", 404)
+        environment = str(body.get("environment") or "demo").lower()
+        if environment not in ENVIRONMENTS:
+            return _bad("ambiente precisa ser demo ou prod")
         try:
-            account_id = store.create_account(owner, exchange, str(body.get("label") or "").strip()[:64], **keys)
+            account_id = store.create_account(owner, exchange, str(body.get("label") or "").strip()[:64],
+                                              environment=environment, **keys)
         except RuntimeError as exc:   # sem segredo da plataforma: não dá pra cifrar
             return _bad(str(exc), 503)
         logger.info(f"🧩 Conta {account_id} ({exchange}) criada para o usuário {owner} por {user['username']!r}")
@@ -145,6 +150,22 @@ def register(app: Flask) -> None:
         if not label:
             return _bad("rótulo vazio")
         store.set_account_label(account_id, label)
+        return jsonify({"ok": True, "account": store.account(account_id)})
+
+    @app.route("/api/accounts/<int:account_id>/environment", methods=["POST"])
+    @login_required
+    def account_environment(account_id: int):
+        store = current_app.config["PLATFORM"]
+        if _owned(store, account_id) is None:
+            return _bad("conta não existe", 404)
+        if account_id in current_app.config["BOTS"]:
+            return _bad("a conta do bot deste processo segue o ambiente do processo (BITGET_DEMO)")
+        environment = str((request.get_json(silent=True) or {}).get("environment") or "").lower()
+        if environment not in ENVIRONMENTS:
+            return _bad("ambiente precisa ser demo ou prod")
+        store.set_account_environment(account_id, environment)
+        current_app.config["HANDLES"].pop(account_id, None)   # o próximo poll cria o cliente no ambiente novo
+        logger.info(f"🧩 Conta {account_id} agora em {environment} por {auth.current_user()['username']!r}")
         return jsonify({"ok": True, "account": store.account(account_id)})
 
     @app.route("/api/accounts/<int:account_id>/keys", methods=["POST"])
@@ -184,6 +205,6 @@ def register(app: Flask) -> None:
         acc = _owned(store, account_id)
         if acc is None:
             return _bad("conta não existe", 404)
-        result = probe(acc["exchange"], store.account_credentials(account_id))
+        result = probe(acc["exchange"], store.account_credentials(account_id), acc["environment"])
         store.record_account_check(account_id, result["ok"], "" if result["ok"] else result["error"])
         return jsonify({**result, "account": store.account(account_id)})

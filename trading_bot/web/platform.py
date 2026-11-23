@@ -22,6 +22,8 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 logger = logging.getLogger(__name__)
 
+ENVIRONMENTS = ("demo", "prod")
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY,
@@ -44,7 +46,8 @@ CREATE TABLE IF NOT EXISTS accounts (
     active INTEGER NOT NULL DEFAULT 1,
     last_check_at TEXT,
     last_check_ok INTEGER,
-    last_check_msg TEXT NOT NULL DEFAULT ''
+    last_check_msg TEXT NOT NULL DEFAULT '',
+    environment TEXT NOT NULL DEFAULT 'demo'
 );
 """
 
@@ -77,9 +80,12 @@ class PlatformStore:
             self._conn.execute("UPDATE users SET role = 'admin' WHERE id = 1")
             acols = {r["name"] for r in self._conn.execute("PRAGMA table_info(accounts)")}
             for col, ddl in (("active", "INTEGER NOT NULL DEFAULT 1"), ("last_check_at", "TEXT"),
-                             ("last_check_ok", "INTEGER"), ("last_check_msg", "TEXT NOT NULL DEFAULT ''")):
+                             ("last_check_ok", "INTEGER"), ("last_check_msg", "TEXT NOT NULL DEFAULT ''"),
+                             ("environment", "TEXT NOT NULL DEFAULT 'demo'")):
                 if col not in acols:
                     self._conn.execute(f"ALTER TABLE accounts ADD COLUMN {col} {ddl}")
+            # a coluna acabou de nascer: o seed ajusta a conta do bot ao ambiente do processo (fase 2b)
+            self._environment_added = "environment" not in acols
 
     def _select(self, sql: str, params: tuple = ()) -> list:
         """Leitura serializada: a conexão é uma só (check_same_thread=False) e o Flask atende em threads —
@@ -159,19 +165,21 @@ class PlatformStore:
 
     # ---- contas ----
     def create_account(self, user_id: int, exchange: str, label: str = "", api_key: str = "",
-                       api_secret: str = "", passphrase: str = "") -> int:
+                       api_secret: str = "", passphrase: str = "", environment: str = "demo") -> int:
+        if environment not in ENVIRONMENTS:
+            raise ValueError("ambiente precisa ser demo ou prod")
         now = datetime.now(timezone.utc).isoformat()
         with self._lock, self._conn:
             cur = self._conn.execute(
-                "INSERT INTO accounts (user_id, exchange, label, api_key_enc, api_secret_enc, passphrase_enc, created_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO accounts (user_id, exchange, label, api_key_enc, api_secret_enc, passphrase_enc, created_at,"
+                " environment) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (user_id, exchange, label or exchange, self.encrypt(api_key), self.encrypt(api_secret),
-                 self.encrypt(passphrase), now),
+                 self.encrypt(passphrase), now, environment),
             )
             return int(cur.lastrowid)
 
     _ACCOUNT_COLS = ("a.id, a.user_id, a.exchange, a.label, a.created_at, a.active, a.last_check_at, a.last_check_ok,"
-                     " a.last_check_msg, a.api_key_enc, u.username AS owner")
+                     " a.last_check_msg, a.environment, a.api_key_enc, u.username AS owner")
 
     def _account_row(self, row) -> Dict[str, Any]:
         """Linha pública da conta: nunca secret/passphrase; da key só os 4 últimos caracteres."""
@@ -207,6 +215,13 @@ class PlatformStore:
                 " last_check_ok = NULL, last_check_msg = '' WHERE id = ?",
                 (self.encrypt(api_key), self.encrypt(api_secret), self.encrypt(passphrase), account_id))
 
+    def set_account_environment(self, account_id: int, environment: str) -> None:
+        if environment not in ENVIRONMENTS:
+            raise ValueError("ambiente precisa ser demo ou prod")
+        with self._lock, self._conn:
+            self._conn.execute("UPDATE accounts SET environment = ?, last_check_at = NULL, last_check_ok = NULL,"
+                               " last_check_msg = '' WHERE id = ?", (environment, account_id))
+
     def set_account_active(self, account_id: int, active: bool) -> None:
         with self._lock, self._conn:
             self._conn.execute("UPDATE accounts SET active = ? WHERE id = ?", (1 if active else 0, account_id))
@@ -234,15 +249,21 @@ class PlatformStore:
         user_id = int(user["id"]) if user else (self.create_user(username, password) if username and password else 0)
         if not user_id:
             return {"user_id": 0, "account_id": 0}
+        exchange = str(getattr(config, "EXCHANGE", "binance") or "binance").lower()
+        # a conta do bot segue o ambiente do processo; as demais escolhem no cadastro
+        demo = bool(getattr(config, "BITGET_DEMO", True)) if exchange == "bitget" else bool(getattr(config, "USE_TESTNET", False))
+        environment = "demo" if demo else "prod"
         existing = self.accounts_for(user_id)
         if existing:
+            if self._environment_added:
+                self.set_account_environment(int(existing[0]["id"]), environment)
+                self._environment_added = False
             return {"user_id": user_id, "account_id": int(existing[0]["id"])}
-        exchange = str(getattr(config, "EXCHANGE", "binance") or "binance").lower()
         prefix = exchange.upper()
         creds = {k: str(getattr(config, f"{prefix}_{k.upper()}", "") or "") for k in ("api_key", "api_secret", "passphrase")}
         if self._fernet is None and any(creds.values()):
             logger.warning("🔐 Sem segredo da plataforma: conta 1 criada sem as chaves (defina TRADING_BOT_PLATFORM_SECRET)")
             creds = {k: "" for k in creds}
-        account_id = self.create_account(user_id, exchange, label=f"{exchange} principal", **creds)
+        account_id = self.create_account(user_id, exchange, label=f"{exchange} principal", environment=environment, **creds)
         logger.info(f"🧩 Plataforma: usuário {user_id} ({username}) e conta {account_id} ({exchange}) criados do .env")
         return {"user_id": user_id, "account_id": account_id}

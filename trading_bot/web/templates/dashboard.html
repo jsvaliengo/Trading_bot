@@ -90,7 +90,7 @@
     </div>
     <time class="clock" id="clock" aria-label="Hora em São Paulo">--:--:--</time>
     <button class="icon-btn" id="theme-toggle" type="button" aria-label="Alternar tema claro/escuro" title="Tema">◐</button>
-    {% if accounts|length > 1 %}<select class="acct-sel" id="acct-sel" aria-label="Conta" title="Conta exibida no painel">{% for a in accounts %}<option value="{{ a.id }}" data-has-bot="{{ '1' if a.id in bots else '0' }}">{{ a.label }}</option>{% endfor %}</select>{% endif %}
+    {% if accounts|length > 1 %}<select class="acct-sel" id="acct-sel" aria-label="Conta" title="Conta exibida no painel">{% for a in accounts %}<option value="{{ a.id }}" data-has-bot="{{ '1' if a.id in bots else '0' }}" data-env="{{ a.environment }}">{{ a.label }} · {{ 'PROD' if a.environment == 'prod' else 'DEMO' }}</option>{% endfor %}</select><span class="tag" id="acct-env" title="Ambiente da conta exibida"></span>{% endif %}
     <div class="profile" id="profile"><button class="profile-btn" id="profile-btn" type="button" title="Meu perfil: trocar a senha"><span class="avatar" aria-hidden="true">{{ (user.display_name or user.username or '?')[:1]|upper }}</span><span class="profile-name">{{ user.display_name or user.username }}<small>{{ 'admin · ' if user.role == 'admin' else '' }}{{ accounts|length }} conta(s)</small></span></button>
         <form class="user-menu" action="/logout" method="post"><input type="hidden" name="csrf" value="{{ csrf_token }}"><button class="btn btn-quiet btn-xs" type="submit">Sair</button></form></div>
 </header>
@@ -529,8 +529,8 @@
                 <button class="btn pill-btn" id="accounts-new" type="button">+ Nova conta</button></header>
             <div class="table-scroll">
                 <table class="table" id="accounts-table">
-                    <thead><tr><th scope="col">Conta</th>{% if user.role == 'admin' %}<th scope="col">Dono</th>{% endif %}<th scope="col">Chave</th><th scope="col">Status</th><th scope="col">Última checagem</th><th scope="col">Criada em</th><th scope="col">Ações</th></tr></thead>
-                    <tbody><tr><td colspan="7" class="empty">Carregando…</td></tr></tbody>
+                    <thead><tr><th scope="col">Conta</th>{% if user.role == 'admin' %}<th scope="col">Dono</th>{% endif %}<th scope="col">Chave</th><th scope="col">Ambiente</th><th scope="col">Status</th><th scope="col">Última checagem</th><th scope="col">Criada em</th><th scope="col">Ações</th></tr></thead>
+                    <tbody><tr><td colspan="8" class="empty">Carregando…</td></tr></tbody>
                 </table>
             </div>
             <p class="empty" id="accounts-error" hidden></p>

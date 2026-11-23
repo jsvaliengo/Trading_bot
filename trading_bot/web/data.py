@@ -349,15 +349,21 @@ def collect_daily_history(bot, limit: int = 90) -> List[Dict[str, Any]]:
 
 
 _BINANCE_TTL = 15.0
-_binance_cache: Dict[str, Any] = {"exchange": None, "at": 0.0, "data": None}
+_BINANCE_MIN_GAP = 5.0
+# por objeto exchange (= por conta: o bot e cada handle só-leitura têm o seu): {id(exchange): {exchange, at, data}}
+_binance_cache: Dict[int, Dict[str, Any]] = {}
 
 
 def _binance_summary(exchange, store) -> Dict[str, float]:
-    """As 3 chamadas REST da Binance do card de KPIs, uma vez a cada 15s: com o
-    poll de 5s eram ~0,6s de latência em TODA resposta. Guarda a referência da
-    exchange (não só o id) para o cache não vazar entre objetos diferentes."""
-    c = _binance_cache
-    if c["exchange"] is exchange and c["data"] is not None and time.monotonic() - c["at"] < _BINANCE_TTL:
+    """As 3 chamadas REST da exchange do card de KPIs, uma vez a cada 15s POR CONTA: com o
+    poll de 5s eram ~0,6s de latência em TODA resposta. Guarda a referência da exchange
+    (não só o id) para o cache não vazar entre objetos diferentes. Rate limit por conta:
+    mesmo com falha, no mínimo 5s entre rajadas de chamadas privadas da mesma conta."""
+    now = time.monotonic()
+    for key in [k for k, v in _binance_cache.items() if now - v["at"] > _BINANCE_TTL]:
+        del _binance_cache[key]
+    c = _binance_cache.get(id(exchange))
+    if c is not None and c["exchange"] is exchange and now - c["at"] < (_BINANCE_TTL if c["ok"] else _BINANCE_MIN_GAP):
         return c["data"]
     out: Dict[str, float] = {}
     ok = True
@@ -393,9 +399,8 @@ def _binance_summary(exchange, store) -> Dict[str, float]:
         out["margin_used"] = _safe_float(info.get("total_initial_margin"))
     except Exception:
         ok = False
-    # falha transitória não fica presa 15s no cache: o próximo poll tenta de novo
-    if ok:
-        c.update(exchange=exchange, at=time.monotonic(), data=out)
+    # falha transitória não fica presa 15s no cache: só o gap mínimo, depois o poll tenta de novo
+    _binance_cache[id(exchange)] = {"exchange": exchange, "at": time.monotonic(), "data": out, "ok": ok}
     return out
 
 

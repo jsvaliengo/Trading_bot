@@ -1893,8 +1893,9 @@ def test_klines_endpoint_serves_exchange_candles_for_chart():
 class _FakeExchange:
     """Cliente só-leitura fake (o que ReadOnlyAccount/collect_* chamam), sem rede."""
 
-    def __init__(self, creds):
+    def __init__(self, creds, environment="demo"):
         self.creds = creds
+        self.environment = environment
         self.calls = 0
 
     def _fetch_account(self):
@@ -1930,7 +1931,7 @@ def _app_with_secret(monkeypatch):
     monkeypatch.setattr(global_config, "BITGET_PASSPHRASE", "p1", raising=False)
     monkeypatch.setattr(global_config, "EXCHANGE", "bitget", raising=False)
     made = []
-    monkeypatch.setattr(acc_mod, "exchange_client", lambda exchange, creds: made.append(_FakeExchange(creds)) or made[-1])
+    monkeypatch.setattr(acc_mod, "exchange_client", lambda exchange, creds, environment="demo": made.append(_FakeExchange(creds, environment)) or made[-1])
     app, _ = create_app(_make_bot())
     return app, made
 
@@ -1952,6 +1953,12 @@ def test_platform_accounts_migration_public_rows_and_key_replacement(tmp_path):
     store = PlatformStore(str(db), secret="s")   # migra as colunas novas
     acc = store.account(aid)
     assert acc["active"] is True and acc["has_keys"] is True and acc["key_last4"] == "AB12" and acc["owner"] == "admin"
+    assert acc["environment"] == "demo" and store._environment_added is True
+    store.set_account_environment(aid, "prod")
+    assert store.account(aid)["environment"] == "prod"
+    with pytest.raises(ValueError):
+        store.set_account_environment(aid, "staging")
+    assert PlatformStore(str(db), secret="s")._environment_added is False
     assert not {"api_key_enc", "api_secret_enc", "passphrase_enc", "api_key"} & set(acc)
     store.record_account_check(aid, False, "apikey inválida")
     assert store.account(aid)["last_check_ok"] is False and store.account(aid)["last_check_msg"] == "apikey inválida"
@@ -1995,7 +2002,7 @@ def test_accounts_api_crud_ownership_test_connection_and_no_secret_leak(monkeypa
     assert r.status_code == 200 and r.get_json()["ok"] is True and r.get_json()["positions"] == 1 and r.get_json()["equity"] == 96.5
     assert made[-1].creds == _FAKE_KEYS and r.get_json()["account"]["last_check_ok"] is True
     # erro da corretora volta como mensagem, sem a chave
-    monkeypatch.setattr(acc_mod, "exchange_client", lambda exchange, creds: (_ for _ in ()).throw(ConnectionError("Não foi possível conectar à Bitget: apikey inválida")))
+    monkeypatch.setattr(acc_mod, "exchange_client", lambda exchange, creds, environment="demo": (_ for _ in ()).throw(ConnectionError("Não foi possível conectar à Bitget: apikey inválida")))
     r = _post(maria, f"/api/accounts/{aid}/test", {})
     assert r.get_json()["ok"] is False and "apikey inválida" in r.get_json()["error"] and "bg_fake" not in r.data.decode()
     assert r.get_json()["account"]["last_check_ok"] is False
@@ -2063,6 +2070,99 @@ def test_bitget_connection_with_platform_credentials_skips_boot_probe(monkeypatc
     monkeypatch.setattr(bg.requests.Session, "request", lambda self, *a, **k: (_ for _ in ()).throw(AssertionError("sem rede no construtor")))
     c = bg.BitgetConnection(credentials={"api_key": "acct-key", "api_secret": "acct-secret", "passphrase": "acct-pass"})
     assert c.api_key == "acct-key" and c.passphrase == "acct-pass" and c.demo is False
+    # ambiente por conta: `demo` explícito vence o BITGET_DEMO do processo; None segue o processo
+    assert bg.BitgetConnection(credentials={"api_key": "k", "api_secret": "s", "passphrase": "p"}, demo=True).demo is True
+    assert bg.BitgetConnection(credentials={"api_key": "k", "api_secret": "s", "passphrase": "p"}, demo=None).demo is False
+
+
+# ---------- Plataforma › ambiente por conta + cache por conta (fase 2b, PR C) ----------
+
+
+def test_seed_sets_bot_account_environment_from_process(monkeypatch, tmp_path):
+    """Conta 1 (bot) nasce no ambiente do processo (BITGET_DEMO); num banco antigo a coluna migra e o seed ajusta."""
+    import sqlite3
+    from trading_bot.web.platform import PlatformStore
+    cfg = SimpleNamespace(DASHBOARD_USERNAME="admin", DASHBOARD_PASSWORD="secret", EXCHANGE="bitget", BITGET_DEMO=False,
+                          BITGET_API_KEY="k", BITGET_API_SECRET="s", BITGET_PASSPHRASE="p")
+    db = tmp_path / "p.db"
+    store = PlatformStore(str(db), secret="s")
+    seeded = store.seed_from_env(cfg)
+    assert store.account(seeded["account_id"])["environment"] == "prod"
+    # banco da fase 2 (sem a coluna) com a conta já criada: ALTER + seed põem a conta do bot no ambiente do processo
+    con = sqlite3.connect(db)
+    con.executescript("ALTER TABLE accounts RENAME TO o;"
+                      "CREATE TABLE accounts AS SELECT id, user_id, exchange, label, api_key_enc, api_secret_enc, passphrase_enc, created_at, active FROM o;"
+                      "DROP TABLE o;")
+    con.commit()
+    con.close()
+    store = PlatformStore(str(db), secret="s")
+    assert store.account(1)["environment"] == "demo"   # default da coluna, antes do seed
+    store.seed_from_env(cfg)
+    assert store.account(1)["environment"] == "prod"
+    cfg.BITGET_DEMO = True
+    store.seed_from_env(cfg)   # coluna já existia: o seed não mexe mais (idempotente)
+    assert store.account(1)["environment"] == "prod"
+
+
+def test_account_environment_api_probe_and_handle_use_account_environment(monkeypatch):
+    from trading_bot.web import accounts as acc_mod
+    app, made = _app_with_secret(monkeypatch)
+    store = app.config["PLATFORM"]
+    store.create_user("maria", "senha-forte")
+    maria = app.test_client()
+    _login(maria, user="maria", pw="senha-forte")
+    assert _post(maria, "/api/accounts", {"label": "x", "environment": "staging", **_FAKE_KEYS}).status_code == 400
+    r = _post(maria, "/api/accounts", {"label": "Bitget real", "environment": "prod", **_FAKE_KEYS})
+    aid = r.get_json()["account"]["id"]
+    assert r.get_json()["account"]["environment"] == "prod"
+    store.create_account(store.user_by_name("maria")["id"], "bitget", "Bitget demo", **_FAKE_KEYS)   # 2 contas → seletor no topo
+    html = maria.get("/").data.decode()
+    assert 'data-env="prod">Bitget real · PROD' in html and 'data-env="demo">Bitget demo · DEMO' in html
+    # Testar conexão e o handle só-leitura criam o cliente no ambiente DA CONTA
+    _post(maria, f"/api/accounts/{aid}/test", {})
+    assert made[-1].environment == "prod"
+    maria.get(f"/api/live?account={aid}")
+    assert made[-1].environment == "prod"
+    # trocar o ambiente zera a checagem, descarta o handle e o próximo poll usa demo
+    r = _post(maria, f"/api/accounts/{aid}/environment", {"environment": "demo"})
+    assert r.status_code == 200 and r.get_json()["account"]["environment"] == "demo" and r.get_json()["account"]["last_check_ok"] is None
+    maria.get(f"/api/live?account={aid}")
+    assert made[-1].environment == "demo"
+    assert _post(maria, f"/api/accounts/{aid}/environment", {"environment": "x"}).status_code == 400
+    # a conta do bot segue o processo: não troca pelo painel
+    admin = app.test_client()
+    _login(admin)
+    assert _post(admin, "/api/accounts/1/environment", {"environment": "prod"}).status_code == 400
+    assert acc_mod.probe("bitget", _FAKE_KEYS, "prod")["ok"] is True and made[-1].environment == "prod"
+
+
+def test_binance_summary_is_cached_per_account_and_rate_limits_failures(monkeypatch):
+    """Duas contas (dois objetos exchange) têm caches independentes; conta com falha não é chamada de novo antes de 5 s."""
+    from trading_bot.web import data as dash
+    calls = {"a": 0, "b": 0}
+
+    def ex(name, fail=False):
+        def info():
+            calls[name] += 1
+            if fail:
+                raise ConnectionError("fora")
+            return {"wallet_balance": 10.0 if name == "a" else 20.0, "unrealized_pnl": 0.0}
+        return SimpleNamespace(get_daily_pnl_from_binance=lambda: {"total": 1.0}, get_account_info=info)
+    t = [1000.0]
+    monkeypatch.setattr(dash.time, "monotonic", lambda: t[0])
+    dash._binance_cache.clear()
+    a, b = ex("a"), ex("b", fail=True)
+    assert dash._binance_summary(a, None)["wallet_balance"] == 10.0
+    assert "wallet_balance" not in dash._binance_summary(b, None)
+    assert dash._binance_summary(a, None)["wallet_balance"] == 10.0 and calls == {"a": 1, "b": 1}   # cada conta no seu cache
+    dash._binance_summary(b, None)
+    assert calls["b"] == 1                      # falha: gap mínimo de 5 s, sem martelar a API
+    t[0] += 6
+    dash._binance_summary(b, None)
+    assert calls["b"] == 2 and calls["a"] == 1  # b tenta de novo; a ainda dentro dos 15 s
+    t[0] += 20
+    dash._binance_summary(a, None)
+    assert calls["a"] == 2 and id(b) not in dash._binance_cache   # entradas velhas são descartadas
 
 
 def test_platform_store_reads_are_thread_safe(tmp_path):

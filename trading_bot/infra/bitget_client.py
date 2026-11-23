@@ -75,16 +75,17 @@ def _is_close(side: str, position_side: str) -> bool:
 
 
 class BitgetConnection:
-    def __init__(self, credentials: Optional[Dict[str, str]] = None):
+    def __init__(self, credentials: Optional[Dict[str, str]] = None, demo: Optional[bool] = None):
         """Sem `credentials` é a conexão do bot (chaves do .env, testa a conexão no boot). Com `credentials`
         ({api_key, api_secret, passphrase}) é um cliente só-leitura de outra conta da plataforma: não loga
-        o ambiente nem testa no construtor (quem chama trata o erro)."""
+        o ambiente nem testa no construtor (quem chama trata o erro). `demo` por conta; None = BITGET_DEMO
+        do processo."""
         self.config = config
         creds = credentials or {}
         self.api_key = str(creds.get("api_key") or getattr(config, "BITGET_API_KEY", "") or "")
         self.api_secret = str(creds.get("api_secret") or getattr(config, "BITGET_API_SECRET", "") or "")
         self.passphrase = str(creds.get("passphrase") or getattr(config, "BITGET_PASSPHRASE", "") or "")
-        self.demo = bool(getattr(config, "BITGET_DEMO", True))
+        self.demo = bool(getattr(config, "BITGET_DEMO", True)) if demo is None else bool(demo)
         self.product_type = "USDT-FUTURES"
         self.margin_coin = "USDT"
         self.session = requests.Session()

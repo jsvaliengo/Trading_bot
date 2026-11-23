@@ -16,6 +16,8 @@
     const accountHasBot = () => (acctSel ? acctSel.selectedOptions[0].dataset.hasBot : document.body.dataset.hasBot) === '1';
     const ACCT_FREE = /^\/api\/(me|users|accounts|market|klines|healthz)\b/;
     const withAccount = (url) => { const u = String(url); if (!acctSel || !u.startsWith('/api/') || ACCT_FREE.test(u) || /[?&]account=/.test(u)) return u; return u + (u.includes('?') ? '&' : '?') + 'account=' + encodeURIComponent(accountId()); };
+    const envName = (env) => env === 'prod' ? 'PROD' : 'DEMO', envTag = (env) => `<span class="tag env-${envName(env).toLowerCase()}">${envName(env)}</span>`;
+    if (acctSel) { const env = acctSel.selectedOptions[0].dataset.env, t = document.getElementById('acct-env'); t.className = `tag env-${envName(env).toLowerCase()}`; t.textContent = envName(env); }
     if (acctSel) acctSel.addEventListener('change', () => { try { localStorage.setItem(ACCT_KEY, acctSel.value); } catch (e) { /* storage bloqueado */ } location.reload(); });
     // Sessão expirou: qualquer /api/* com 401 manda pro login e volta pra cá depois.
     const rawFetch = window.fetch.bind(window);
@@ -1371,6 +1373,7 @@
     const KEY_FIELDS = [{ name: 'api_key', label: 'API key', required: true, autocomplete: 'off' },
                         { name: 'api_secret', label: 'Secret', type: 'password', required: true, autocomplete: 'off' },
                         { name: 'passphrase', label: 'Passphrase', type: 'password', required: true, autocomplete: 'off', hint: 'chave só-leitura basta: o painel não envia ordens por esta conta' }];
+    const ENV_FIELD = { name: 'environment', label: 'Ambiente', type: 'select', value: 'demo', options: [['demo', 'Demo (paper trading da Bitget)'], ['prod', 'Produção (dinheiro real)']], hint: 'as chaves de demo e de produção são diferentes na Bitget' };
     let usersForOwner = null;
     async function loadAccounts() {
         try {
@@ -1379,20 +1382,21 @@
         } catch (e) { $('accounts-error').textContent = 'Não deu pra carregar as contas: ' + e.message; $('accounts-error').hidden = false; }
     }
     function renderAccounts(list) {
-        const tb = acctTable.querySelector('tbody'), cols = IS_ADMIN ? 7 : 6;
+        const tb = acctTable.querySelector('tbody'), cols = IS_ADMIN ? 8 : 7;
         if (!list.length) { tb.innerHTML = `<tr><td colspan="${cols}" class="empty">Nenhuma conta. Cadastre a primeira em "+ Nova conta".</td></tr>`; return; }
         tb.innerHTML = list.map(a => {
             const chk = a.last_check_at ? `<span class="tag ${a.last_check_ok ? 'on' : 'off'}">${a.last_check_ok ? 'ok' : 'erro'}</span> <small class="dim">${esc(fmt.dateTime(a.last_check_at))}</small>${a.last_check_ok ? '' : `<br><small class="neg">${esc(a.last_check_msg)}</small>`}` : '<span class="dim">nunca</span>';
-            return `<tr class="${a.active ? '' : 'off'}" data-id="${a.id}" data-label="${esc(a.label)}">
+            return `<tr class="${a.active ? '' : 'off'}" data-id="${a.id}" data-label="${esc(a.label)}" data-env="${a.environment}" data-bot="${a.has_bot ? 1 : 0}">
                 <td class="who"><b>${esc(a.label)}</b><small class="dim">${esc(a.exchange)} · #${a.id}</small></td>
                 ${IS_ADMIN ? `<td class="sans">${esc(a.owner)}</td>` : ''}
                 <td class="key">${a.has_keys ? '····' + esc(a.key_last4) : '<span class="tag warn">sem chaves</span>'}</td>
+                <td class="sans">${envTag(a.environment)}</td>
                 <td class="sans"><span class="tag ${a.active ? 'on' : 'off'}">${a.active ? 'ativa' : 'desativada'}</span> <span class="tag ${a.has_bot ? 'admin' : ''}">${a.has_bot ? 'bot' : 'só leitura'}</span></td>
                 <td class="sans">${chk}</td>
                 <td class="sans">${esc(fmt.date(a.created_at))}</td>
                 <td class="sans"><div class="row-acts">
                     <button class="btn good" data-act="test" type="button" ${a.has_keys ? '' : 'disabled'}>Testar conexão</button>
-                    <button class="btn" data-act="label" type="button">Editar rótulo</button>
+                    <button class="btn" data-act="edit" type="button">Editar</button>
                     <button class="btn warn" data-act="keys" type="button">Substituir chaves</button>
                     <button class="btn ${a.active ? 'bad' : 'good'}" data-act="active" type="button" ${a.has_bot && a.active ? 'disabled title="conta do bot deste processo"' : ''}>${a.active ? 'Desativar' : 'Ativar'}</button>
                 </div></td></tr>`;
@@ -1402,7 +1406,8 @@
         $('accounts-new').addEventListener('click', async () => {
             if (IS_ADMIN && !usersForOwner) { try { const r = await fetch('/api/users', { credentials: 'include' }); usersForOwner = ((await r.json()).users || []).filter(u => u.active); } catch (e) { usersForOwner = []; } }
             const fields = [{ name: 'exchange', label: 'Exchange', type: 'select', value: 'bitget', options: [['bitget', 'Bitget (futuros USDT-M)']] },
-                            { name: 'label', label: 'Rótulo', placeholder: 'ex.: Bitget principal', hint: 'como a conta aparece no seletor do topo' }];
+                            { name: 'label', label: 'Rótulo', placeholder: 'ex.: Bitget principal', hint: 'como a conta aparece no seletor do topo' },
+                            ENV_FIELD];
             if (IS_ADMIN && usersForOwner.length) fields.push({ name: 'user_id', label: 'Dono', type: 'select', value: String(ME_ID), options: usersForOwner.map(u => [String(u.id), `${u.display_name || u.username} (${u.username})`]) });
             const out = await formModal({ title: 'Nova conta', hint: 'As chaves são cifradas ao salvar e não são exibidas depois.', submit: 'Cadastrar', fields: fields.concat(KEY_FIELDS), onSubmit: (v) => apiPost('/api/accounts', v) });
             if (out) { loadAccounts(); formModal({ title: 'Conta cadastrada', hint: 'Use "Testar conexão" para validar as chaves. O seletor de conta no topo aparece depois de recarregar a página.' }); }
@@ -1415,8 +1420,15 @@
                 try { const r = await apiPost(`/api/accounts/${id}/test`); formModal({ title: `Conexão ok — ${name}`, hint: `Equity <b>${esc(fmt.money(r.equity))}</b> · disponível <b>${esc(fmt.money(r.available))}</b> · <b>${r.positions}</b> posição(ões) aberta(s).` }); }
                 catch (err) { formModal({ title: `Falhou — ${name}`, hint: `A corretora respondeu: <b>${esc(err.message)}</b>` }); }
                 loadAccounts();
-            } else if (act === 'label') {
-                if (await formModal({ title: `Rótulo de ${name}`, fields: [{ name: 'label', label: 'Rótulo', value: name, required: true }], onSubmit: (v) => apiPost(`/api/accounts/${id}/label`, v) })) loadAccounts();
+            } else if (act === 'edit') {
+                // a conta do bot segue o ambiente do processo: só o rótulo é editável nela
+                const fields = [{ name: 'label', label: 'Rótulo', value: name, required: true }];
+                if (tr.dataset.bot !== '1') fields.push({ ...ENV_FIELD, value: tr.dataset.env });
+                const ok = await formModal({ title: `Editar ${name}`, fields, submit: 'Salvar', onSubmit: async (v) => {
+                    const r = await apiPost(`/api/accounts/${id}/label`, { label: v.label });
+                    if (v.environment && v.environment !== tr.dataset.env) await apiPost(`/api/accounts/${id}/environment`, { environment: v.environment });
+                    return r; } });
+                if (ok) loadAccounts();
             } else if (act === 'keys') {
                 if (await formModal({ title: `Substituir chaves de ${name}`, hint: 'As três chaves são trocadas juntas; as antigas deixam de valer no painel.', submit: 'Substituir', fields: KEY_FIELDS, onSubmit: (v) => apiPost(`/api/accounts/${id}/keys`, v) })) loadAccounts();
             } else if (act === 'active') {
