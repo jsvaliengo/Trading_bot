@@ -139,7 +139,8 @@ def test_platform_seed_from_env_is_idempotent_and_hashes_password(tmp_path):
     assert acc["user_id"] == 1 and acc["exchange"] == "bitget" and "api_key" not in acc
     # chaves cifradas no disco, decifradas só por account_credentials com o mesmo segredo
     raw = store._conn.execute("SELECT api_key_enc, passphrase_enc FROM accounts WHERE id = 1").fetchone()
-    assert raw["api_key_enc"] != "k1" and "k1" not in raw["api_key_enc"] and raw["passphrase_enc"] != "p1"
+    # texto cifrado é base64 aleatório: checar substring ("k1" in ...) era flaky (CI de 4b1fc16)
+    assert raw["api_key_enc"].startswith("gAAAA") and raw["passphrase_enc"].startswith("gAAAA")
     assert store.account_credentials(1) == {"api_key": "k1", "api_secret": "s1", "passphrase": "p1"}
     other = PlatformStore(str(tmp_path / "p.db"), secret="outro-segredo")
     assert other.account_credentials(1) == {"api_key": "", "api_secret": "", "passphrase": ""}
