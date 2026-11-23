@@ -28,7 +28,9 @@ CREATE TABLE IF NOT EXISTS users (
     username TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
     display_name TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'user',
+    active INTEGER NOT NULL DEFAULT 1
 );
 CREATE TABLE IF NOT EXISTS accounts (
     id INTEGER PRIMARY KEY,
@@ -57,7 +59,18 @@ class PlatformStore:
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(SCHEMA)
+        self._migrate()
         self._fernet = fernet_from_secret(secret)
+
+    def _migrate(self) -> None:
+        """Colunas novas em bancos da fase 1 (ALTER idempotente); o usuário 1 é sempre admin."""
+        cols = {r["name"] for r in self._conn.execute("PRAGMA table_info(users)")}
+        with self._conn:
+            if "role" not in cols:
+                self._conn.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'")
+            if "active" not in cols:
+                self._conn.execute("ALTER TABLE users ADD COLUMN active INTEGER NOT NULL DEFAULT 1")
+            self._conn.execute("UPDATE users SET role = 'admin' WHERE id = 1")
 
     # ---- cifra ----
     def encrypt(self, plain: str) -> str:
@@ -77,25 +90,58 @@ class PlatformStore:
             return ""
 
     # ---- usuários ----
-    def create_user(self, username: str, password: str, display_name: str = "") -> int:
+    def create_user(self, username: str, password: str, display_name: str = "", role: str = "user") -> int:
         now = datetime.now(timezone.utc).isoformat()
         with self._lock, self._conn:
             cur = self._conn.execute(
-                "INSERT INTO users (username, password_hash, display_name, created_at) VALUES (?, ?, ?, ?)",
-                (username, generate_password_hash(password), display_name or username, now),
+                "INSERT INTO users (username, password_hash, display_name, created_at, role) VALUES (?, ?, ?, ?, ?)",
+                (username, generate_password_hash(password), display_name or username, now, role),
             )
-            return int(cur.lastrowid)
+            user_id = int(cur.lastrowid)
+            if user_id == 1:
+                self._conn.execute("UPDATE users SET role = 'admin' WHERE id = 1")
+            return user_id
 
     def user_by_name(self, username: str) -> Optional[Dict[str, Any]]:
         row = self._conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
         return dict(row) if row else None
 
+    def user(self, user_id: int) -> Optional[Dict[str, Any]]:
+        """Usuário sem o hash; None se não existe."""
+        row = self._conn.execute(
+            "SELECT id, username, display_name, created_at, role, active FROM users WHERE id = ?", (user_id,)).fetchone()
+        return dict(row) if row else None
+
+    def users(self) -> List[Dict[str, Any]]:
+        rows = self._conn.execute(
+            "SELECT u.id, u.username, u.display_name, u.created_at, u.role, u.active,"
+            " (SELECT COUNT(*) FROM accounts a WHERE a.user_id = u.id) AS accounts FROM users u ORDER BY u.id")
+        return [dict(r) for r in rows]
+
     def verify_login(self, username: str, password: str) -> Optional[Dict[str, Any]]:
-        """Usuário (sem o hash) se a senha bate; None se não existe ou não bate."""
+        """Usuário (sem o hash) se a senha bate e está ativo; None se não existe, não bate ou inativo."""
         row = self.user_by_name(username)
-        if not row or not check_password_hash(row["password_hash"], password):
+        if not row or not row["active"] or not check_password_hash(row["password_hash"], password):
             return None
         return {k: v for k, v in row.items() if k != "password_hash"}
+
+    def verify_password(self, user_id: int, password: str) -> bool:
+        row = self._conn.execute("SELECT password_hash FROM users WHERE id = ?", (user_id,)).fetchone()
+        return bool(row) and check_password_hash(row["password_hash"], password)
+
+    def set_password(self, user_id: int, password: str) -> None:
+        with self._lock, self._conn:
+            self._conn.execute("UPDATE users SET password_hash = ? WHERE id = ?", (generate_password_hash(password), user_id))
+
+    def set_active(self, user_id: int, active: bool) -> None:
+        with self._lock, self._conn:
+            self._conn.execute("UPDATE users SET active = ? WHERE id = ?", (1 if active else 0, user_id))
+
+    def set_role(self, user_id: int, role: str) -> None:
+        if role not in ("admin", "user"):
+            raise ValueError("papel precisa ser admin ou user")
+        with self._lock, self._conn:
+            self._conn.execute("UPDATE users SET role = ? WHERE id = ?", (role, user_id))
 
     # ---- contas ----
     def create_account(self, user_id: int, exchange: str, label: str = "", api_key: str = "",

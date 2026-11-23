@@ -18,7 +18,7 @@ from functools import wraps
 from typing import Callable, Optional
 from urllib.parse import quote
 
-from flask import Response, current_app, jsonify, redirect, request, session
+from flask import Response, abort, current_app, jsonify, redirect, request, session
 
 SESSION_KEY = "auth"
 LOGIN_MAX_FAILURES = 5
@@ -59,14 +59,24 @@ def has_session() -> bool:
     return bool(session.get(SESSION_KEY))
 
 
+ANON = {"id": 0, "username": "", "display_name": "", "role": "", "active": False}
+
+
 def current_user() -> dict:
-    """{id, username, display_name} da sessão ou do Basic Auth já validado."""
+    """{id, username, display_name, role, active} da sessão ou do Basic Auth já validado. Relê a linha da
+    tabela a cada request: papel trocado ou usuário desativado valem na hora, sem esperar o logout."""
     if session.get(SESSION_KEY):
-        return {"id": int(session.get("user_id") or 1), "username": str(session.get("username") or ""),
-                "display_name": str(session.get("display_name") or session.get("username") or "")}
-    auth = request.authorization
-    user = authenticate(auth.username, auth.password) if auth and auth.username and auth.password else None
-    return user or {"id": 0, "username": "", "display_name": ""}
+        user = current_app.config["PLATFORM"].user(int(session.get("user_id") or 1))
+    else:
+        auth = request.authorization
+        user = authenticate(auth.username, auth.password) if auth and auth.username and auth.password else None
+    if user is None:
+        return dict(ANON)
+    return {**user, "role": user.get("role") or "user", "active": bool(user.get("active", True))}
+
+
+def is_admin() -> bool:
+    return current_user().get("role") == "admin"
 
 
 def _basic_ok() -> bool:
@@ -87,12 +97,28 @@ def login_required(view: Callable) -> Callable:
     @wraps(view)
     def wrapped(*args, **kwargs):
         if has_session():
+            if not current_user()["active"]:   # desativado pelo admin com sessão aberta
+                session.clear()
+                return _unauthorized_api() if request.path.startswith("/api/") else redirect("/login")
             return view(*args, **kwargs)
         if request.path.startswith("/api/"):
             if _basic_ok():
                 return view(*args, **kwargs)
             return _unauthorized_api()
         return redirect("/login?next=" + quote(request.full_path.rstrip("?"), safe="/"))
+
+    return wrapped
+
+
+def admin_required(view: Callable) -> Callable:
+    """login_required + papel admin; 403 para os demais."""
+
+    @wraps(view)
+    @login_required
+    def wrapped(*args, **kwargs):
+        if not is_admin():
+            abort(403)
+        return view(*args, **kwargs)
 
     return wrapped
 
@@ -122,12 +148,13 @@ def csrf_token() -> str:
 
 
 def csrf_ok() -> bool:
-    sent = request.form.get("csrf", "")
+    """Token do form (campo `csrf`) ou do header `X-CSRF-Token` (POST JSON do painel) igual ao da sessão."""
+    sent = request.form.get("csrf", "") or request.headers.get("X-CSRF-Token", "")
     return bool(sent) and hmac.compare_digest(sent, session.get("csrf", ""))
 
 
 class LoginRateLimiter:
-    """Falhas por IP em memória: >= LOGIN_MAX_FAILURES na janela bloqueia o login."""
+    """Falhas por chave (IP e `user:<nome>`) em memória: >= LOGIN_MAX_FAILURES na janela bloqueia o login."""
 
     def __init__(self) -> None:
         self._failures: dict[str, deque[float]] = defaultdict(deque)

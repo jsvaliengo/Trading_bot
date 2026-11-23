@@ -253,3 +253,41 @@
     .top-id { order:1; }
     .clock, .icon-btn { order:1; }
 }
+
+/* Plataforma › Usuários / Contas / Meu perfil: tabela do shell + ações em pílulas + formulário no modal genérico */
+.profile { display:flex; align-items:center; gap:8px; }
+.avatar { width:30px; height:30px; border-radius:50%; display:grid; place-items:center; background:linear-gradient(135deg,#8b5cf6,#5b3dc9); color:#fff; font-weight:700; font-size:12.5px; flex:none; }
+.profile-name { display:flex; flex-direction:column; line-height:1.15; font-size:12.5px; font-weight:600; white-space:nowrap; }
+.profile-name small { font-weight:400; color:var(--text-muted); font-size:11px; }
+.profile-btn { all:unset; display:flex; align-items:center; gap:8px; cursor:pointer; border-radius:999px; padding:2px 6px 2px 2px; }
+.profile-btn:hover { background:var(--bg-elevated); }
+.profile-btn:focus-visible { outline:2px solid var(--focus); outline-offset:2px; }
+.pill-btn { border-radius:999px; padding:8px 16px; font-weight:600; background:var(--accent); color:#fff; border-color:transparent; white-space:nowrap; }
+.pill-btn:hover:not(:disabled) { filter:brightness(1.1); border-color:transparent; }
+.btn-primary { background:var(--accent); color:#fff; border-color:transparent; font-weight:600; }
+.btn-primary:hover:not(:disabled) { filter:brightness(1.1); border-color:transparent; }
+.row-acts { display:flex; gap:6px; flex-wrap:nowrap; }   /* a tabela já rola na horizontal: não empilhar */
+.row-acts .btn { border-radius:999px; padding:4px 11px; font-size:11.5px; font-weight:600; border:1px solid transparent; background:var(--accent-soft); color:var(--accent); min-height:28px; }
+.row-acts .btn:hover:not(:disabled) { background:var(--accent); color:#fff; }
+.row-acts .btn.warn { background:var(--warn-soft); color:var(--warn); } .row-acts .btn.warn:hover:not(:disabled) { background:var(--warn); color:#fff; }
+.row-acts .btn.bad { background:var(--bad-soft); color:var(--bad); } .row-acts .btn.bad:hover:not(:disabled) { background:var(--bad); color:#fff; }
+.row-acts .btn.good { background:var(--good-soft); color:var(--good); } .row-acts .btn.good:hover:not(:disabled) { background:var(--good); color:#fff; }
+.row-acts .btn:disabled { opacity:.4; cursor:not-allowed; }
+.tag { font-size:11px; font-weight:600; padding:2px 8px; border-radius:999px; background:var(--bg-elevated); color:var(--text-dim); }
+.tag.admin { background:var(--accent-soft); color:var(--accent); }
+.tag.on { background:var(--good-soft); color:var(--good); } .tag.off { background:var(--bad-soft); color:var(--bad); }
+.tag.warn { background:var(--warn-soft); color:var(--warn); }
+.table tr.off td { opacity:.55; } .table tr.off td:last-child { opacity:1; }
+.table td.who b { display:block; font-family:'IBM Plex Sans',system-ui,sans-serif; font-weight:600; } .table td.who small { display:block; }
+.form-card { width:min(460px,100%); display:flex; flex-direction:column; gap:12px; }
+.form-card h3 { margin:0; } .form-card .cs { margin:0; }
+.form-fields { display:flex; flex-direction:column; gap:10px; }
+.form-fields label { display:flex; flex-direction:column; gap:5px; font-size:12px; color:var(--text-dim); }
+.form-fields input, .form-fields select { font:inherit; font-size:14px; color:var(--text); background:var(--bg-elevated); border:1px solid var(--border-strong); border-radius:7px; padding:9px 12px; width:100%; min-height:40px; }
+.form-fields input:focus, .form-fields select:focus { outline:none; border-color:var(--accent); box-shadow:0 0 0 2px var(--accent-soft); }
+.form-fields small { color:var(--text-muted); font-size:11.5px; }
+.form-card .login-error { margin:0; }
+.form-card .modal-actions { margin-top:4px; }
+.secret-box { display:flex; align-items:center; gap:8px; padding:10px 12px; border-radius:8px; background:var(--bg-elevated); border:1px dashed var(--border-strong); }
+.secret-box code { font-family:'IBM Plex Mono',ui-monospace,monospace; font-size:15px; font-weight:600; letter-spacing:.03em; flex:1; word-break:break-all; }
+@media (max-width: 760px) { .form-fields input, .form-fields select { font-size:16px; } .form-card .modal-actions .btn { flex:1; min-height:44px; } }

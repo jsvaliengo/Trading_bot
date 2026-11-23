@@ -1243,6 +1243,120 @@
         return it.length ? `<div class="fut">${it.join('')}</div>` : '';
     }
 
+    // ───────── Plataforma: formulário genérico no modal, Usuários (admin) e Meu perfil ─────────
+    // POST JSON com o token CSRF da sessão no header (o servidor exige em /api/users* e /api/me/*).
+    const CSRF = document.body.dataset.csrf || '';
+    const ME_ID = parseInt(document.body.dataset.userId, 10) || 0;
+    async function apiPost(path, body) {
+        const r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': CSRF }, body: JSON.stringify(body || {}), credentials: 'include' });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok || data.ok === false) throw new Error(data.error || ('HTTP ' + r.status));
+        return data;
+    }
+    // formModal({title, hint, fields:[{name,label,type,value,required,hint,options:[[v,label]]}], submit, onSubmit}) → Promise(resultado de onSubmit | null)
+    // Sem campos vira um aviso (ex.: senha gerada) com só o botão de fechar. onSubmit lança Error → mensagem no form.
+    const fm = $('form-modal'), fmForm = $('form-modal-form'), fmFields = $('form-fields'), fmErr = $('form-error');
+    let fmResolve = null, fmSubmit = null, fmFocus = null;
+    function formModal(o) {
+        $('form-title').textContent = o.title; $('form-hint').innerHTML = o.hint || ''; $('form-hint').hidden = !o.hint;
+        fmFields.innerHTML = (o.fields || []).map(f => {
+            const id = 'ff-' + f.name, req = f.required ? ' required' : '';
+            const input = f.type === 'select'
+                ? `<select id="${id}" name="${esc(f.name)}">${(f.options || []).map(([v, l]) => `<option value="${esc(v)}"${String(v) === String(f.value ?? '') ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select>`
+                : `<input id="${id}" name="${esc(f.name)}" type="${esc(f.type || 'text')}" value="${esc(f.value ?? '')}" autocomplete="${esc(f.autocomplete || 'off')}" autocapitalize="none" spellcheck="false"${req}${f.placeholder ? ` placeholder="${esc(f.placeholder)}"` : ''}>`;
+            return `<label>${esc(f.label)}${input}${f.hint ? `<small>${f.hint}</small>` : ''}</label>`;
+        }).join('') + (o.body || '');
+        fmErr.hidden = true; fmErr.textContent = '';
+        $('form-submit').textContent = o.submit || 'Salvar'; $('form-submit').hidden = !o.onSubmit; $('form-cancel').textContent = o.onSubmit ? 'Cancelar' : 'Fechar';
+        fmSubmit = o.onSubmit || null; fmFocus = document.activeElement; fm.hidden = false;
+        const first = fmFields.querySelector('input, select'); (first || $('form-cancel')).focus();
+        return new Promise(res => { fmResolve = res; });
+    }
+    function closeForm(result) { fm.hidden = true; const r = fmResolve; fmResolve = null; fmSubmit = null; if (fmFocus) fmFocus.focus(); if (r) r(result ?? null); }
+    $('form-cancel').addEventListener('click', () => closeForm(null));
+    fm.addEventListener('click', (e) => { if (e.target === fm) closeForm(null); });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !fm.hidden) closeForm(null); });
+    fmForm.addEventListener('submit', async (e) => {
+        e.preventDefault(); if (!fmSubmit) return closeForm(null);
+        const vals = {}; new FormData(fmForm).forEach((v, k) => { vals[k] = String(v); });
+        $('form-submit').disabled = true;
+        try { const out = await fmSubmit(vals); closeForm(out ?? true); }
+        catch (err) { fmErr.textContent = err.message || String(err); fmErr.hidden = false; }
+        finally { $('form-submit').disabled = false; }
+    });
+    // Senha gerada: mostrada UMA vez (não fica em lugar nenhum), com botão de copiar.
+    function showSecret(title, who, secret) {
+        const html = `<p class="cs">Anote agora: esta senha de <b>${esc(who)}</b> não é mostrada de novo.</p><div class="secret-box"><code id="secret-val">${esc(secret)}</code><button type="button" class="btn btn-quiet btn-xs" id="secret-copy">Copiar</button></div>`;
+        formModal({ title, body: html });
+        const b = $('secret-copy'); if (b) b.addEventListener('click', async () => { try { await navigator.clipboard.writeText(secret); b.textContent = 'Copiado'; } catch (e) { b.textContent = 'Selecione e copie'; } });
+    }
+    const PW_FIELD = (label, hint) => ({ name: 'password', label, type: 'password', autocomplete: 'new-password', hint: hint || 'em branco = o painel gera uma senha e mostra uma vez' });
+
+    // Meu perfil (avatar do topo): trocar a própria senha.
+    const profileBtn = $('profile-btn');
+    if (profileBtn) profileBtn.addEventListener('click', async () => {
+        const ok = await formModal({ title: 'Meu perfil', hint: 'Trocar a senha de acesso ao painel.', submit: 'Trocar senha',
+            fields: [{ name: 'current', label: 'Senha atual', type: 'password', autocomplete: 'current-password', required: true },
+                     { name: 'new', label: 'Nova senha', type: 'password', autocomplete: 'new-password', required: true, hint: 'mínimo 8 caracteres' },
+                     { name: 'again', label: 'Repita a nova senha', type: 'password', autocomplete: 'new-password', required: true }],
+            onSubmit: (v) => apiPost('/api/me/password', v) });
+        if (ok) formModal({ title: 'Senha alterada', hint: 'A nova senha já vale no próximo login.' });
+    });
+
+    // Usuários (só admin; a página nem existe no HTML dos demais).
+    const usersTable = $('users-table');
+    async function loadUsers() {
+        if (!usersTable) return;
+        try {
+            const r = await fetch('/api/users', { credentials: 'include' }); if (!r.ok) throw new Error('HTTP ' + r.status);
+            renderUsers((await r.json()).users || []); $('users-error').hidden = true;
+        } catch (e) { $('users-error').textContent = 'Não deu pra carregar os usuários: ' + e.message; $('users-error').hidden = false; }
+    }
+    function renderUsers(list) {
+        const tb = usersTable.querySelector('tbody');
+        if (!list.length) { tb.innerHTML = '<tr><td colspan="6" class="empty">Nenhum usuário.</td></tr>'; return; }
+        tb.innerHTML = list.map(u => {
+            const me = u.id === ME_ID, admin = u.role === 'admin';
+            return `<tr class="${u.active ? '' : 'off'}" data-id="${u.id}">
+                <td class="who"><b>${esc(u.display_name || u.username)}${me ? ' <small class="dim">(você)</small>' : ''}</b><small class="dim">${esc(u.username)}</small></td>
+                <td class="sans"><span class="tag ${admin ? 'admin' : ''}">${admin ? 'admin' : 'user'}</span></td>
+                <td class="r">${u.accounts}</td>
+                <td class="sans">${esc(fmt.date(u.created_at))}</td>
+                <td class="sans"><span class="tag ${u.active ? 'on' : 'off'}">${u.active ? 'ativo' : 'desativado'}</span></td>
+                <td class="sans"><div class="row-acts">
+                    <button class="btn" data-act="password" type="button">Redefinir senha</button>
+                    <button class="btn ${admin ? 'warn' : ''}" data-act="role" type="button" ${me ? 'disabled title="você não altera o próprio papel"' : ''}>${admin ? 'Rebaixar a user' : 'Promover a admin'}</button>
+                    <button class="btn ${u.active ? 'bad' : 'good'}" data-act="active" type="button" ${me ? 'disabled title="você não desativa a si mesmo"' : ''}>${u.active ? 'Desativar' : 'Ativar'}</button>
+                </div></td></tr>`;
+        }).join('');
+    }
+    if (usersTable) {
+        $('users-new').addEventListener('click', async () => {
+            const out = await formModal({ title: 'Novo usuário', hint: 'O usuário entra pelo mesmo login do painel.', submit: 'Criar',
+                fields: [{ name: 'username', label: 'Login', required: true, placeholder: 'ex.: maria', hint: '3 a 32 caracteres: letras, números, ponto, hífen ou _' },
+                         { name: 'display_name', label: 'Nome de exibição', placeholder: 'opcional' },
+                         { name: 'role', label: 'Papel', type: 'select', value: 'user', options: [['user', 'user — vê só as próprias contas'], ['admin', 'admin — gerencia usuários e contas']] },
+                         PW_FIELD('Senha inicial')],
+                onSubmit: (v) => apiPost('/api/users', v) });
+            if (out) { loadUsers(); if (out.password) showSecret('Usuário criado', out.user.username, out.password); }
+        });
+        usersTable.addEventListener('click', async (e) => {
+            const b = e.target.closest('button[data-act]'); if (!b || b.disabled) return;
+            const tr = b.closest('tr'), id = tr.dataset.id, name = tr.querySelector('.who small').textContent, act = b.dataset.act;
+            if (act === 'password') {
+                const out = await formModal({ title: `Redefinir senha de ${name}`, submit: 'Redefinir', fields: [PW_FIELD('Nova senha')], onSubmit: (v) => apiPost(`/api/users/${id}/password`, v) });
+                if (out && out.password) showSecret('Senha redefinida', name, out.password); else if (out) formModal({ title: 'Senha redefinida', hint: `A nova senha de <b>${esc(name)}</b> já vale.` });
+            } else if (act === 'role') {
+                const toAdmin = b.textContent.startsWith('Promover');
+                ask(toAdmin ? `Promover ${name} a admin` : `Rebaixar ${name} a user`, toAdmin ? 'Admin gerencia usuários e todas as contas da plataforma.' : 'Passa a ver só as próprias contas.', async () => { try { await apiPost(`/api/users/${id}/role`, { role: toAdmin ? 'admin' : 'user' }); loadUsers(); } catch (err) { formModal({ title: 'Não deu', hint: esc(err.message) }); } });
+            } else if (act === 'active') {
+                const off = b.textContent === 'Desativar';
+                ask(off ? `Desativar ${name}` : `Ativar ${name}`, off ? 'Deixa de conseguir entrar (sessões abertas caem). Nada é apagado; dá pra reativar depois.' : 'Volta a conseguir entrar no painel.', async () => { try { await apiPost(`/api/users/${id}/active`, { active: !off }); loadUsers(); } catch (err) { formModal({ title: 'Não deu', hint: esc(err.message) }); } });
+            }
+        });
+    }
+    function usersVisible(on) { if (on) loadUsers(); }
+
     const PAGES = $$('.page').map(p => p.dataset.page);
     // hash = "pagina" ou "pagina/id-do-card" (subitem do menu: mostra a página e rola até o card, abrindo-o)
     function showPage(hash) {
@@ -1263,6 +1377,7 @@
         closeSidebar();
         marketVisible(name === 'market');
         fillsVisible(name === 'fills');
+        usersVisible(name === 'users');
         if (el && !el.hidden) el.scrollIntoView({ block: 'start' });
     }
     // página sem nenhum card visível (ex.: fora do martingale) mostra um aviso em vez de ficar em branco
