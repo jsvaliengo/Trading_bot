@@ -1512,7 +1512,7 @@
     // Tema: grava em localStorage (o <head> aplica antes do primeiro paint). Os gráficos leem as cores ao nascer: destrói e redesenha.
     const THEME_KEY = 'tradingbot-theme';
     $('theme-toggle').addEventListener('click', () => {
-        const next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
+        const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
         document.documentElement.dataset.theme = next;
         try { localStorage.setItem(THEME_KEY, next); } catch (e) { /* storage bloqueado */ }
         Object.values(charts).forEach(c => c.destroy()); Object.keys(charts).forEach(k => { delete charts[k]; });

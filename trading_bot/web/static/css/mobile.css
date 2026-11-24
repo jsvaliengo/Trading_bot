@@ -6,7 +6,8 @@
     body { font-size:14px; }
 
     /* Topo fixo: linha 1 = título/estado/ambiente + relógio; linha 2 = hero (equity, hoje). */
-    .top { gap:6px 8px; padding:6px max(12px, env(safe-area-inset-right)) 8px max(12px, env(safe-area-inset-left)); }
+    .top { gap:6px 8px; padding:6px max(12px, env(safe-area-inset-right)) 8px max(12px, env(safe-area-inset-left)); border-radius:0; box-shadow:none; border-bottom:1px solid var(--border); }
+    .banner { margin:10px max(12px, env(safe-area-inset-right)) 0 max(12px, env(safe-area-inset-left)); }
     .top-id { flex:1; min-width:0; gap:8px; order:1; }
     .clock { order:1; }
     .top-title { font-size:13px; color:var(--text-muted); flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; }
@@ -19,9 +20,9 @@
     .banner { padding:8px max(12px, env(safe-area-inset-right)) 8px max(12px, env(safe-area-inset-left)); font-size:13px; }
 
     /* Barra inferior fixa, acima do indicador de home. */
-    .tabbar { position:fixed; left:0; right:0; bottom:0; z-index:30; display:flex; background:color-mix(in srgb, var(--bg-app) 80%, transparent); backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px); border-top:1px solid var(--border);
+    .tabbar { position:fixed; left:0; right:0; bottom:0; z-index:30; display:flex; background:var(--bg-card); border-top:1px solid var(--border); box-shadow:0 -8px 24px -20px rgba(20,22,37,.4);
         padding:0 env(safe-area-inset-right) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left); }
-    .tabbar a { flex:1; display:flex; align-items:center; justify-content:center; min-height:50px; font-size:13px; font-weight:500; color:var(--text-dim); text-decoration:none; }
+    .tabbar a { flex:1; display:flex; align-items:center; justify-content:center; min-height:50px; font-size:13px; font-weight:600; color:var(--text-dim); text-decoration:none; }
     .tabbar a:active { color:var(--accent); }
 
     /* Layout: 1 coluna, cartões colados nas bordas seguras. */
@@ -32,7 +33,7 @@
     .ring-card .status { grid-template-columns:repeat(2, minmax(0,1fr)); gap:12px; }
     #mg-list .prow-top { grid-template-columns:minmax(0,1fr) auto; }
     .pills .btn { flex:1 1 0; min-height:44px; padding:8px 10px; }
-    details.card > summary { margin:-12px; padding:12px; gap:8px 10px; min-height:48px; align-items:center; border-radius:20px; }
+    details.card > summary { margin:-12px; padding:12px; gap:8px 10px; min-height:48px; align-items:center; border-radius:var(--radius-card); }
     h2 { font-size:15px; }
     details.card > summary .cs { flex-basis:100%; margin-left:0; padding-left:22px; }
     .two { grid-template-columns:1fr; }
