@@ -1474,7 +1474,6 @@
             const on = a.dataset.page === name && (!a.closest('.nav') || (a.dataset.target || '') === (target || ''));
             a.classList.toggle('on', on); if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
         });
-        $$('.nav-group').forEach(g => g.classList.toggle('has-on', !!g.querySelector('a.on')));
         const el = target && $(target);
         if (el && !el.hidden) { if (el.tagName === 'DETAILS') el.open = true; }
         else { const first = $$(`.page[data-page="${name}"] details.card`).find(d => !d.hidden); if (first) first.open = true; }   // página só com cards recolhíveis: abre o primeiro
@@ -1489,26 +1488,11 @@
     }
     // página sem nenhum card visível (ex.: fora do martingale) mostra um aviso em vez de ficar em branco
     function pageEmpties() { $$('.page').forEach(p => { const e = p.querySelector('.page-empty'); if (e) e.hidden = Array.from(p.children).some(c => c !== e && !c.hidden); }); }
-    // Desktop: menu recolhido (só ícones); lembrado em localStorage. No celular o menu é off-canvas e isto não se aplica.
-    const NAV_KEY = 'tradingbot-nav';
-    function setCompact(on) { document.body.classList.toggle('nav-compact', on); $('sidebar-collapse').setAttribute('aria-pressed', String(on)); $('sidebar-collapse').title = $('sidebar-collapse').ariaLabel = on ? 'Expandir menu' : 'Recolher menu'; Object.values(charts).forEach(c => c.resize()); }
-    try { setCompact(localStorage.getItem(NAV_KEY) === 'compact'); } catch (e) { /* storage bloqueado */ }
-    $('sidebar-collapse').addEventListener('click', () => { const on = !document.body.classList.contains('nav-compact'); setCompact(on); try { localStorage.setItem(NAV_KEY, on ? 'compact' : 'full'); } catch (e) { /* storage bloqueado */ } });
     function closeSidebar() { document.body.classList.remove('nav-open'); $('sidebar-backdrop').hidden = true; $('sidebar-toggle').setAttribute('aria-expanded', 'false'); }
     $('sidebar-toggle').addEventListener('click', () => { const open = !document.body.classList.contains('nav-open'); document.body.classList.toggle('nav-open', open); $('sidebar-backdrop').hidden = !open; $('sidebar-toggle').setAttribute('aria-expanded', String(open)); });
     $('sidebar-backdrop').addEventListener('click', closeSidebar);
     window.addEventListener('hashchange', () => showPage(location.hash.slice(1)));
     showPage(location.hash.slice(1));
-    // Grupos do menu: accordion (um aberto por vez), lembrado em localStorage; o grupo do item ativo abre no boot.
-    const GROUP_KEY = 'tradingbot-nav-group';
-    function openGroup(key) { $$('.nav-group').forEach(g => { const on = g.dataset.group === key; g.classList.toggle('open', on); g.querySelector('.nav-toggle').setAttribute('aria-expanded', String(on)); }); }
-    $$('.nav-toggle').forEach(b => b.addEventListener('click', () => {
-        const g = b.parentElement, key = g.classList.contains('open') ? '' : g.dataset.group; openGroup(key);
-        try { localStorage.setItem(GROUP_KEY, key); } catch (e) { /* storage bloqueado */ }
-    }));
-    { let key = null; try { key = localStorage.getItem(GROUP_KEY); } catch (e) { /* storage bloqueado */ }
-      const active = document.querySelector('.nav-group.has-on'); openGroup(key !== null ? key : (active ? active.dataset.group : 'trading')); }
-
     // Tema: grava em localStorage (o <head> aplica antes do primeiro paint). Os gráficos leem as cores ao nascer: destrói e redesenha.
     const THEME_KEY = 'tradingbot-theme';
     $('theme-toggle').addEventListener('click', () => {

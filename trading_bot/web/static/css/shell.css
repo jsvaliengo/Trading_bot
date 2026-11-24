@@ -1,7 +1,7 @@
-/* Shell com a pele do AdityveCRM (sidebar.tsx + layout "wallet" do app): página cinza-azulada com o menu lateral
-   e o topo como painéis brancos flutuantes (raio 22, sombra), item ativo com barra de acento, grupos
-   expansíveis e botão de recolher (recolhido: tiles de 42px, ativo em gradiente da marca). As páginas
-   (data-page) continuam trocadas pelo menu; os cards seguem style.css/mobile.css. */
+/* Shell com a pele do AdityveCRM (layout "wallet" do app): página cinza-azulada, topo e cartões flutuantes (raio 22,
+   sombra). Menu lateral = wallet-rail.tsx: rail de ícones, um cartão por grupo (tile 42px, raio 14, ativo em gradiente
+   da marca, nome no tooltip), Sair no último cartão; sem botão de recolher. No celular (≤1100px) o mesmo DOM vira a
+   gaveta do mobile-nav.tsx (marca, título de grupo, item com rótulo). Os cards seguem style.css/mobile.css. */
 :root { --side-w:256px; --gutter:22px; }
 
 .shell { display:flex; align-items:flex-start; gap:16px; min-height:100vh; padding:var(--gutter); }
@@ -10,55 +10,21 @@
    alargava a página no celular). width:100% devolve a largura do container; o max-width continua centralizando. */
 .main > .wrap { width:100%; }
 
-/* Menu lateral */
-.sidebar { position:sticky; top:var(--gutter); align-self:flex-start; height:calc(100vh - 2 * var(--gutter)); width:var(--side-w); flex:none; display:flex; flex-direction:column;
-    background:var(--bg-card); color:var(--text-dim); border-radius:var(--radius-panel); box-shadow:var(--shadow-nav); z-index:40; transition:width .26s cubic-bezier(.4,0,.2,1); }
-.brand-row { display:flex; align-items:center; gap:8px; height:72px; flex:none; padding:0 12px 0 20px; border-bottom:1px solid var(--border); }
+/* Rail (desktop): pilha de cartões que rola sem barra quando não cabe na altura (wallet-rail.tsx) */
+.sidebar { position:sticky; top:var(--gutter); align-self:flex-start; max-height:calc(100vh - 2 * var(--gutter)); flex:none; display:flex; flex-direction:column; gap:12px; overflow-y:auto; scrollbar-width:none; z-index:40; }
+.sidebar::-webkit-scrollbar { display:none; }
+.brand-row, .nav-h, .nav-item > span, .sidebar-foot .env { display:none; }
+.nav { display:flex; flex-direction:column; gap:12px; flex:none; }
+.nav-group, .sidebar-foot { display:flex; flex-direction:column; align-items:center; gap:4px; padding:8px; flex:none; background:var(--bg-card); border-radius:var(--radius-panel); box-shadow:var(--shadow-nav); }
+.nav-item { position:relative; display:flex; align-items:center; justify-content:center; width:42px; height:42px; padding:0; border:0; border-radius:14px; background:transparent; color:var(--text-muted); text-decoration:none; font:inherit; cursor:pointer; transition:background .12s ease, color .12s ease; }
+.nav-item svg { width:19px; height:19px; flex:none; }
+.nav-item:hover { background:var(--bg-elevated); color:var(--accent-text); }
+.nav-item.on { background:var(--brand-gradient); color:#fff; box-shadow:var(--shadow-brand); }
+.nav-exit:hover { color:var(--bad); }
+.user-menu { margin:0; }
 .brand { display:flex; align-items:center; gap:10px; color:var(--text); text-decoration:none; font-size:18px; font-weight:600; letter-spacing:-.01em; min-width:0; flex:1; }
 .brand-name { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.collapse-btn { display:none; width:28px; height:28px; border-radius:8px; border:1px solid var(--border); background:transparent; color:var(--text-dim); font-size:16px; cursor:pointer; flex:none; transition:color .12s ease, background .12s ease; }
-.collapse-btn:hover { color:var(--accent-text); background:var(--bg-elevated); }
-/* Desktop: menu recolhido (só ícones, 78px; título dos links vira tooltip). O estado fica no localStorage. */
-@media (min-width: 1101px) {
-    .collapse-btn { display:inline-grid; place-items:center; }
-    body.nav-compact { --side-w:78px; }
-    body.nav-compact .brand-row { flex-direction:column; justify-content:center; gap:6px; padding:8px 0; height:auto; }
-    body.nav-compact .brand { justify-content:center; flex:none; }
-    body.nav-compact .brand-name, body.nav-compact .nav-item > span, body.nav-compact .nav-item .chev, body.nav-compact .sidebar-foot .env { display:none; }
-    body.nav-compact .nav { padding:8px; }
-    body.nav-compact .nav-item { justify-content:center; padding:0; border-radius:14px; }
-    body.nav-compact .nav-item::before { display:none; }
-    body.nav-compact .nav-item.on, body.nav-compact .nav-group.has-on > .nav-toggle { background:var(--brand-gradient); color:#fff; box-shadow:var(--shadow-brand); }
-    body.nav-compact .nav-item.on svg, body.nav-compact .nav-group.has-on > .nav-toggle svg { color:#fff; }
-    body.nav-compact .nav-group { position:relative; }
-    body.nav-compact .nav-group > .nav-sub { display:none; position:absolute; left:calc(100% + 10px); top:0; min-width:200px; padding:8px; background:var(--bg-card); border:1px solid var(--border); border-radius:14px; box-shadow:var(--shadow-nav), 0 0 0 1px color-mix(in srgb, var(--text) 6%, transparent); z-index:50; }
-    body.nav-compact .nav-group > .nav-sub::before { content:""; position:absolute; left:-12px; top:0; width:12px; height:100%; } /* ponte invisível pro mouse chegar no flyout */
-    body.nav-compact .nav-group:hover > .nav-sub, body.nav-compact .nav-group:focus-within > .nav-sub { display:flex; }
-    body.nav-compact .sidebar-foot { flex-direction:column; justify-content:center; padding:10px 8px; }
-    body.nav-compact .collapse-btn { transform:rotate(180deg); }
-}
 .brand-mark { width:34px; height:34px; border-radius:10px; display:grid; place-items:center; background:var(--brand-gradient); color:#fff; font-size:12px; font-weight:800; flex:none; box-shadow:var(--shadow-brand); }
-.nav { display:flex; flex-direction:column; gap:2px; padding:12px; flex:1; overflow-y:auto; }
-.nav-item { position:relative; display:flex; align-items:center; gap:12px; width:100%; padding:0 12px; border:0; border-radius:11px; background:transparent; color:var(--text-dim); text-decoration:none; font:inherit; font-size:14px; font-weight:600; min-height:42px; cursor:pointer; text-align:left; transition:background .12s ease, color .12s ease; }
-.nav-item svg { width:19px; height:19px; fill:currentColor; color:var(--text-muted); flex:none; }
-.nav-item:hover { background:var(--bg-elevated); color:var(--text); }
-.nav-group.open > .nav-toggle { color:var(--text); }
-/* item ativo (sidebar.tsx): fundo no tom da marca, texto em negrito e barra de acento à esquerda */
-.nav-item.on, .nav-group.has-on > .nav-toggle { background:var(--accent-soft); color:var(--accent-text); font-weight:700; }
-.nav-item.on svg, .nav-group.has-on > .nav-toggle svg { color:var(--accent-text); }
-.nav-item.on::before, .nav-group.has-on > .nav-toggle::before { content:""; position:absolute; left:0; top:11px; height:20px; width:3.5px; border-radius:0 4px 4px 0; background:var(--accent); }
-.chev { margin-left:auto; width:7px; height:7px; border-right:2px solid currentColor; border-bottom:2px solid currentColor; transform:rotate(-45deg); transition:transform .15s ease; flex:none; opacity:.7; }
-.nav-group.open > .nav-toggle .chev { transform:rotate(45deg); }
-.nav-sub { display:none; flex-direction:column; gap:1px; padding:2px 0 4px 22px; }
-.nav-group.open > .nav-sub { display:flex; }
-.nav-sub a { display:flex; align-items:center; gap:10px; padding:0 12px; border-radius:9px; color:var(--text-dim); text-decoration:none; font-size:13px; font-weight:500; min-height:36px; transition:background .12s ease, color .12s ease; }
-.nav-sub a::before { content:""; width:5px; height:5px; border-radius:50%; background:currentColor; opacity:.45; flex:none; }
-.nav-sub a:hover { color:var(--text); background:var(--bg-elevated); }
-.nav-sub a.on { color:var(--accent-text); font-weight:700; background:var(--accent-soft); } .nav-sub a.on::before { opacity:1; }
-.nav-sub a.soon { opacity:.5; cursor:default; } .nav-sub a.soon:hover { background:none; color:inherit; }
-.nav-sub a small { margin-left:auto; font-size:10px; padding:1px 7px; border-radius:999px; background:var(--bg-elevated); }
-.sidebar-foot { margin-top:auto; padding:12px; display:flex; align-items:center; justify-content:space-between; gap:8px; border-top:1px solid var(--border); flex:none; }
-.sidebar-foot .btn { background:transparent; color:var(--text-dim); border-color:var(--border); }
 .sidebar-backdrop { position:fixed; inset:0; background:rgba(20,22,37,.35); backdrop-filter:blur(2px); -webkit-backdrop-filter:blur(2px); z-index:39; }
 .burger { display:none; width:40px; height:40px; border:1px solid var(--border); border-radius:10px; background:var(--bg-elevated); font-size:20px; cursor:pointer; color:var(--text-dim); }
 .burger:hover { color:var(--accent-text); }
@@ -66,7 +32,6 @@
 /* Topo: botão de tema + Sair à direita do relógio (topbar-search.tsx: quadrado 10px em fundo muted) */
 .icon-btn { width:36px; height:36px; border-radius:10px; border:1px solid var(--border); background:var(--bg-elevated); color:var(--text-dim); font-size:16px; cursor:pointer; transition:color .12s ease, border-color .12s ease; }
 .icon-btn:hover { color:var(--accent-text); border-color:color-mix(in srgb, var(--accent) 40%, transparent); }
-.user-menu { margin:0; }
 
 /* KPIs: 5 cards (valor grande, rótulo, sparkline embaixo). Regra da plataforma: nenhuma grade termina com
    buraco — quando a contagem não fecha as colunas, o(s) último(s) card(s) esticam pra completar a linha.
@@ -229,11 +194,28 @@
 .two > details.card[open] > .cv-eq { flex:1; min-height:220px; }
 .tabbar a.on { color:var(--accent-text); }
 
-/* Tablet/celular: menu vira off-canvas */
+/* Tablet/celular: gaveta off-canvas no estilo do mobile-nav.tsx (256px, marca no topo, grupos com título,
+   item de 42px com barra de acento quando ativo); abre pelo ☰ do topo */
 @media (max-width: 1100px) {
     .shell { --gutter:16px; }
-    .sidebar { position:fixed; left:0; top:0; height:100vh; border-radius:0 var(--radius-panel) var(--radius-panel) 0; transform:translateX(-100%); transition:transform .18s ease; box-shadow:0 0 40px rgba(20,22,37,.3); }
+    .sidebar { position:fixed; left:0; top:0; height:100vh; max-height:none; width:var(--side-w); gap:0; overflow:hidden; background:var(--bg-card); color:var(--text-dim);
+        border-radius:0 var(--radius-panel) var(--radius-panel) 0; box-shadow:0 0 40px rgba(20,22,37,.3); transform:translateX(-100%); transition:transform .18s ease; }
     body.nav-open .sidebar { transform:none; }
+    .brand-row { display:flex; align-items:center; height:64px; flex:none; padding:0 20px; border-bottom:1px solid var(--border); }
+    .nav { flex:1; overflow-y:auto; padding:12px; gap:4px; }
+    .nav-group { display:block; padding:0; background:none; border-radius:0; box-shadow:none; }
+    .nav-h { display:block; margin:0; padding:12px 12px 6px; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:1px; color:var(--text-muted); }
+    .nav-item { width:100%; justify-content:flex-start; gap:12px; padding:0 12px; border-radius:11px; color:var(--text-dim); font-size:14px; font-weight:600; text-align:left; }
+    .nav-item + .nav-item { margin-top:2px; }
+    .nav-item > span { display:inline; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .nav-item svg { color:var(--text-muted); }
+    .nav-item:hover { background:var(--bg-elevated); color:var(--text); }
+    .nav-item.on { background:var(--accent-soft); color:var(--accent-text); font-weight:700; box-shadow:none; }
+    .nav-item.on svg { color:var(--accent-text); }
+    .nav-item.on::before { content:""; position:absolute; left:0; top:11px; height:20px; width:3.5px; border-radius:0 4px 4px 0; background:var(--accent); }
+    .sidebar-foot { flex-direction:row; justify-content:space-between; padding:12px; border-top:1px solid var(--border); border-radius:0; box-shadow:none; background:none; }
+    .sidebar-foot .env { display:inline-block; }
+    .nav-exit { width:auto; height:36px; padding:0 12px; gap:8px; font-size:13px; }
     .burger { display:inline-grid; place-items:center; }
     .kpis { gap:12px; }
 }

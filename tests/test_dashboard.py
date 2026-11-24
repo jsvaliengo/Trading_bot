@@ -437,7 +437,7 @@ def test_fills_page_and_menu_item_are_wired(tmp_path):
     client = app.test_client()
     _login(client)
     html = client.get("/").data.decode()
-    assert '<a href="#fills" data-page="fills"><span>Histórico de fills</span></a>' in html
+    assert re.search(r'<a class="nav-item" href="#fills" data-page="fills" title="Histórico de fills">.*?<span>Histórico de fills</span></a>', html)
     for i in ("fills-table", "fills-filters", "fl-symbol", "fl-side", "fl-from", "fl-to", "fills-csv", "fills-pager"):
         assert f'id="{i}"' in html, i
     js = open("trading_bot/web/static/js/main.js", encoding="utf-8").read()
@@ -540,7 +540,7 @@ def test_market_page_and_menu_item_are_wired():
     client = app.test_client()
     _login(client)
     html = client.get("/").data.decode()
-    assert '<a href="#market" data-page="market"><span>Par ativo</span></a>' in html
+    assert re.search(r'<a class="nav-item" href="#market" data-page="market" title="Par ativo">.*?<span>Par ativo</span></a>', html)
     for i in ("mk-pairs", "mk-chart", "mk-tf", "mk-funding-chart", "mk-ls-chart", "mk-last", "mk-mark", "mk-funding", "mk-oi", "mk-ls"):
         assert f'id="{i}"' in html, i
     assert html.count("lightweight-charts@") == 1   # a mesma lib do modal 1m, carregada uma vez
@@ -763,13 +763,14 @@ def test_shell_sidebar_kpis_and_pages():
     _login(client)
     html = client.get("/").data.decode()
     assert 'id="sidebar"' in html and 'id="sidebar-toggle"' in html and 'id="sidebar-backdrop"' in html
-    assert 'id="sidebar-collapse"' in html and html.count('title="') >= 6   # recolher no desktop; tooltip nos itens
+    assert 'id="sidebar-collapse"' not in html and 'nav-toggle' not in html   # rail fixa (wallet-rail.tsx): sem recolher nem accordion
+    assert html.count('class="nav-item" href=') == 11 and html.count('title="') >= 12   # 11 itens; nome no tooltip (rail só com ícones)
     pages = re.findall(r'<div class="page" data-page="([^"]+)"', html)
     assert pages == ["overview", "pnl", "sheet", "market", "fills", "accounts", "users", "system"]
     nav = html.split('<nav class="nav" id="nav">')[1].split("</nav>")[0]
     assert set(re.findall(r'data-page="([^"]+)"', nav)) == set(pages)
-    # grupos do menu (accordion) com subitens apontando para página/card existentes
-    assert re.findall(r'data-group="([^"]+)"', nav) == ["trading", "market", "reports", "system", "platform"]
+    # um cartão por grupo (sempre visível), itens apontando para página/card existentes
+    assert re.findall(r'data-group="([^"]+)"', nav) == ["main", "trading", "market", "reports", "system", "platform"]
     for target in re.findall(r'data-target="([^"]+)"', nav):
         assert f'id="{target}"' in html, target
     assert html.count('class="page" data-page="overview"') == 1 and ' hidden' in re.findall(r'<div class="page" data-page="pnl"[^>]*>', html)[0]
