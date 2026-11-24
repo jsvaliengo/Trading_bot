@@ -715,6 +715,22 @@ def test_all_cards_start_closed_and_have_id_for_persistence():
     assert not [t for t in tags if 'id="' not in t]
 
 
+def test_equity_range_defaults_to_all_and_overview_keeps_cards_closed():
+    """Equity: a aba "Teste" (janela do forward test Donchian) saiu; "Tudo" é a padrão.
+    Na visão geral (hash #overview) o eq-card não é aberto automaticamente: só páginas
+    compostas apenas de cards recolhíveis abrem o primeiro."""
+    from trading_bot.web.app import create_app
+    app, _ = create_app(_make_bot())
+    client = app.test_client()
+    _login(client)
+    html = client.get("/").data.decode()
+    assert 'data-range="test"' not in html and "Teste</button>" not in html
+    assert '<button class="chip on" role="tab" data-range="all" aria-selected="true">Tudo</button>' in html
+    js = open("trading_bot/web/static/js/main.js", encoding="utf-8").read()
+    assert "chartRange: 'all'" in js and "range === 'test'" not in js
+    assert "cards.every(c => c.tagName === 'DETAILS')" in js
+
+
 def test_mobile_first_pwa_metas_hero_and_tabbar():
     """Celular: metas de PWA/iOS, hero no topo fixo, barra inferior com as mesmas páginas do menu lateral; login com input 16px."""
     from trading_bot.web.app import create_app

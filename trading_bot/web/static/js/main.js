@@ -79,7 +79,7 @@
     const cls = (v) => { const z = sgn(v); return z > 0 ? 'pos' : z < 0 ? 'neg' : ''; };
     const sum = (a) => a.reduce((s, v) => s + v, 0);
 
-    const state = { live: null, fx: null, hist: null, pnl: null, chartRange: 'test', page: 1, sortKey: 'exit_time', sortDir: -1, agg: 'week',
+    const state = { live: null, fx: null, hist: null, pnl: null, chartRange: 'all', page: 1, sortKey: 'exit_time', sortDir: -1, agg: 'week',
         filter: { strategy: document.body.dataset.strategy === 'donchian_4h' ? 'donchian_4h' : 'all', side: 'all', reason: 'all' } };
     const PAGE = 15;
     const charts = {};
@@ -250,22 +250,20 @@
     }
 
     // ───────── Equity + drawdown ─────────
-    function filterRange(hist, range, testStart) {
+    function filterRange(hist, range) {
         if (!hist.length || range === 'all') return hist;
-        let cut = 0;
-        if (range === 'test') cut = testStart ? new Date(testStart).getTime() : 0;
-        else cut = Date.now() - ({ '7d': 7 * 864e5, '24h': 864e5 }[range] || 0);
+        const cut = Date.now() - ({ '7d': 7 * 864e5, '24h': 864e5 }[range] || 0);
         const f = hist.filter(s => { const t = new Date(s.timestamp).getTime(); return !isNaN(t) && t >= cut; });
         return f.length >= 2 ? f : hist.slice(-2);
     }
     function timeScale(p, show) {
         return { type: 'linear', display: show, ticks: { color: p.mut, font: tickFont, maxTicksLimit: 6, callback: v => fmt.dateTime(v) }, grid: { color: p.grid } };
     }
-    function renderEquity(hist, trades, ft) {
+    function renderEquity(hist, trades) {
         const el = $('equity-chart'), elD = $('drawdown-chart');
         if (!el || typeof Chart === 'undefined') return;
         const p = palette();
-        const f = filterRange(hist || [], state.chartRange, ft && ft.start);
+        const f = filterRange(hist || [], state.chartRange);
         const pts = f.map(s => ({ x: new Date(s.timestamp).getTime(), y: s.equity ?? s.balance })).filter(d => !isNaN(d.x) && d.y != null);
         $('eq-sub').textContent = pts.length ? `${fmt.dateTime(f[0].timestamp)} → ${fmt.dateTime(f[f.length - 1].timestamp)} · ${fmt.money(pts[0].y)} → ${fmt.money(pts[pts.length - 1].y)}` : 'sem pontos nesta janela';
         const t0 = pts.length ? pts[0].x : 0, t1 = pts.length ? pts[pts.length - 1].x : 0;
@@ -276,7 +274,7 @@
         }).filter(Boolean);
         const dsLine = { data: pts, borderColor: p.ac, backgroundColor: hexa(p.ac, 0.10), fill: true, borderWidth: 2, pointRadius: 0, tension: 0.15, order: 2 };
         const dsMarks = { type: 'scatter', data: marks, showLine: false, fill: false, pointRadius: 4.5, pointHoverRadius: 7, pointBackgroundColor: marks.map(m => m.t.pnl_net >= 0 ? p.good : p.bad), pointBorderColor: p.card, pointBorderWidth: 2, order: 1 };
-        let peak = ft && ft.sim_balance && state.chartRange === 'test' ? ft.sim_balance : -Infinity;
+        let peak = -Infinity;
         const dd = pts.map(q => { peak = Math.max(peak, q.y); return { x: q.x, y: peak > 0 ? -((peak - q.y) / peak) * 100 : 0 }; });
         const ddMin = Math.min(-2, Math.min(...dd.map(q => q.y), 0) * 1.3);
         const dsDD = { data: dd, borderColor: p.bad, backgroundColor: hexa(p.bad, 0.18), fill: 'origin', borderWidth: 1.5, pointRadius: 0, tension: 0.15 };
@@ -952,7 +950,7 @@
     }
     function renderHistory(hs) {
         renderTrades(hs.recent_trades || []);
-        renderEquity(hs.portfolio_history || [], hs.recent_trades || [], state.live && state.live.forward_test);
+        renderEquity(hs.portfolio_history || [], hs.recent_trades || []);
         renderKpis();
     }
     let lastClosed = null;
@@ -1521,7 +1519,7 @@
         });
         const el = target && $(target);
         if (el && !el.hidden) { if (el.tagName === 'DETAILS') el.open = true; }
-        else { const first = $$(`.page[data-page="${name}"] details.card`).find(d => !d.hidden); if (first) first.open = true; }   // página só com cards recolhíveis: abre o primeiro
+        else { const cards = $$(`.page[data-page="${name}"] .card`).filter(c => !c.hidden); if (cards.length && cards.every(c => c.tagName === 'DETAILS')) cards[0].open = true; }   // página só com cards recolhíveis: abre o primeiro
         pageEmpties();
         Object.values(charts).forEach(c => c.resize());   // canvas em página oculta nasce com 0px
         closeSidebar();
