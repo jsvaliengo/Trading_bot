@@ -182,6 +182,17 @@
 #fills-table .nobot { color:var(--text-muted); }
 @media (max-width: 600px) { .fills-filters label { width:100%; } .fills-filters input { min-height:40px; } }
 
+/* Trading › Simulações: formulário em linha, KPIs em grade auto-fit de mesma altura (sem buraco no celular) */
+.sim-form { margin-bottom:12px; align-items:center; }
+.sim-form input, .sim-form select { font:inherit; color:var(--text); background:var(--bg-elevated); border:1px solid var(--border-strong); border-radius:10px; padding:5px 9px; margin-left:4px; width:120px; color-scheme:inherit; }
+.sim-derived { color:var(--text-muted); } .sim-derived b { color:var(--text); font-family:var(--font-mono); font-weight:500; margin-left:4px; }
+.sim-kpis { display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:12px; margin-bottom:14px; }
+.sim-kpis .kpi { min-height:0; padding-bottom:14px; } .sim-kpis .kpi-s { white-space:normal; } .sim-kpis .kpi-v { font-size:20px; } .sim-kpis .kpi-v small { font-size:12px; color:var(--text-muted); font-weight:500; }
+.sim-recs { margin:4px 0 10px; padding-left:18px; font-size:13px; line-height:1.5; } .sim-recs li + li { margin-top:4px; }
+.sim-assump summary { font-size:12px; color:var(--text-muted); cursor:pointer; } .sim-assump ul { font-size:12px; color:var(--text-dim); padding-left:18px; line-height:1.5; }
+#sim-table td small { color:var(--text-muted); }
+@media (max-width: 600px) { .sim-form label { width:100%; display:flex; justify-content:space-between; } .sim-form input, .sim-form select { min-height:40px; width:150px; } .sim-kpis { grid-template-columns:repeat(2, minmax(0,1fr)); } .sim-kpis .kpi-v small { display:block; margin:0; } }
+
 /* Páginas: uma visível por vez (showPage no main.js) */
 .page { display:flex; flex-direction:column; gap:16px; min-width:0; } /* min-width:0: tabela larga rola dentro do card, não alarga a página */
 /* Linhas de dois cards: mesma altura quando os dois estão abertos (o gráfico de equity estica pra preencher);

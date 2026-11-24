@@ -281,6 +281,34 @@ def _register_routes(app: Flask, socketio: SocketIO) -> None:
         from .pnl_report import build_report
         return jsonify(build_report(account_bot(), request.args.get("from"), request.args.get("to"), request.args.get("days")))
 
+    @app.route("/api/simulation")
+    @login_required
+    def simulation():
+        """Simulação de renda: ?target_brl=6000&fx=5.94&days=30 (ou target_daily=US$ como override) &capital=US$.
+        Só contas com bot/TradeStore (a amostra é o P&L do martingale desde o reset de banca)."""
+        from ..core.trade_store import pnl_since_ms
+        from .fx import usd_brl
+        from .simulation import measure, simulate
+        bot = account_bot()
+        store = getattr(bot, "trade_store", None)
+        if store is None:
+            return jsonify({"ok": False, "error": "esta conta não tem bot neste processo: sem trades do martingale para medir"}), 400
+        a = request.args
+
+        def num(key, default):
+            try:
+                return float(a[key]) if a.get(key) else default
+            except ValueError:
+                abort(400)
+        fx = num("fx", None) or usd_brl().get("usd_brl")
+        capital = num("capital", None) or float(collect_summary(bot).get("last_balance") or 0.0)
+        stats = measure(store, pnl_since_ms())
+        if stats is None:
+            return jsonify({"ok": False, "error": "nenhum trade fechado do martingale desde o reset de banca"}), 400
+        return jsonify({"ok": True, "stats": stats, **simulate(
+            stats, capital, target_daily=num("target_daily", None), days_per_month=int(num("days", 30)),
+            fx=fx, target_brl=num("target_brl", 6000.0), stop_usd=float(getattr(config, "MARTINGALE_STOP_LOSS_USDT", 0.0) or 0.0))})
+
     @app.route("/api/control/pause", methods=["POST"])
     @login_required
     def pause():

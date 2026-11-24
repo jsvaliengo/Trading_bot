@@ -984,6 +984,7 @@
         if (state.live) renderLive(state.live);
         if (state.hist) renderHistory(state.hist);
         if (state.pnl) renderPnl(state.pnl);
+        if (state.sim) renderSim(state.sim);
     });
     function initChips() {
         $$('.chips .chip').forEach(b => b.addEventListener('click', () => {
@@ -1225,6 +1226,50 @@
     $('fills-prev').addEventListener('click', () => { fl.page -= 1; fetchFills(); });
     $('fills-next').addEventListener('click', () => { fl.page += 1; fetchFills(); });
     function fillsVisible(on) { if (on && !fl.loaded) fetchFills(); }
+
+    // ───────── Trading › Simulações (/api/simulation: meta R$ → alvo US$/dia; cenários p25/média/p75 da amostra do martingale) ─────────
+    const sm = { loaded: false };
+    const simQuery = () => { const q = new URLSearchParams(); if ($('sim-brl').value) q.set('target_brl', $('sim-brl').value); if ($('sim-fx').value) q.set('fx', $('sim-fx').value); q.set('days', $('sim-days').value); if ($('sim-capital').value) q.set('capital', $('sim-capital').value); return q.toString(); };
+    const both = (usd, brl) => `${esc(fmt._usd(usd))}${isNum(brl) ? ` <small>R$ ${esc(fmt.num(brl))}</small>` : ''}`;
+    async function fetchSim() {
+        const err = $('sim-error');
+        try {
+            const r = await fetch(`/api/simulation?${simQuery()}`, { credentials: 'include' });
+            const d = await r.json(); if (!r.ok || d.ok === false) throw new Error(d.error || ('HTTP ' + r.status));
+            err.hidden = true; sm.loaded = true; state.sim = d; renderSim(d);
+        } catch (e) { err.textContent = 'Simulação indisponível: ' + e.message; err.hidden = false; $('sim-kpis').innerHTML = ''; }
+    }
+    function renderSim(d) {
+        const p = palette(), sc = d.scenarios, obs = sc[1], req = d.required, t = d.target, st = d.stats;
+        if (isNum(d.fx) && !$('sim-fx').value) $('sim-fx').value = d.fx.toFixed(2);
+        if (!$('sim-capital').value) $('sim-capital').value = Math.round(d.capital);
+        $('sim-target').innerHTML = both(t.daily_usd, t.daily_brl) + `<small> · ${esc(fmt._usd(t.monthly_usd))}/mês</small>`;
+        $('sim-sub').textContent = `amostra ${fmt.day(st.from)} → ${fmt.day(st.to)}: ${st.sample_days} dia(s), ${st.cycles} ciclo(s), win ${fmt.pct(st.win_rate, 0, false)}, ${fmt._usd(st.pnl_per_cycle)}/ciclo · líquido de fees da corretora; impostos não incluídos · simulação, não recomendação`;
+        const kpi = (l, v, s, c) => `<article class="kpi"><div class="kpi-h"><b class="kpi-v ${c || ''}">${v}</b><span class="kpi-l">${l}</span><small class="kpi-s">${s}</small></div></article>`;
+        const dz = (n) => n === 0 ? 'já alcançado' : isNum(n) ? `${n} dias` : 'não alcança';
+        $('sim-kpis').innerHTML = [
+            kpi('Diário no capital atual', both(obs.daily_usd, obs.daily_brl), `${fmt.pct(obs.daily_pct)}/dia · p25 ${fmt._usd(sc[0].daily_usd)} · p75 ${fmt._usd(sc[2].daily_usd)}`, cls(obs.daily_usd)),
+            kpi(`Mensal (${d.days_per_month} dias)`, both(obs.monthly_usd, obs.monthly_brl), `p25 ${fmt._usd(sc[0].monthly_usd)} · p75 ${fmt._usd(sc[2].monthly_usd)}`, cls(obs.monthly_usd)),
+            kpi('Alvo diário', both(t.daily_usd, t.daily_brl), `${fmt._usd(t.monthly_usd)}/mês${isNum(t.monthly_brl) ? ` · R$ ${fmt.num(t.monthly_brl)}` : ''}`),
+            kpi('Capital p/ o alvo', isNum(req.capital) ? fmt._usd(req.capital) : '—', isNum(req.capital) ? `${fmt._usd(req.capital - d.capital, { signed: true })} vs. hoje${req.sheet ? ` · planilha ${esc(req.sheet.label)}` : ''}` : 'retorno observado ≤ 0'),
+            kpi('Dias até lá (reinvestindo)', dz(req.days_to_target), `conservador ${dz(sc[0].days_to_target)} · otimista ${dz(sc[2].days_to_target)}`),
+            kpi('Ciclos/dia p/ o alvo', isNum(req.cycles_needed_per_day) ? fmt.num(req.cycles_needed_per_day, 1) : '—', `observado ${fmt.num(req.cycles_observed_per_day, 1)} a ${fmt._usd(req.pnl_per_cycle)}/ciclo`),
+        ].join('');
+        $('sim-table').querySelector('tbody').innerHTML = sc.map(s => `<tr><td class="sans"><b>${esc(s.label)}</b></td><td class="r ${cls(s.daily_pct)}">${esc(fmt.pct(s.daily_pct))}</td><td class="r ${cls(s.daily_usd)}">${both(s.daily_usd, s.daily_brl)}</td><td class="r ${cls(s.monthly_usd)}">${both(s.monthly_usd, s.monthly_brl)}</td><td class="r">${isNum(s.required_capital) ? esc(fmt._usd(s.required_capital)) : '—'}</td><td class="r">${dz(s.days_to_target)}</td><td class="sans">${s.sheet ? `${esc(s.sheet.label)} · 1ª ordem $${s.sheet.first_order} · stop $${s.sheet.stop} · ${s.sheet.coins} moeda(s)` : '—'}</td></tr>`).join('');
+        $('sim-recs').innerHTML = d.recommendations.map(r => `<li>${esc(r)}</li>`).join('');
+        $('sim-fx-sens').textContent = d.fx_sensitivity.length ? 'câmbio: ' + d.fx_sensitivity.map(f => `R$ ${fmt.num(f.fx)} → ${fmt._usd(f.daily_usd)}/dia`).join(' · ') : '';
+        $('sim-assumptions').innerHTML = d.assumptions.map(a => `<li>${esc(a)}</li>`).join('');
+        const rk = d.risks; $('sim-chart-sub').textContent = `${obs.curve.length - 1} dias · linha tracejada = capital necessário${isNum(rk.stop_pct_of_capital) ? ` · stop $${rk.stop_usd} = ${fmt.pct(rk.stop_pct_of_capital, 0, false)} do capital` : ''}${rk.small_sample ? ` · amostra curta (${rk.sample_days}d)` : ''}`;
+        const el = $('sim-chart'); if (!el || typeof Chart === 'undefined') return;
+        const labels = obs.curve.map((_, i) => i), colors = [p.warn, p.ac, p.good];
+        const dss = sc.map((s, i) => ({ label: s.label, data: s.curve, borderColor: colors[i], borderWidth: i === 1 ? 2 : 1.5, pointRadius: 0, tension: 0.2 }));
+        if (isNum(req.capital)) dss.push({ label: 'Capital necessário', data: labels.map(() => req.capital), borderColor: p.bad, borderWidth: 1, borderDash: [6, 4], pointRadius: 0 });
+        const opts = lineOpts(p, v => '$' + Math.round(v).toLocaleString('pt-BR')); opts.scales.x.ticks.callback = (v) => `d${labels[v]}`; opts.plugins.tooltip.callbacks.title = (it) => `dia ${it[0].label}`;
+        if (charts.sim) { charts.sim.data.labels = labels; charts.sim.data.datasets = dss; charts.sim.update('none'); return; }
+        charts.sim = new Chart(el, { type: 'line', data: { labels, datasets: dss }, options: opts });
+    }
+    $('sim-form').addEventListener('submit', (e) => { e.preventDefault(); fetchSim(); });
+    function simVisible(on) { if (on && !sm.loaded) fetchSim(); }
 
     // ───────── Shell: KPIs com sparkline, páginas do menu, menu off-canvas, tema ─────────
     function sparkline(id, values, color) {
@@ -1482,6 +1527,7 @@
         closeSidebar();
         marketVisible(name === 'market');
         fillsVisible(name === 'fills');
+        simVisible(name === 'sim');
         usersVisible(name === 'users');
         accountsVisible(name === 'accounts');
         if (el && !el.hidden) el.scrollIntoView({ block: 'start' });
@@ -1504,6 +1550,7 @@
         if (state.live) renderLive(state.live);
         if (state.hist) renderHistory(state.hist);
         if (state.pnl) renderPnl(state.pnl);
+        if (state.sim) renderSim(state.sim);
     });
 
     // ───────── Boot ─────────
