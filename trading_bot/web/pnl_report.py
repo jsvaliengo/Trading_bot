@@ -8,6 +8,10 @@ nunca quebra. O "dia" aqui é o dia UTC+0 (como na Bitget), NÃO o dia de tradin
 do bot do card "Realizado hoje". A aba "Análise da conta" soma o extrato da conta
 como o app da Bitget: P&L do dia = realizado + taxas + funding dos lançamentos do dia
 UTC (transferência não é lucro; o não realizado em aberto não entra).
+
+Conta sem bot (sem TradeStore): o extrato da corretora é a fonte de trades — cada lançamento
+REALIZED_PNL vira um "trade" (fechamento na corretora, sem qty/preços) e o por-símbolo soma o
+extrato por par; o piso PNL_SINCE_UTC (reset de banca do bot) não se aplica a essas contas.
 """
 
 from __future__ import annotations
@@ -76,16 +80,21 @@ def build_report(bot, day_from: Optional[str], day_to: Optional[str], days: Any 
         day_from, day_to = day_to, day_from
 
     store = getattr(bot, "trade_store", None)
+    since = pnl_since_ms() if store is not None else None   # reset de banca é do bot, não de conta de terceiro
+    exchange = getattr(bot, "exchange", None)
+    # hoje/7d/30d ancoram em hoje, não no período pedido: equity e income cobrem a união das duas janelas
+    wide_from, wide_to = min(day_from, _shift(today, -29)), max(day_to, today)
+    wide_income, income_ok = _cached(("income", wide_from, wide_to, since), exchange, 30.0, lambda: _income(exchange, wide_from, wide_to, since))
     rows: List[Dict[str, Any]] = []
     if store is not None and hasattr(store, "closed_trades"):
         try:
             rows = [r for r in store.closed_trades(None, limit=100000) if parse_utc(r.get("exit_at"))]
         except Exception:
             rows = []
+    elif store is None:
+        rows = _rows_from_income(wide_income)
     for r in rows:
         r["day"] = _utc_day(parse_utc(r["exit_at"]))
-    # hoje/7d/30d ancoram em hoje, não no período pedido: equity e income cobrem a união das duas janelas
-    wide_from, wide_to = min(day_from, _shift(today, -29)), max(day_to, today)
 
     # % do período = USD / equity no início do período, onde equity inicial =
     # capital inicial + Σ pnl_net dos trades fechados ANTES do período.
@@ -102,19 +111,17 @@ def build_report(bot, day_from: Optional[str], day_to: Optional[str], days: Any 
     totals.update(window(day_from, day_to))
     daily = _daily(period)
 
-    exchange = getattr(bot, "exchange", None)
     account = dict(_cached(("account",), exchange, 30.0, lambda: _account(exchange)))
     if account["ok"]:  # mesma fórmula do card SALDO: testnet simulado soma o realizado do DB ao cap
         account["equity"] = round(effective_equity(config, wallet=account.pop("wallet"), cumulative_realized=sum(_f(r["pnl_net"]) for r in rows),
                                                    unrealized=account["unrealized"]), 4)
-    wide_income, income_ok = _cached(("income", wide_from, wide_to), exchange, 30.0, lambda: _income(exchange, wide_from, wide_to))
     income = [i for i in wide_income if day_from <= i["time"][:10] <= day_to]
     income_totals = {t: round(sum(i["amount"] for i in income if i["type"] == t), 4) for t in INCOME_TYPES}
 
     points = _daily_snapshots(store, rows, wide_from, wide_to)
     if account["ok"]:  # hoje: equity ao vivo vale mais que o último snapshot (até 10 min atrás)
         points = points[:1] + [p for p in points[1:] if p["day"] != today] + [{"day": today, "equity": account["equity"], "unrealized": account["unrealized"], "at": _ms(now)}]
-    calendar = _account_daily(wide_income, wide_from, wide_to)
+    calendar = _account_daily(wide_income, wide_from, wide_to, since)
     account_window = _account_window(calendar, points)
     cumulative, running = [], 0.0
     for d in calendar:
@@ -131,7 +138,7 @@ def build_report(bot, day_from: Optional[str], day_to: Optional[str], days: Any 
         "daily": daily,
         "calendar": [d for d in calendar if day_from <= d["day"] <= day_to],
         "cumulative": cumulative,
-        "by_symbol": _by_symbol(period),
+        "by_symbol": _by_symbol(period) if store is not None else _symbols_from_income(income),
         "trades": [{k: r.get(k) for k in ("exit_at", "symbol", "side", "qty", "entry_price", "exit_price",
                                            "pnl_net", "fees", "funding", "close_reason", "strategy_type")}
                    for r in sorted(period, key=lambda r: str(r["exit_at"]), reverse=True)],
@@ -192,6 +199,37 @@ def _by_symbol(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return sorted(_group(rows, "symbol"), key=lambda s: abs(s["net"]), reverse=True)
 
 
+def _rows_from_income(income: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Conta sem bot: cada REALIZED_PNL do extrato é um fechamento na corretora (P&L bruto; a taxa e o
+    funding entram pelos totais do income). Sem qty/preços/lado: a corretora não os devolve no bill."""
+    return [{"exit_at": i["time"], "symbol": i["symbol"], "side": "", "pnl_net": i["amount"], "fees": 0.0, "funding": 0.0,
+             "close_reason": "fechamento na corretora", "strategy_type": "exchange"}
+            for i in income if i["type"] == "REALIZED_PNL"]
+
+
+def _symbols_from_income(income: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Por símbolo a partir do extrato: líquido = realizado + taxas + funding do par; trades = fechamentos."""
+    groups: Dict[str, Dict[str, Any]] = {}
+    for i in income:
+        if i["type"] not in PNL_INCOME or not i["symbol"]:
+            continue
+        g = groups.setdefault(i["symbol"], {"symbol": i["symbol"], "net": 0.0, "trades": 0, "wins": 0, "fees": 0.0, "funding": 0.0})
+        g["net"] += i["amount"]
+        if i["type"] == "REALIZED_PNL":
+            g["trades"] += 1
+            g["wins"] += 1 if i["amount"] > 0 else 0
+        elif i["type"] == "COMMISSION":
+            g["fees"] -= i["amount"]   # fees positivas como nos trades do bot (a comissão vem negativa no extrato)
+        else:
+            g["funding"] += i["amount"]
+    out = list(groups.values())
+    for g in out:
+        g["win_rate"] = round(g["wins"] / g["trades"] * 100.0, 2) if g["trades"] else 0.0
+        for k in ("net", "fees", "funding"):
+            g[k] = round(g[k], 4)
+    return sorted(out, key=lambda s: abs(s["net"]), reverse=True)
+
+
 def _income_by_day(income: List[Dict[str, Any]], types: Tuple[str, ...]) -> Dict[str, float]:
     by_day: Dict[str, float] = {}
     for i in income:
@@ -205,11 +243,10 @@ def _funding_daily(income: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return [{"day": d, "amount": round(v, 4)} for d, v in sorted(_income_by_day(income, ("FUNDING_FEE",)).items())]
 
 
-def _account_daily(income: List[Dict[str, Any]], day_from: str, day_to: str) -> List[Dict[str, Any]]:
+def _account_daily(income: List[Dict[str, Any]], day_from: str, day_to: str, since: Optional[int]) -> List[Dict[str, Any]]:
     """P&L da conta por dia UTC, como a "Análise da conta" da Bitget: soma dos lançamentos do
     extrato do dia (realizado + taxas + funding; transferência fica de fora). Dia sem lançamento = 0."""
     pnl_income = _income_by_day(income, PNL_INCOME)
-    since = pnl_since_ms()
     return [{"day": day, "net": round(pnl_income.get(day, 0.0), 4)} for day in _days_between(day_from, day_to)
             if not (since and _ms(_day(day) + timedelta(days=1)) <= since)]  # reset de banca: nada antes do piso
 
@@ -276,12 +313,12 @@ def _cached(key: Tuple, exchange, ttl: float, fn):
     return data
 
 
-def _income(exchange, day_from: str, day_to: str) -> Tuple[List[Dict[str, Any]], bool]:
+def _income(exchange, day_from: str, day_to: str, since: Optional[int] = None) -> Tuple[List[Dict[str, Any]], bool]:
     """Income history da exchange no período (paginado por startTime). ([], False) em falha."""
     if exchange is None or not hasattr(exchange, "get_income_history"):
         return [], False
     start_ms, end_ms = _day_bounds_ms(day_from, day_to)
-    start_ms = max(start_ms, pnl_since_ms() or 0)  # reset de banca: lançamentos anteriores ficam de fora
+    start_ms = max(start_ms, since or 0)  # reset de banca: lançamentos anteriores ficam de fora
     out: List[Dict[str, Any]] = []
     cursor = start_ms
     try:

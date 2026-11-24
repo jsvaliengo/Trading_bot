@@ -1916,7 +1916,17 @@ class _FakeExchange:
         return {"funding_fee": -0.1, "commission": -0.2}
 
     def get_fills(self, symbol=None, start_ms=None, end_ms=None, limit=500):
-        return []
+        return [{"time": end_ms - 3600000, "symbol": "ADAUSDT", "side": "sell", "action": "close", "position_side": "LONG",
+                 "price": 0.52, "qty": 100.0, "notional": 52.0, "fee": -0.031, "fee_coin": "USDT", "profit": 2.0, "role": "taker",
+                 "order_id": "o1", "trade_id": "t1"}]
+
+    def get_income_history(self, **kw):
+        day_ms = int(datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).timestamp() * 1000)
+        return [i for i in (_inc(day_ms - 86400000 * 40, "REALIZED_PNL", 9.0),                      # fora dos 30 dias
+                            _inc(day_ms - 86400000 * 3, "REALIZED_PNL", -1.5), _inc(day_ms - 86400000 * 3, "COMMISSION", -0.05),
+                            _inc(day_ms + 3600000, "REALIZED_PNL", 2.0), _inc(day_ms + 3600000, "COMMISSION", -0.031),
+                            _inc(day_ms + 3600000, "FUNDING_FEE", -0.01), _inc(day_ms + 7200000, "TRANSFER", 50.0))
+                if i["time"] >= kw["start_time"]]
 
 
 _FAKE_KEYS = {"api_key": "bg_fake_key_AB12", "api_secret": "fake-secret", "passphrase": "fake-pass"}
@@ -2048,6 +2058,33 @@ def test_account_without_bot_serves_readonly_snapshot_and_blocks_controls(monkey
     client.get(f"/api/live?account={aid}")
     assert len(made) == 2 and made[1].creds["api_key"] == "outra_key_CD34"
     assert acc_mod.probe("bitget", {"api_key": "", "api_secret": "", "passphrase": ""})["ok"] is False
+
+
+def test_readonly_account_pnl_report_and_fills_come_from_exchange(monkeypatch, _brt):
+    """Conta sem bot: /api/pnl_report usa o extrato da corretora como fonte de trades (hoje/7d/30d, por símbolo,
+    fechamentos) e ignora o piso PNL_SINCE_UTC do bot; /api/fills lê os fills com as chaves da conta."""
+    from trading_bot.web import pnl_report
+    pnl_report._memo.clear()
+    monkeypatch.setattr(global_config, "PNL_SINCE_UTC", "2030-01-01T00:00:00Z", raising=False)   # piso do bot: não vale aqui
+    app, made = _app_with_secret(monkeypatch)
+    store = app.config["PLATFORM"]
+    aid = store.create_account(store.create_user("maria", "senha-forte"), "bitget", "da maria", **_FAKE_KEYS)
+    maria = app.test_client()
+    _login(maria, user="maria", pw="senha-forte")
+    p = maria.get(f"/api/pnl_report?account={aid}").get_json()
+    assert p["income_ok"] is True and p["today_pnl"]["usd"] == pytest.approx(1.959)
+    assert p["windows"]["d7"]["usd"] == pytest.approx(0.409) and p["windows"]["d30"]["usd"] == pytest.approx(0.409)
+    assert p["today_pnl"]["pct"] == pytest.approx(1.959 / 96.5 * 100, rel=1e-3)   # sem snapshot: % sobre a equity ao vivo
+    assert p["by_symbol"] == [{"symbol": "ADAUSDT", "net": 0.409, "trades": 2, "wins": 1, "fees": 0.081, "funding": -0.01, "win_rate": 50.0}]
+    assert p["totals"]["trades"] == 2 and p["totals"]["net"] == 0.5 and p["totals"]["best"] == 2.0
+    assert [t["pnl_net"] for t in p["trades"]] == [2.0, -1.5] and p["trades"][0]["qty"] is None
+    assert p["income_totals"]["TRANSFER"] == 50.0 and len(p["calendar"]) == 30
+    f = maria.get(f"/api/fills?account={aid}").get_json()
+    assert f["total"] == 1 and f["fills"][0]["symbol"] == "ADAUSDT" and f["fills"][0]["bot_trade_id"] is None and f["profit_total"] == 2.0
+    # a conta do bot (com TradeStore) continua respeitando o piso: nada do extrato entra
+    admin = app.test_client()
+    _login(admin)
+    assert admin.get("/api/pnl_report").get_json()["today_pnl"]["usd"] == 0.0
 
 
 def test_socket_connect_only_for_owner_of_the_bot_account(monkeypatch):

@@ -104,10 +104,24 @@ Entregue:
    5 s entre rajadas de chamadas privadas da mesma conta (antes, a falha era re-tentada a cada poll de 5 s).
    Entradas vencidas são descartadas a cada chamada (handle trocado não vaza).
 
-Fica para a **fase 2b (PR D)** e depois:
+## 3c. Fase 2b — histórico/P&L de conta sem bot (PR D)
 
-- Histórico/P&L de conta sem bot (ler income/fills da corretora como fonte de trades; sem TradeStore por conta).
+Entregue (sem TradeStore por conta):
+
+1. **`/api/pnl_report?account=N`** em conta sem bot usa o **extrato da corretora** como fonte de trades
+   (`web/pnl_report.py`): cada lançamento `REALIZED_PNL` vira um "trade" (fechamento na corretora, sem
+   qty/preços/lado: o bill não traz), o por-símbolo soma realizado + taxas + funding por par, hoje/7d/30d e o
+   calendário vêm do extrato como já vinham. O piso `PNL_SINCE_UTC` (reset de banca do bot) **não** se aplica a
+   essas contas; sem snapshots de equity, a % usa a equity ao vivo.
+2. **Card "P&L da conta"** na visão geral da conta só-leitura (`#ro-pnl-card`: hoje/7d/30d + por símbolo), com
+   link para a análise completa em P&L; a página P&L inteira (abas da conta, trading, detalhes, símbolo, income)
+   funciona para a conta.
+3. `/api/fills?account=N` já lia os fills com as chaves da conta; coberto por teste com respostas fake.
+
+Fica para depois:
+
 - Outras exchanges no cadastro (só Bitget hoje).
+- Round-trips (qty/preços/lado) de conta sem bot a partir dos fills, se a lista de "Detalhes" precisar deles.
 
 ## 4. Fase 3 — um bot por conta (multi-processo)
 

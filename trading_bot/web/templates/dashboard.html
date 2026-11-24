@@ -232,6 +232,22 @@
         <div id="positions-list"><p class="empty">Nenhuma posição aberta. O motor entra só no fechamento de barra 4h com rompimento de 40 barras.</p></div>
     </section>
 
+    <!-- Conta sem bot: resumo do P&L pelo extrato da corretora (o card completo fica em P&L › Análise do P&L) -->
+    <section class="card" id="ro-pnl-card" aria-labelledby="ro-pnl-h" hidden>
+        <header class="ch"><h2 id="ro-pnl-h">P&amp;L da conta</h2><span class="cs" id="ro-pnl-sub">extrato da corretora: realizado + taxas + funding · dia UTC · <a href="#pnl/pnl-card">análise completa</a></span></header>
+        <div class="pnl-wins">
+            <div><span class="tl">P&amp;L de hoje</span><b id="ro-pnl-today">—</b><small id="ro-pnl-today-pct">—</small></div>
+            <div><span class="tl">P&amp;L em 7 dias</span><b id="ro-pnl-7d">—</b><small id="ro-pnl-7d-pct">—</small></div>
+            <div><span class="tl">P&amp;L em 30 dias</span><b id="ro-pnl-30d">—</b><small id="ro-pnl-30d-pct">—</small></div>
+        </div>
+        <div class="table-scroll">
+            <table class="table" id="ro-pnl-symbols">
+                <thead><tr><th scope="col">Par</th><th scope="col" class="r">Fechamentos</th><th scope="col" class="r">Win rate</th><th scope="col" class="r">P&amp;L líq.</th><th scope="col" class="r">Taxas</th><th scope="col" class="r">Funding</th></tr></thead>
+                <tbody><tr><td colspan="6" class="empty">Carregando…</td></tr></tbody>
+            </table>
+        </div>
+    </section>
+
     <!-- Equity + Performance (ocultos no martingale: curva/tabela são do forward test Donchian) -->
     <section class="two" id="eqperf-row">
         <!-- Equity + drawdown -->
