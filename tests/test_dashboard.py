@@ -764,9 +764,9 @@ def test_shell_sidebar_kpis_and_pages():
     html = client.get("/").data.decode()
     assert 'id="sidebar"' in html and 'id="sidebar-toggle"' in html and 'id="sidebar-backdrop"' in html
     assert 'id="sidebar-collapse"' not in html and 'nav-toggle' not in html   # rail fixa (wallet-rail.tsx): sem recolher nem accordion
-    assert html.count('class="nav-item" href=') == 11 and html.count('title="') >= 12   # 11 itens; nome no tooltip (rail só com ícones)
+    assert html.count('class="nav-item" href=') == 12 and html.count('title="') >= 13   # 12 itens; nome no tooltip (rail só com ícones)
     pages = re.findall(r'<div class="page" data-page="([^"]+)"', html)
-    assert pages == ["overview", "pnl", "sheet", "market", "fills", "accounts", "users", "system"]
+    assert pages == ["overview", "pnl", "sheet", "market", "fills", "sim", "accounts", "users", "system"]
     nav = html.split('<nav class="nav" id="nav">')[1].split("</nav>")[0]
     assert set(re.findall(r'data-page="([^"]+)"', nav)) == set(pages)
     # um cartão por grupo (sempre visível), itens apontando para página/card existentes
@@ -2238,3 +2238,42 @@ def test_pnl_details_table_headers_are_sortable():
     assert 'data-sort="exit_at" aria-sort="descending"' in thead
     js = open("trading_bot/web/static/js/main.js", encoding="utf-8").read()
     assert "sort(byKey(pnlState.trKey, pnlState.trDir))" in js and "#pnl-trades th[data-sort]" in js
+
+
+# ---------- /api/simulation: página Trading › Simulações ----------
+
+
+def test_simulation_route_requires_store_and_returns_scenarios(tmp_path, monkeypatch):
+    from trading_bot.core.trade_store import TradeStore
+    from trading_bot.web.app import create_app
+    monkeypatch.setattr(global_config, "MARTINGALE_STOP_LOSS_USDT", 180.0, raising=False)
+    monkeypatch.setattr(global_config, "PNL_SINCE_UTC", "", raising=False)
+    bot = _make_bot(last_known_balance=325.0)
+    app, _ = create_app(bot)
+    client = app.test_client()
+    assert client.get("/api/simulation").status_code == 401
+    _login(client)
+    r = client.get("/api/simulation")   # bot sem TradeStore → 400 com mensagem
+    assert r.status_code == 400 and "sem trades" in r.get_json()["error"]
+    store = TradeStore(str(tmp_path / "t.db"))
+    for i in range(20):
+        day = f"2026-11-{i + 1:02d}"
+        store.record_open({"timestamp": f"{day}T01:00:00+00:00", "symbol": "ADAUSDT", "signal": "BUY", "side": "LONG", "qty": 10.0,
+                           "value": 6.0, "entry_price": 0.6, "stop_loss": 0.55, "take_profit": 0.65, "strategy_name": "primary",
+                           "strategy_type": "martingale_hedge", "double_first": False, "ai_consultive": {}})
+        store.record_close(symbol="ADAUSDT", side="LONG", entry_price=0.6, exit_price=0.61, exit_at=f"{day}T05:00:00+00:00",
+                           pnl_gross=1.05, pnl_net=1.0, fees=0.05, close_reason="tp", strategy_name="primary")
+    bot.trade_store = store
+    d = client.get("/api/simulation?target_brl=6000&fx=6&days=30&capital=320").get_json()
+    assert d["ok"] and d["stats"]["sample_days"] == 20 and d["capital"] == 320.0 and d["fx"] == 6.0
+    assert d["target"]["daily_usd"] == pytest.approx(33.33, abs=0.01) and [s["key"] for s in d["scenarios"]] == ["conservative", "observed", "optimistic"]
+    assert d["required"]["capital"] == pytest.approx(10000.0, rel=1e-3) and d["risks"]["stop_usd"] == 180.0
+    assert client.get("/api/simulation?target_daily=50&fx=6").get_json()["target"]["daily_usd"] == 50.0   # override
+    assert client.get("/api/simulation?fx=abc").status_code == 400
+    # página e menu
+    html = client.get("/").data.decode()
+    assert re.search(r'<a class="nav-item" href="#sim" data-page="sim" title="Simulações"><svg[^>]*>.*?</svg><span>Simulações</span></a>', html)
+    for i in ("sim-form", "sim-brl", "sim-fx", "sim-days", "sim-capital", "sim-kpis", "sim-chart", "sim-table", "sim-recs"):
+        assert f'id="{i}"' in html, i
+    js = open("trading_bot/web/static/js/main.js", encoding="utf-8").read()
+    assert "function fetchSim(" in js and "simVisible(name === 'sim')" in js
