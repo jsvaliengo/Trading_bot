@@ -23,7 +23,7 @@
     .tabbar { position:fixed; left:0; right:0; bottom:0; z-index:30; display:flex; background:var(--bg-card); border-top:1px solid var(--border); box-shadow:0 -8px 24px -20px rgba(20,22,37,.4);
         padding:0 env(safe-area-inset-right) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left); }
     .tabbar a { flex:1; display:flex; align-items:center; justify-content:center; min-height:50px; font-size:13px; font-weight:600; color:var(--text-dim); text-decoration:none; }
-    .tabbar a:active { color:var(--accent); }
+    .tabbar a:active { color:var(--accent-text); }
 
     /* Layout: 1 coluna, cartões colados nas bordas seguras. */
     .wrap { padding:10px max(12px, env(safe-area-inset-right)) calc(66px + env(safe-area-inset-bottom, 0px)) max(12px, env(safe-area-inset-left)); gap:10px; }

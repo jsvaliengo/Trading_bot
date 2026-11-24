@@ -17,7 +17,7 @@
 .brand { display:flex; align-items:center; gap:10px; color:var(--text); text-decoration:none; font-size:18px; font-weight:600; letter-spacing:-.01em; min-width:0; flex:1; }
 .brand-name { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .collapse-btn { display:none; width:28px; height:28px; border-radius:8px; border:1px solid var(--border); background:transparent; color:var(--text-dim); font-size:16px; cursor:pointer; flex:none; transition:color .12s ease, background .12s ease; }
-.collapse-btn:hover { color:var(--accent); background:var(--bg-elevated); }
+.collapse-btn:hover { color:var(--accent-text); background:var(--bg-elevated); }
 /* Desktop: menu recolhido (só ícones, 78px; título dos links vira tooltip). O estado fica no localStorage. */
 @media (min-width: 1101px) {
     .collapse-btn { display:inline-grid; place-items:center; }
@@ -44,8 +44,8 @@
 .nav-item:hover { background:var(--bg-elevated); color:var(--text); }
 .nav-group.open > .nav-toggle { color:var(--text); }
 /* item ativo (sidebar.tsx): fundo no tom da marca, texto em negrito e barra de acento à esquerda */
-.nav-item.on, .nav-group.has-on > .nav-toggle { background:var(--accent-soft); color:var(--accent); font-weight:700; }
-.nav-item.on svg, .nav-group.has-on > .nav-toggle svg { color:var(--accent); }
+.nav-item.on, .nav-group.has-on > .nav-toggle { background:var(--accent-soft); color:var(--accent-text); font-weight:700; }
+.nav-item.on svg, .nav-group.has-on > .nav-toggle svg { color:var(--accent-text); }
 .nav-item.on::before, .nav-group.has-on > .nav-toggle::before { content:""; position:absolute; left:0; top:11px; height:20px; width:3.5px; border-radius:0 4px 4px 0; background:var(--accent); }
 .chev { margin-left:auto; width:7px; height:7px; border-right:2px solid currentColor; border-bottom:2px solid currentColor; transform:rotate(-45deg); transition:transform .15s ease; flex:none; opacity:.7; }
 .nav-group.open > .nav-toggle .chev { transform:rotate(45deg); }
@@ -54,18 +54,18 @@
 .nav-sub a { display:flex; align-items:center; gap:10px; padding:0 12px; border-radius:9px; color:var(--text-dim); text-decoration:none; font-size:13px; font-weight:500; min-height:36px; transition:background .12s ease, color .12s ease; }
 .nav-sub a::before { content:""; width:5px; height:5px; border-radius:50%; background:currentColor; opacity:.45; flex:none; }
 .nav-sub a:hover { color:var(--text); background:var(--bg-elevated); }
-.nav-sub a.on { color:var(--accent); font-weight:700; background:var(--accent-soft); } .nav-sub a.on::before { opacity:1; }
+.nav-sub a.on { color:var(--accent-text); font-weight:700; background:var(--accent-soft); } .nav-sub a.on::before { opacity:1; }
 .nav-sub a.soon { opacity:.5; cursor:default; } .nav-sub a.soon:hover { background:none; color:inherit; }
 .nav-sub a small { margin-left:auto; font-size:10px; padding:1px 7px; border-radius:999px; background:var(--bg-elevated); }
 .sidebar-foot { margin-top:auto; padding:12px; display:flex; align-items:center; justify-content:space-between; gap:8px; border-top:1px solid var(--border); flex:none; }
 .sidebar-foot .btn { background:transparent; color:var(--text-dim); border-color:var(--border); }
 .sidebar-backdrop { position:fixed; inset:0; background:rgba(20,22,37,.35); backdrop-filter:blur(2px); -webkit-backdrop-filter:blur(2px); z-index:39; }
 .burger { display:none; width:40px; height:40px; border:1px solid var(--border); border-radius:10px; background:var(--bg-elevated); font-size:20px; cursor:pointer; color:var(--text-dim); }
-.burger:hover { color:var(--accent); }
+.burger:hover { color:var(--accent-text); }
 
 /* Topo: botão de tema + Sair à direita do relógio (topbar-search.tsx: quadrado 10px em fundo muted) */
 .icon-btn { width:36px; height:36px; border-radius:10px; border:1px solid var(--border); background:var(--bg-elevated); color:var(--text-dim); font-size:16px; cursor:pointer; transition:color .12s ease, border-color .12s ease; }
-.icon-btn:hover { color:var(--accent); border-color:color-mix(in srgb, var(--accent) 40%, transparent); }
+.icon-btn:hover { color:var(--accent-text); border-color:color-mix(in srgb, var(--accent) 40%, transparent); }
 .user-menu { margin:0; }
 
 /* KPIs: 5 cards (valor grande, rótulo, sparkline embaixo). Regra da plataforma: nenhuma grade termina com
@@ -175,7 +175,7 @@
 #legs-card .pills .btn { border:1px solid var(--border-strong); background:var(--bg-elevated); color:var(--text); padding:8px 16px; min-height:36px; font-weight:600; border-radius:0; transition:background .12s ease, color .12s ease; }
 #legs-card .pills #btn-pause { border-radius:999px 0 0 999px; }
 #legs-card .pills #btn-resume { border-radius:0 999px 999px 0; margin-left:-1px; }
-#legs-card .pills #btn-pause:not(:disabled), #legs-card .pills #btn-resume:not(:disabled) { background:var(--accent-soft); color:var(--accent); border-color:var(--accent); position:relative; z-index:1; }
+#legs-card .pills #btn-pause:not(:disabled), #legs-card .pills #btn-resume:not(:disabled) { background:var(--accent-soft); color:var(--accent-text); border-color:var(--accent-text); position:relative; z-index:1; }
 #legs-card .pills #btn-pause:not(:disabled):hover, #legs-card .pills #btn-resume:not(:disabled):hover { background:var(--accent-dark); color:#fff; }
 #legs-card .pills .btn:disabled { opacity:.5; color:var(--text-muted); cursor:not-allowed; }
 #legs-card .pills #btn-close-all { margin-left:auto; border-radius:999px; background:var(--bad); color:#fff; border-color:transparent; }
@@ -212,7 +212,7 @@
 /* Relatórios › Histórico de fills */
 .fills-filters { margin-bottom:6px; }
 .fills-filters input { font:inherit; color:var(--text); background:var(--bg-elevated); border:1px solid var(--border-strong); border-radius:10px; padding:5px 9px; margin-left:4px; color-scheme:inherit; }
-#fills-table .act.open { color:var(--accent); } #fills-table .act.close { color:var(--text-dim); }
+#fills-table .act.open { color:var(--accent-text); } #fills-table .act.close { color:var(--text-dim); }
 #fills-table .bot { font-size:11px; font-weight:700; padding:1px 8px; border-radius:999px; background:var(--good-soft); color:var(--good); }
 #fills-table .nobot { color:var(--text-muted); }
 @media (max-width: 600px) { .fills-filters label { width:100%; } .fills-filters input { min-height:40px; } }
@@ -227,7 +227,7 @@
 /* Chrome embrulha o conteúdo do <details> em ::details-content: é ele que vira a coluna flex */
 .two > details.card[open]::details-content { display:flex; flex-direction:column; flex:1; }
 .two > details.card[open] > .cv-eq { flex:1; min-height:220px; }
-.tabbar a.on { color:var(--accent); }
+.tabbar a.on { color:var(--accent-text); }
 
 /* Tablet/celular: menu vira off-canvas */
 @media (max-width: 1100px) {
@@ -277,14 +277,14 @@
 .btn-primary { background:var(--accent); color:#fff; border-color:transparent; font-weight:700; box-shadow:var(--shadow-brand); }
 .btn-primary:hover:not(:disabled) { background:var(--accent-dark); border-color:transparent; }
 .row-acts { display:flex; gap:6px; flex-wrap:nowrap; }   /* a tabela já rola na horizontal: não empilhar */
-.row-acts .btn { border-radius:999px; padding:4px 11px; font-size:11.5px; font-weight:600; border:1px solid transparent; background:var(--accent-soft); color:var(--accent); min-height:28px; }
+.row-acts .btn { border-radius:999px; padding:4px 11px; font-size:11.5px; font-weight:600; border:1px solid transparent; background:var(--accent-soft); color:var(--accent-text); min-height:28px; }
 .row-acts .btn:hover:not(:disabled) { background:var(--accent-dark); color:#fff; }
 .row-acts .btn.warn { background:var(--warn-soft); color:var(--warn); } .row-acts .btn.warn:hover:not(:disabled) { background:var(--warn); color:#fff; }
 .row-acts .btn.bad { background:var(--bad-soft); color:var(--bad); } .row-acts .btn.bad:hover:not(:disabled) { background:var(--bad); color:#fff; }
 .row-acts .btn.good { background:var(--good-soft); color:var(--good); } .row-acts .btn.good:hover:not(:disabled) { background:var(--good); color:#fff; }
 .row-acts .btn:disabled { opacity:.4; cursor:not-allowed; }
 .tag { font-size:11px; font-weight:700; padding:2px 9px; border-radius:999px; background:var(--bg-elevated); color:var(--text-dim); }
-.tag.admin { background:var(--accent-soft); color:var(--accent); }
+.tag.admin { background:var(--accent-soft); color:var(--accent-text); }
 .tag.on { background:var(--good-soft); color:var(--good); } .tag.off { background:var(--bad-soft); color:var(--bad); }
 .tag.warn { background:var(--warn-soft); color:var(--warn); }
 .tag.env-demo { background:var(--warn-soft); color:var(--warn); } .tag.env-prod { background:var(--bad-soft); color:var(--bad); }
@@ -295,7 +295,7 @@
 .form-fields { display:flex; flex-direction:column; gap:10px; }
 .form-fields label { display:flex; flex-direction:column; gap:5px; font-size:12px; color:var(--text-dim); }
 .form-fields input, .form-fields select { font:inherit; font-size:14px; color:var(--text); background:var(--bg-card); border:1px solid var(--border-strong); border-radius:12px; padding:9px 12px; width:100%; min-height:40px; transition:border-color .12s ease, box-shadow .12s ease; }
-.form-fields input:focus, .form-fields select:focus { outline:none; border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft); }
+.form-fields input:focus, .form-fields select:focus { outline:none; border-color:var(--accent-text); box-shadow:0 0 0 3px var(--accent-soft); }
 .form-fields label { font-weight:600; }
 .form-fields small { color:var(--text-muted); font-size:11.5px; }
 .form-card .login-error { margin:0; }
@@ -305,7 +305,7 @@
 /* Plataforma › Contas: seletor de conta no topo (só com >1 conta) e etiqueta "só leitura" */
 .acct-sel { font:inherit; font-size:12.5px; font-weight:600; color:var(--text); background:var(--bg-elevated); border:1px solid var(--border-strong); border-radius:999px; padding:6px 30px 6px 12px; max-width:170px; cursor:pointer; appearance:none; -webkit-appearance:none;
     background-image:linear-gradient(45deg, transparent 50%, var(--text-dim) 50%), linear-gradient(135deg, var(--text-dim) 50%, transparent 50%); background-position:calc(100% - 16px) 50%, calc(100% - 11px) 50%; background-size:5px 5px; background-repeat:no-repeat; }
-.acct-sel:hover { border-color:var(--accent); }
+.acct-sel:hover { border-color:var(--accent-text); }
 #ro-tag { font-size:11px; }
 .table td.key { font-family:var(--font-mono); }
 /* o seletor rouba ~170px do topo: até 1500px a linha de meta (deploy/no ar há) sai pra não quebrar em 2 linhas */
