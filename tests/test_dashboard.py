@@ -764,7 +764,8 @@ def test_shell_sidebar_kpis_and_pages():
     html = client.get("/").data.decode()
     assert 'id="sidebar"' in html and 'id="sidebar-toggle"' in html and 'id="sidebar-backdrop"' in html
     assert 'id="sidebar-collapse"' not in html and 'nav-toggle' not in html   # rail fixa (wallet-rail.tsx): sem recolher nem accordion
-    assert html.count('class="nav-item" href=') == 12 and html.count('title="') >= 13   # 12 itens; nome no tooltip (rail só com ícones)
+    assert html.count('class="nav-item" href=') == 11 and html.count('title="') >= 12   # 11 itens; nome no tooltip (rail só com ícones)
+    assert 'href="#system" data-page="system" title="Sistema"' in html and 'href="#system/eng-card"' not in html   # Motor Donchian fica oculto fora do Donchian: um tile só
     pages = re.findall(r'<div class="page" data-page="([^"]+)"', html)
     assert pages == ["overview", "pnl", "sheet", "market", "fills", "sim", "accounts", "users", "system"]
     nav = html.split('<nav class="nav" id="nav">')[1].split("</nav>")[0]

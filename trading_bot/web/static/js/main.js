@@ -1511,8 +1511,9 @@
     const PAGES = $$('.page').map(p => p.dataset.page);
     // hash = "pagina" ou "pagina/id-do-card" (subitem do menu: mostra a página e rola até o card, abrindo-o)
     function showPage(hash) {
-        const [raw, target] = String(hash || '').split('/');
+        const [raw, rawTarget] = String(hash || '').split('/');
         const name = PAGES.includes(raw) ? raw : PAGES[0];
+        const target = $$('.nav a[data-target]').some(a => a.dataset.target === rawTarget) ? rawTarget : '';   // link antigo sem tile (#system/eng-card) ativa o tile da página
         $$('.page').forEach(p => { p.hidden = p.dataset.page !== name; });
         $$('a[data-page]').forEach(a => {
             // no menu lateral o item ativo é o que casa página E card (Dashboard só sem card); na tabbar basta a página
