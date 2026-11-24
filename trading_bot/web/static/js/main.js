@@ -1009,7 +1009,7 @@
     // linha da média de cada perna (qtd · P&L) e etiquetas no eixo pra alvo/degrau/stop (cores da régua).
     // Velas via /api/klines (exchange do bot) a cada 5s; as linhas acompanham o snapshot (chartSync em applyLive).
     const chart = $('chart-modal');
-    const EMAS = [5, 10, 20, 50], EMA_COLORS = ['#f6c343', '#f28b3c', '#c86bf2', '#3987e5'];
+    const EMAS = [5, 10, 20, 50], EMA_COLORS = ['#f6c343', '#f28b3c', '#c86bf2'];   // EMA 50 usa --accent
     let cg = null;   // { sym, api, candles, vol, emas: [series], lines: [priceLine], timer }
     const ema = (closes, n) => { const k = 2 / (n + 1); let v = null; return closes.map(c => (v = v === null ? c : c * k + v * (1 - k))); };
     // Um gráfico (modal 1m e aba Mercado usam o mesmo): velas + volume + EMAs; `scale` guarda os níveis das pernas
@@ -1029,7 +1029,7 @@
                 return { ...r, priceRange: { minValue: Math.min(r.priceRange.minValue, ...g.scale), maxValue: Math.max(r.priceRange.maxValue, ...g.scale) } }; } });
         g.vol = api.addHistogramSeries({ priceFormat: { type: 'volume' }, priceScaleId: 'vol', lastValueVisible: false, priceLineVisible: false });
         api.priceScale('vol').applyOptions({ scaleMargins: { top: 0.82, bottom: 0 }, visible: false });
-        g.emas = EMAS.map((n, i) => api.addLineSeries({ color: EMA_COLORS[i], lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false }));
+        g.emas = EMAS.map((n, i) => api.addLineSeries({ color: EMA_COLORS[i] || cssv('--accent'), lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false }));
         return g;
     }
     // casas do eixo de preço pelo nível de preço (ADA 5, BNB 2, BTC 1) — como o fmt.price
@@ -1038,7 +1038,7 @@
         const last = candles.length ? candles[candles.length - 1].c : 1, dec = priceDecimals(last);
         g.candles.applyOptions({ priceFormat: { type: 'price', precision: dec, minMove: 10 ** -dec } });
         g.candles.setData(candles.map(k => ({ time: k.t, open: k.o, high: k.h, low: k.l, close: k.c })));
-        g.vol.setData(candles.map(k => ({ time: k.t, value: k.v, color: k.c >= k.o ? 'rgba(47,181,90,.45)' : 'rgba(224,82,79,.45)' })));
+        g.vol.setData(candles.map(k => ({ time: k.t, value: k.v, color: hexa(k.c >= k.o ? cssv('--good') : cssv('--bad'), .45) })));
         const closes = candles.map(k => k.c);
         g.emas.forEach((s, i) => s.setData(ema(closes, EMAS[i]).map((v, j) => ({ time: candles[j].t, value: v })).slice(EMAS[i])));
         g.loaded = true;
@@ -1512,7 +1512,7 @@
     // Tema: grava em localStorage (o <head> aplica antes do primeiro paint). Os gráficos leem as cores ao nascer: destrói e redesenha.
     const THEME_KEY = 'tradingbot-theme';
     $('theme-toggle').addEventListener('click', () => {
-        const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+        const next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
         document.documentElement.dataset.theme = next;
         try { localStorage.setItem(THEME_KEY, next); } catch (e) { /* storage bloqueado */ }
         Object.values(charts).forEach(c => c.destroy()); Object.keys(charts).forEach(k => { delete charts[k]; });

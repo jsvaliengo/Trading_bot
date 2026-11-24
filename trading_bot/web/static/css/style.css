@@ -1,7 +1,9 @@
-/* Dashboard — pele do AdityveCRM (tokens de app/globals.css do CRM): fundo #eef0f4 com cards brancos
-   flutuando, azul #2a44c9 da marca, raio 18/22px, sombra em vez de borda, Plus Jakarta Sans + JetBrains Mono
-   (auto-hospedadas em static/fonts, licença OFL ao lado). Claro é o padrão; o escuro (botão do topo) usa o
-   bloco .dark do CRM (neutros do shadcn).
+/* Dashboard — paleta 60/30/10 sobre a pele do AdityveCRM (raio 18/22px, sombra em vez de borda, Plus Jakarta Sans +
+   JetBrains Mono auto-hospedadas em static/fonts, licença OFL ao lado).
+   60% Ébano Fosco (#1f1c19 → #2b2824 → #36322d: fundo, cards, superfícies), 30% Estuque Claro (#ddd3c7: texto, bordas,
+   tags), 10% Violeta Neon (#6f3cff exato nos preenchimentos: botões, pills, barras, gradiente, séries; --accent-text #a78bff
+   onde o violeta é texto/ícone/borda fina sobre Ébano, 5,4:1 AA; no claro é o próprio #6f3cff).
+   Escuro é o padrão; o claro (botão do topo) inverte: Estuque de fundo, Ébano no texto, Violeta de acento.
    Tokens lidos pelo main.js: --accent --good --bad --warn --text-dim --text-muted
    --border --border-strong --bg-elevated --bg-card --grid (não renomear). */
 
@@ -10,38 +12,38 @@
 @font-face { font-family:'Space Grotesk'; src:url('../fonts/SpaceGrotesk-Variable.woff2') format('woff2'); font-weight:300 700; font-display:swap; }
 
 :root {
-    color-scheme: light;
+    color-scheme: dark;
     --font-sans:'Plus Jakarta Sans',system-ui,sans-serif;
     --font-mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
     --font-display:'Space Grotesk',var(--font-sans);
-    --bg-app:#eef0f4; --bg-card:#ffffff; --bg-elevated:#f1f3f7;
-    --border:#edeff4; --border-strong:#e6e9f0; --grid:#edeff4;
-    --text:#141625; --text-dim:#6b7180; --text-muted:#9aa0ae;
-    --accent:#2a44c9; --accent-dark:#2136a3; --accent-soft:rgba(42,68,201,.10);
-    --good:#16a34a; --good-soft:rgba(22,163,74,.12);
-    --warn:#d97706; --warn-soft:rgba(247,148,29,.14);
-    --bad:#ee3124; --bad-soft:rgba(238,49,36,.10);
-    --focus:#2a44c9;
-    --glass:var(--bg-card); --glass-border:var(--border);
-    --shadow-card:0 22px 46px -34px rgba(20,22,37,.5);
-    --shadow-nav:0 14px 34px -26px rgba(20,22,37,.4);
-    --shadow-brand:0 12px 24px -12px rgba(42,68,201,.7);
-    --brand-gradient:linear-gradient(150deg,#2a44c9,#5d77e6);
-    --radius-card:18px; --radius-panel:22px;
-}
-:root[data-theme="dark"] {
-    color-scheme: dark;
-    --bg-app:#0a0a0a; --bg-card:#171717; --bg-elevated:#262626;
-    --border:rgba(255,255,255,.10); --border-strong:rgba(255,255,255,.15); --grid:rgba(255,255,255,.07);
-    --text:#fafafa; --text-dim:#a1a1a1; --text-muted:#737373;
-    --accent:#5d77e6; --accent-dark:#2a44c9; --accent-soft:rgba(93,119,230,.18);
+    --bg-app:#1f1c19; --bg-card:#2b2824; --bg-elevated:#36322d;
+    --border:rgba(221,211,199,.10); --border-strong:rgba(221,211,199,.18); --grid:rgba(221,211,199,.08);
+    --text:#ddd3c7; --text-dim:#b3a99a; --text-muted:#8c8375;
+    --accent:#6f3cff; --accent-dark:#5a2de6; --accent-soft:rgba(111,60,255,.20); --accent-text:#a78bff;
     --good:#22c55e; --good-soft:rgba(34,197,94,.16);
     --warn:#fbbf24; --warn-soft:rgba(251,191,36,.16);
     --bad:#ff6467; --bad-soft:rgba(255,100,103,.18);
-    --focus:#a1a1a1;
+    --focus:#a78bff;
+    --glass:var(--bg-card); --glass-border:var(--border);
     --shadow-card:0 22px 46px -34px rgba(0,0,0,.9);
     --shadow-nav:0 14px 34px -26px rgba(0,0,0,.8);
-    --shadow-brand:0 12px 24px -12px rgba(93,119,230,.6);
+    --shadow-brand:0 12px 24px -12px rgba(111,60,255,.7);
+    --brand-gradient:linear-gradient(150deg,#6f3cff,#9d7bff);
+    --radius-card:18px; --radius-panel:22px;
+}
+:root[data-theme="light"] {
+    color-scheme: light;
+    --bg-app:#ddd3c7; --bg-card:#efe9df; --bg-elevated:#e4dcce;
+    --border:rgba(43,40,36,.10); --border-strong:rgba(43,40,36,.18); --grid:rgba(43,40,36,.08);
+    --text:#2b2824; --text-dim:#5a544c; --text-muted:#807868;
+    --accent:#6f3cff; --accent-dark:#5a2de6; --accent-soft:rgba(111,60,255,.12); --accent-text:#6f3cff;
+    --good:#16a34a; --good-soft:rgba(22,163,74,.12);
+    --warn:#d97706; --warn-soft:rgba(247,148,29,.14);
+    --bad:#ee3124; --bad-soft:rgba(238,49,36,.10);
+    --focus:#6f3cff;
+    --shadow-card:0 22px 46px -34px rgba(43,40,36,.5);
+    --shadow-nav:0 14px 34px -26px rgba(43,40,36,.4);
+    --shadow-brand:0 12px 24px -12px rgba(111,60,255,.6);
 }
 
 * { box-sizing:border-box; margin:0; padding:0; }
@@ -165,7 +167,7 @@ details.card > :not(summary):first-of-type { margin-top:10px; }
 /* Pernas ativas: ações em pílulas (Pausar / Retomar / Fechar tudo) e uma linha-cartão por perna. */
 .pills { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:6px; }
 .pills .btn { border-radius:999px; padding:8px 16px; background:var(--bg-card); border-color:var(--border-strong); white-space:nowrap; }
-.pills .btn:hover:not(:disabled) { background:var(--accent-soft); border-color:var(--accent); }
+.pills .btn:hover:not(:disabled) { background:var(--accent-soft); border-color:var(--accent-text); }
 .pills .btn-danger:hover:not(:disabled) { background:var(--bad-soft); }
 
 /* Status: a linha que responde "está vivo? onde estou?" */
@@ -311,8 +313,8 @@ details.card > :not(summary):first-of-type { margin-top:10px; }
 .cal i.future { opacity:.35; }
 
 /* Modal */
-.modal { position:fixed; inset:0; background:rgba(0,0,0,.10); backdrop-filter:blur(4px); -webkit-backdrop-filter:blur(4px); display:flex; align-items:center; justify-content:center; z-index:100; padding:16px; }
-:root[data-theme="dark"] .modal { background:rgba(0,0,0,.5); }
+.modal { position:fixed; inset:0; background:rgba(0,0,0,.5); backdrop-filter:blur(4px); -webkit-backdrop-filter:blur(4px); display:flex; align-items:center; justify-content:center; z-index:100; padding:16px; }
+:root[data-theme="light"] .modal { background:rgba(0,0,0,.10); }
 .modal-card { background:var(--bg-card); border:0; border-radius:var(--radius-panel); padding:20px; width:min(440px,100%); box-shadow:0 0 0 1px color-mix(in srgb, var(--text) 10%, transparent), 0 24px 60px -12px rgba(15,18,40,.35); }
 .modal-card h3 { font-size:16px; font-weight:600; margin-bottom:8px; }
 .modal-card p { color:var(--text-dim); margin-bottom:16px; }
@@ -322,7 +324,7 @@ details.card > :not(summary):first-of-type { margin-top:10px; }
 .chart-head h3 { margin:0; } .chart-head .btn { margin-left:auto; }
 #chart-box { width:100%; height:min(520px,70vh); border-radius:12px; background:var(--bg-card); overflow:hidden; }
 .sym-btn { all:unset; cursor:pointer; text-decoration:underline dotted; text-underline-offset:3px; }
-.sym-btn:hover, .sym-btn:focus-visible { color:var(--accent); }
+.sym-btn:hover, .sym-btn:focus-visible { color:var(--accent-text); }
 
 /* Responsivo */
 @media (max-width: 1180px) { .status { grid-template-columns:repeat(4, minmax(0,1fr)); } }
@@ -392,7 +394,7 @@ details.card > :not(summary):first-of-type { margin-top:10px; }
 .pnl-cal .day.neg { background:var(--bad-soft); } .pnl-cal .day.neg b { color:var(--bad); }
 .pnl-cal .day.zero b { color:var(--text-muted); }
 .pnl-cal .day.off { background:transparent; border:1px dashed var(--border); }
-.pnl-cal .day.today { box-shadow:0 0 0 1px var(--accent) inset; } .pnl-cal .day.today small { color:var(--accent); font-weight:600; }
+.pnl-cal .day.today { box-shadow:0 0 0 1px var(--accent) inset; } .pnl-cal .day.today small { color:var(--accent-text); font-weight:600; }
 .pnl-two { grid-template-columns:repeat(2, minmax(0,1fr)); }
 .pnl-stats { margin:4px 0 6px; } .pnl-stats dd small { font-size:11px; }
 @media (max-width: 760px) {

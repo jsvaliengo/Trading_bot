@@ -1,7 +1,7 @@
-/* Tela de login: a auth do CRM é escura (app/(auth)/layout.tsx força .dark) com auroras ao fundo e título em
-   Space Grotesk. Mobile-first (375–440px); as cores vêm das variáveis de style.css (data-theme=dark no html). */
+/* Tela de login: sempre no tema escuro padrão (Ébano) com auroras violeta/estuque ao fundo e título em
+   Space Grotesk. Mobile-first (375–440px); as cores vêm das variáveis de style.css. */
 .login-body { display:flex; align-items:center; justify-content:center; padding:16px; position:relative; overflow:hidden;
-    background-image:radial-gradient(circle at -5% -10%, rgba(99,70,230,.45), transparent 42%), radial-gradient(circle at 105% 110%, rgba(45,190,200,.30), transparent 40%); }
+    background-image:radial-gradient(circle at -5% -10%, rgba(111,60,255,.45), transparent 42%), radial-gradient(circle at 105% 110%, rgba(221,211,199,.14), transparent 40%); }
 .login-card {
     width:100%; max-width:420px; background:var(--bg-card); border:1px solid var(--border);
     border-radius:var(--radius-panel); padding:28px 24px; box-shadow:var(--shadow-card);
@@ -22,7 +22,7 @@
     font:inherit; font-size:16px; font-weight:400; color:var(--text); background:var(--bg-elevated);
     border:1px solid var(--border-strong); border-radius:13px; padding:10px 14px; width:100%; min-height:50px;
 }
-.login-field input:focus { outline:none; border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft); }
+.login-field input:focus { outline:none; border-color:var(--accent-text); box-shadow:0 0 0 3px var(--accent-soft); }
 .login-remember { display:flex; align-items:center; gap:8px; font-size:12.5px; color:var(--text-dim); cursor:pointer; }
 .login-remember input { accent-color:var(--accent); width:16px; height:16px; }
 .login-submit { min-height:50px;
