@@ -1,31 +1,33 @@
-/* Tela de login. Mobile-first (375–440px); as cores vêm das variáveis de style.css. */
-.login-body { display:flex; align-items:center; justify-content:center; padding:16px; }
+/* Tela de login: a auth do CRM é escura (app/(auth)/layout.tsx força .dark) com auroras ao fundo e título em
+   Space Grotesk. Mobile-first (375–440px); as cores vêm das variáveis de style.css (data-theme=dark no html). */
+.login-body { display:flex; align-items:center; justify-content:center; padding:16px; position:relative; overflow:hidden;
+    background-image:radial-gradient(circle at -5% -10%, rgba(99,70,230,.45), transparent 42%), radial-gradient(circle at 105% 110%, rgba(45,190,200,.30), transparent 40%); }
 .login-card {
-    width:100%; max-width:400px; background:var(--bg-card); border:1px solid var(--border);
-    border-radius:10px; padding:24px 20px;
+    width:100%; max-width:420px; background:var(--bg-card); border:1px solid var(--border);
+    border-radius:var(--radius-panel); padding:28px 24px; box-shadow:var(--shadow-card);
 }
 .login-brand { display:flex; align-items:center; gap:12px; margin-bottom:20px; }
 .login-logo {
-    width:40px; height:40px; border-radius:9px; display:grid; place-items:center; flex:none;
-    background:var(--accent-soft); color:var(--accent); font-weight:600; font-size:14px; letter-spacing:.02em;
+    width:42px; height:42px; border-radius:12px; display:grid; place-items:center; flex:none;
+    background:var(--brand-gradient); color:#fff; font-weight:800; font-size:14px; letter-spacing:.02em; box-shadow:var(--shadow-brand);
 }
-.login-title { font-size:17px; font-weight:600; letter-spacing:-.01em; margin-bottom:4px; }
+.login-title { font-family:var(--font-display); font-size:28px; font-weight:700; letter-spacing:-.02em; margin-bottom:4px; line-height:1.1; }
 .login-error {
-    background:var(--bad-soft); color:var(--bad); border:1px solid var(--bad); border-radius:6px;
+    background:var(--bad-soft); color:var(--bad); border:1px solid color-mix(in srgb, var(--bad) 40%, transparent); border-radius:13px;
     padding:8px 10px; font-size:12.5px; margin-bottom:14px;
 }
-.login-form { display:flex; flex-direction:column; gap:12px; }
-.login-field { display:flex; flex-direction:column; gap:5px; font-size:12px; color:var(--text-dim); }
+.login-form { display:flex; flex-direction:column; gap:14px; }
+.login-field { display:flex; flex-direction:column; gap:6px; font-size:13px; font-weight:600; color:var(--text); }
 .login-field input {
-    font:inherit; font-size:16px; color:var(--text); background:var(--bg-elevated);
-    border:1px solid var(--border-strong); border-radius:7px; padding:10px 12px; width:100%;
+    font:inherit; font-size:16px; font-weight:400; color:var(--text); background:var(--bg-elevated);
+    border:1px solid var(--border-strong); border-radius:13px; padding:10px 14px; width:100%; min-height:50px;
 }
-.login-field input:focus { outline:none; border-color:var(--accent); box-shadow:0 0 0 2px var(--accent-soft); }
+.login-field input:focus { outline:none; border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft); }
 .login-remember { display:flex; align-items:center; gap:8px; font-size:12.5px; color:var(--text-dim); cursor:pointer; }
 .login-remember input { accent-color:var(--accent); width:16px; height:16px; }
-.login-submit { min-height:48px;
-    margin-top:4px; width:100%; padding:11px; font-size:14px; font-weight:600; cursor:pointer;
-    background:var(--accent); border:1px solid var(--accent); color:#fff; border-radius:7px;
+.login-submit { min-height:50px;
+    margin-top:4px; width:100%; padding:11px; font-size:15px; font-weight:700; cursor:pointer;
+    background:var(--accent); border:1px solid transparent; color:#fff; border-radius:13px; box-shadow:var(--shadow-brand);
 }
-.login-submit:hover { filter:brightness(1.08); }
-@media (min-width: 600px) { .login-card { padding:30px 28px; } }
+.login-submit:hover { background:var(--accent-dark); }
+@media (min-width: 600px) { .login-card { padding:34px 32px; } }

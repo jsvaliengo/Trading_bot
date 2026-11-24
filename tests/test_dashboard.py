@@ -737,20 +737,21 @@ def test_mobile_first_pwa_metas_hero_and_tabbar():
 
 
 def test_theme_toggle_applies_before_first_paint_and_never_follows_os():
-    """Tema claro/escuro só pelo botão (tradingbot-theme no localStorage, aplicado no <head> antes do
-    primeiro paint); nunca pelo prefers-color-scheme do sistema. O login continua só escuro."""
+    """Tema claro (padrão, como no CRM) ou escuro só pelo botão (tradingbot-theme no localStorage, aplicado no
+    <head> antes do primeiro paint); nunca pelo prefers-color-scheme do sistema. O login continua só escuro."""
     from trading_bot.web.app import create_app
     app, _ = create_app(_make_bot())
     client = app.test_client()
     login_page = client.get("/login").data
     _login(client)
     html = client.get("/").data
-    assert b'<meta name="color-scheme" content="dark light">' in html
+    assert b'<meta name="color-scheme" content="light dark">' in html
     assert html.index(b"tradingbot-theme") < html.index(b"</head>") and b'id="theme-toggle"' in html
     assert b"prefers-color-scheme" not in html and b"prefers-color-scheme" not in login_page
     assert b"tradingbot-theme" not in login_page
     css = open("trading_bot/web/static/css/style.css", encoding="utf-8").read()
-    assert "prefers-color-scheme" not in css and 'color-scheme: dark' in css.split("[data-theme=")[0]
+    assert "prefers-color-scheme" not in css and 'color-scheme: light' in css.split("[data-theme=")[0]
+    assert 'color-scheme: dark' in css.split('[data-theme="dark"]')[1].split("}")[0]
 
 
 def test_shell_sidebar_kpis_and_pages():

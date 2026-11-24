@@ -3,7 +3,7 @@
   "short_name": "Trader",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#0f1318",
-  "theme_color": "#0f1318",
+  "background_color": "#eef0f4",
+  "theme_color": "#eef0f4",
   "icons": [{ "src": "/static/icon-180.png", "sizes": "180x180", "type": "image/png" }]
 }
