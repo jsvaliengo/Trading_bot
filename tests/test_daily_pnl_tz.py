@@ -64,8 +64,10 @@ def test_brt_and_utc_windows_differ_by_three_hours(monkeypatch):
 def test_pnl_since_floor_ignores_income_before_reset(monkeypatch):
     # Reset de banca no meio do dia: income anterior ao piso não entra no "P&L de hoje".
     conn, captured = _conn(monkeypatch, 0.0)
-    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
-    since_ms = now_ms - 3_600_000
+    # Piso 30 min depois do início do dia UTC: `now - 1h` caía no dia anterior
+    # entre 00:00 e 01:00 UTC e o income era filtrado pelo início do dia (CI vermelho).
+    from trading_bot.core.trade_store import trading_day_start
+    since_ms = int(trading_day_start().timestamp() * 1000) + 1_800_000
     records = [
         {"incomeType": "REALIZED_PNL", "income": "36.0", "time": since_ms - 60_000},
         {"incomeType": "REALIZED_PNL", "income": "1.5", "time": since_ms + 60_000},
