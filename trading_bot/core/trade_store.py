@@ -874,6 +874,16 @@ class TradeStore:
             logger.exception("🗃️ Falha ao ler trades fechados")
             return []
 
+    def open_trades(self) -> List[Dict[str, Any]]:
+        """Trades ainda ABERTOS (status='open'), todas as colunas, em ordem de abertura."""
+        try:
+            with self._lock:
+                rows = self._conn.execute("SELECT * FROM trades WHERE status='open' ORDER BY opened_at ASC, id ASC").fetchall()
+            return [dict(r) for r in rows]
+        except Exception:
+            logger.exception("🗃️ Falha ao ler trades abertos")
+            return []
+
     def count_closed_since(self, start: Any) -> int:
         """Fechados com exit_at >= start (datetime ou ISO; normalizado p/ UTC)."""
         try:

@@ -391,6 +391,30 @@ def test_fills_route_matches_bot_trades_filters_and_paginates(tmp_path):
     assert len(calls) == n
 
 
+def test_match_bot_trades_covers_leg_lifetime_partial_closes_and_open_leg():
+    from trading_bot.web.fills import match_bot_trades
+    h = 3600_000
+    # trade #7: perna XRP SHORT de 10:00 a 12:00 (exit gravado 40 s depois do último fill); trade #9: perna ainda aberta desde 13:00
+    trades = [{"id": 7, "symbol": "XRPUSDT", "side": "SHORT", "opened_at": "2026-11-25T10:00:00+00:00", "exit_at": "2026-11-25T12:00:40+00:00", "qty": 1207.0},
+              {"id": 9, "symbol": "XRPUSDT", "side": "SHORT", "opened_at": "2026-11-25T13:00:00+00:00", "exit_at": None, "qty": 11.0}]
+    t0 = 1795600800000   # 2026-11-25T10:00:00Z
+    def mk(ms, action, qty, side="SHORT", sym="XRPUSDT"):
+        return {"time": ms, "symbol": sym, "position_side": side, "action": action, "qty": qty}
+    fills = [mk(t0 + 5000, "open", 11.0),                  # abre a base
+             mk(t0 + h, "open", 22.0),                     # adiciona nível 1 no meio da perna
+             mk(t0 + 2 * h, "close", 816.0),               # fechamento em 2 fills parciais da mesma ordem
+             mk(t0 + 2 * h + 1000, "close", 391.0),
+             mk(t0 + 2 * h + 1000, "close", 392.0, side="LONG"),   # outro lado: nada do bot
+             mk(t0 + 3 * h + 2000, "open", 11.0),          # perna #9 ainda aberta
+             mk(t0 + 2 * h + 30 * 60_000, "open", 11.0)]   # entre as pernas: manual / fora do bot
+    match_bot_trades(fills, trades)
+    assert [f["bot_trade_id"] for f in fills] == [7, 7, 7, 7, None, 9, None]
+    # qty com 1 unidade de diferença em relação ao trade gravado também bate (a regra é a vida da perna, não a qty)
+    one_off = [mk(t0 + 2 * h, "close", 70.0, sym="ADAUSDT")]
+    match_bot_trades(one_off, [{"id": 3, "symbol": "ADAUSDT", "side": "SHORT", "opened_at": "2026-11-25T11:00:00+00:00", "exit_at": "2026-11-25T12:00:10+00:00", "qty": 69.0}])
+    assert one_off[0]["bot_trade_id"] == 3
+
+
 def test_fills_csv_and_exchange_without_fills(tmp_path):
     from trading_bot.web.app import create_app
     bot, _ = _bot_with_fills(tmp_path)
