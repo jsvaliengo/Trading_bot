@@ -1193,8 +1193,8 @@
     $$('#mk-tf .chip').forEach(b => b.addEventListener('click', () => { mk.tf = b.dataset.tf; fetchMarket(); }));
 
     // ───────── Relatórios › Histórico de fills (/api/fills: execuções da conta na exchange) ─────────
-    const fl = { page: 1, symbol: '', side: '', from: '', to: '', loaded: false };
-    const flQuery = (extra) => { const q = new URLSearchParams(); if (fl.symbol) q.set('symbol', fl.symbol); if (fl.side) q.set('side', fl.side); if (fl.from) q.set('from', fl.from); if (fl.to) q.set('to', fl.to); Object.entries(extra || {}).forEach(([k, v]) => q.set(k, v)); return q.toString(); };
+    const fl = { page: 1, symbol: '', side: '', from: '', to: '', sort: 'time', dir: 'desc', loaded: false };
+    const flQuery = (extra) => { const q = new URLSearchParams(); q.set('sort', fl.sort); q.set('dir', fl.dir); if (fl.symbol) q.set('symbol', fl.symbol); if (fl.side) q.set('side', fl.side); if (fl.from) q.set('from', fl.from); if (fl.to) q.set('to', fl.to); Object.entries(extra || {}).forEach(([k, v]) => q.set(k, v)); return q.toString(); };
     async function fetchFills() {
         const tb = $('fills-table').querySelector('tbody'), err = $('fills-error');
         try {
@@ -1221,6 +1221,13 @@
         } catch (e) { err.textContent = 'Fills indisponíveis: ' + e.message; err.hidden = false; tb.innerHTML = '<tr><td colspan="11" class="empty sans">—</td></tr>'; }
     }
     $('fills-filters').addEventListener('submit', (e) => { e.preventDefault(); fl.symbol = $('fl-symbol').value; fl.side = $('fl-side').value; fl.from = $('fl-from').value; fl.to = $('fl-to').value; fl.page = 1; fetchFills(); });
+    $$('#fills-table th[data-sort]').forEach(th => th.querySelector('button').addEventListener('click', () => {
+        const k = th.dataset.sort;
+        if (fl.sort === k) fl.dir = fl.dir === 'asc' ? 'desc' : 'asc'; else { fl.sort = k; fl.dir = ['symbol', 'position_side', 'action', 'role'].includes(k) ? 'asc' : 'desc'; }
+        $$('#fills-table th[data-sort]').forEach(x => x.removeAttribute('aria-sort'));
+        th.setAttribute('aria-sort', fl.dir === 'asc' ? 'ascending' : 'descending');
+        fl.page = 1; fetchFills();
+    }));
     $('fills-prev').addEventListener('click', () => { fl.page -= 1; fetchFills(); });
     $('fills-next').addEventListener('click', () => { fl.page += 1; fetchFills(); });
     function fillsVisible(on) { if (on && !fl.loaded) fetchFills(); }

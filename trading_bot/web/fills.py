@@ -4,7 +4,7 @@ separadas dos trades do bot (TradeStore). Cada fill ganha `bot_trade_id` quando 
 vida de um trade do bot do mesmo par e lado da posição (opened_at−MATCH_WINDOW_S ≤ fill ≤
 exit_at+MATCH_WINDOW_S; perna ainda aberta não tem fim) — cobre adições de nível do martingale,
 fechamentos parciais e TP detectado com atraso. Filtros por par/lado/período, paginação
-e CSV. Cache de FILLS_TTL_S por (conta, par, período) pra não martelar a API privada.
+ordenação por coluna (antes de paginar; o CSV segue a mesma ordem) e CSV. Cache de FILLS_TTL_S por (conta, par, período) pra não martelar a API privada.
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ DEFAULT_DAYS = 7
 MAX_DAYS = 90
 MAX_FILLS = 1000
 PER_PAGE_MAX = 200
+SORT_KEYS = ("time", "symbol", "position_side", "action", "price", "qty", "notional", "fee", "profit", "role", "bot_trade_id")
 CSV_COLUMNS = ("time", "symbol", "position_side", "action", "side", "price", "qty", "notional", "fee", "fee_coin",
                "profit", "role", "order_id", "trade_id", "bot_trade_id")
 
@@ -85,7 +86,7 @@ def match_bot_trades(fills: List[Dict[str, Any]], trades: List[Dict[str, Any]]) 
 
 def collect_fills(bot, account_id: int, args: Dict[str, Any]) -> tuple:
     """(payload de /api/fills, lista completa filtrada): fills paginados (mais recente primeiro) + totais;
-    a lista completa alimenta o CSV. args: symbol, side (LONG/SHORT), from/to (YYYY-MM-DD, dia UTC), page, per_page."""
+    a lista completa alimenta o CSV. args: symbol, side (LONG/SHORT), from/to (YYYY-MM-DD, dia UTC), sort (SORT_KEYS), dir (asc/desc), page, per_page."""
     exchange = getattr(bot, "exchange", None)
     if exchange is None or not hasattr(exchange, "get_fills"):
         raise LookupError("a exchange desta conta não expõe fills")
@@ -100,6 +101,12 @@ def collect_fills(bot, account_id: int, args: Dict[str, Any]) -> tuple:
     side = str(args.get("side") or "").upper() or None
     if side not in (None, "LONG", "SHORT"):
         raise ValueError("side precisa ser LONG ou SHORT")
+    sort = str(args.get("sort") or "time")
+    if sort not in SORT_KEYS:
+        raise ValueError("sort precisa ser uma das colunas: " + ", ".join(SORT_KEYS))
+    direction = str(args.get("dir") or "desc").lower()
+    if direction not in ("asc", "desc"):
+        raise ValueError("dir precisa ser asc ou desc")
 
     fills = [dict(f) for f in _raw_fills(exchange, account_id, symbol, start_ms, end_ms)]
     store = getattr(bot, "trade_store", None)
@@ -109,7 +116,10 @@ def collect_fills(bot, account_id: int, args: Dict[str, Any]) -> tuple:
     symbols = sorted({f["symbol"] for f in fills})
     if side:
         fills = [f for f in fills if f["position_side"] == side]
-    fills.sort(key=lambda f: f["time"], reverse=True)
+    fills.sort(key=lambda f: f["time"], reverse=True)   # empate na coluna escolhida → mais recente primeiro
+    # None (ex.: fill sem trade do bot) vai por último nas duas direções
+    fills = sorted((f for f in fills if f.get(sort) is not None), key=lambda f: f[sort], reverse=direction == "desc") \
+        + [f for f in fills if f.get(sort) is None]
 
     try:
         per_page = max(1, min(int(args.get("per_page") or 50), PER_PAGE_MAX))
