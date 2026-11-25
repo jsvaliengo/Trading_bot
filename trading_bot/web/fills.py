@@ -1,8 +1,9 @@
 """
 Relatórios › Histórico de fills: execuções da CONTA na exchange (endpoint privado de fills),
-separadas dos trades do bot (TradeStore). Cada fill ganha `bot_trade_id` quando bate com um
-trade do bot (mesmo par, mesmo lado da posição, horário a até MATCH_WINDOW_S da abertura — fill
-de abertura — ou do fechamento — fill de fechamento). Filtros por par/lado/período, paginação
+separadas dos trades do bot (TradeStore). Cada fill ganha `bot_trade_id` quando cai dentro da
+vida de um trade do bot do mesmo par e lado da posição (opened_at−MATCH_WINDOW_S ≤ fill ≤
+exit_at+MATCH_WINDOW_S; perna ainda aberta não tem fim) — cobre adições de nível do martingale,
+fechamentos parciais e TP detectado com atraso. Filtros por par/lado/período, paginação
 e CSV. Cache de FILLS_TTL_S por (conta, par, período) pra não martelar a API privada.
 """
 
@@ -60,21 +61,22 @@ def _raw_fills(exchange, account_id: int, symbol: Optional[str], start_ms: int, 
 
 
 def match_bot_trades(fills: List[Dict[str, Any]], trades: List[Dict[str, Any]]) -> None:
-    """Preenche `bot_trade_id` in place: fill de abertura casa com opened_at, de fechamento com
-    exit_at, do trade de mesmo par e lado da posição dentro de MATCH_WINDOW_S."""
+    """Preenche `bot_trade_id` in place: o fill casa com o trade de mesmo par e lado da posição cuja
+    vida [opened_at, exit_at] o contém (folga MATCH_WINDOW_S nas pontas; exit_at None = perna aberta).
+    Entre vários candidatos vence o de menor distância até a janela (0 = dentro)."""
     index: Dict[tuple, List[tuple]] = {}
     for t in trades:
-        sym, side = str(t.get("symbol") or ""), str(t.get("side") or "").upper()
-        for action, field in (("open", "opened_at"), ("close", "exit_at")):
-            ts = _parse_iso(t.get(field))
-            if ts is not None:
-                index.setdefault((sym, side, action), []).append((ts, t.get("id")))
+        start = _parse_iso(t.get("opened_at"))
+        if start is None:
+            continue
+        key = (str(t.get("symbol") or ""), str(t.get("side") or "").upper())
+        index.setdefault(key, []).append((start, _parse_iso(t.get("exit_at")), t.get("id")))
     for f in fills:
         f["bot_trade_id"] = None
         ts = f["time"] / 1000.0
         best = None
-        for cand_ts, tid in index.get((f["symbol"], f["position_side"], f["action"]), []):
-            gap = abs(cand_ts - ts)
+        for start, end, tid in index.get((f["symbol"], f["position_side"]), []):
+            gap = max(start - ts, 0.0, (ts - end) if end is not None else 0.0)
             if gap <= MATCH_WINDOW_S and (best is None or gap < best[0]):
                 best = (gap, tid)
         if best:
@@ -101,8 +103,8 @@ def collect_fills(bot, account_id: int, args: Dict[str, Any]) -> tuple:
 
     fills = [dict(f) for f in _raw_fills(exchange, account_id, symbol, start_ms, end_ms)]
     store = getattr(bot, "trade_store", None)
-    # closed_trades traz id/opened_at/exit_at (recent_trades devolve o formato in-memory, sem id): só trades já fechados batem
-    trades = store.closed_trades(None, limit=5000) if store is not None and hasattr(store, "closed_trades") else []
+    # closed_trades/open_trades trazem id/opened_at/exit_at (recent_trades devolve o formato in-memory, sem id)
+    trades = store.closed_trades(None, limit=5000) + store.open_trades() if store is not None and hasattr(store, "closed_trades") else []
     match_bot_trades(fills, trades)
     symbols = sorted({f["symbol"] for f in fills})
     if side:
