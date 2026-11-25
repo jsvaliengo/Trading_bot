@@ -523,24 +523,26 @@
     <!-- Trading › Simulações: meta mensal em R$ → alvo diário em US$; projeções (p25/média/p75) da amostra do martingale (/api/simulation) -->
     <div class="page" data-page="sim" hidden>
         <section class="card" id="sim-card" aria-labelledby="sim-h">
-            <header class="ch"><div><h2 id="sim-h">Simulações de renda</h2><p class="cs" id="sim-sub">o que a amostra do martingale rende por dia e por mês, quanto capital o alvo exige e em quantos dias se chega lá reinvestindo · líquido de fees da corretora; impostos não incluídos · simulação, não recomendação</p></div></header>
+            <header class="ch"><div><h2 id="sim-h">Simulações de renda</h2><p class="cs" id="sim-sub">responde em passos: quanto precisa ganhar por dia para sacar a meta, quanto o bot ganha hoje, quanto capital falta e em quantos dias se chega lá reinvestindo (sem depositar) · líquido de fees da corretora; impostos não incluídos · simulação, não recomendação</p></div></header>
             <form class="filters sim-form" id="sim-form">
                 <label>Meta mensal (R$) <input type="number" id="sim-brl" value="6000" min="0" step="100" inputmode="decimal"></label>
                 <label>Câmbio USD/BRL <input type="number" id="sim-fx" min="0.01" step="0.01" inputmode="decimal" placeholder="—"></label>
                 <label>Dias/mês <select id="sim-days"><option value="30">30 corridos</option><option value="22">22 úteis</option></select></label>
                 <label>Capital (US$) <input type="number" id="sim-capital" min="0" step="1" inputmode="decimal" placeholder="equity atual"></label>
-                <span class="sim-derived">Alvo diário <b id="sim-target">—</b></span>
+                <span class="sim-derived">Precisa ganhar por dia <b id="sim-target">—</b></span>
                 <button class="btn btn-quiet btn-xs" type="submit">Simular</button>
             </form>
             <div class="sim-kpis" id="sim-kpis"></div>
-            <div class="ch"><h3>Equity projetada reinvestindo</h3><span class="cs" id="sim-chart-sub">—</span></div>
+            <div class="ch"><h3>Equity projetada reinvestindo tudo</h3><span class="cs" id="sim-chart-sub">—</span></div>
             <div class="cv cv-pnl"><canvas id="sim-chart" role="img" aria-label="Curva de equity projetada por cenário com a linha do capital necessário"></canvas></div>
+            <details class="sim-assump sim-table-wrap"><summary>Cenários em detalhe — conservador (pior quartil dos dias), observado (média), otimista (melhor quartil)</summary>
             <div class="table-scroll">
                 <table class="table" id="sim-table">
-                    <thead><tr><th scope="col">Cenário</th><th scope="col" class="r">%/dia</th><th scope="col" class="r">Diário</th><th scope="col" class="r">Mensal</th><th scope="col" class="r">Capital p/ alvo</th><th scope="col" class="r">Dias até lá</th><th scope="col">Faixa da planilha</th></tr></thead>
+                    <thead><tr><th scope="col">Cenário</th><th scope="col" class="r">%/dia</th><th scope="col" class="r">Ganha por dia</th><th scope="col" class="r">Ganha por mês</th><th scope="col" class="r">Capital necessário</th><th scope="col" class="r">Dias reinvestindo</th><th scope="col">Faixa da planilha</th></tr></thead>
                     <tbody><tr><td colspan="7" class="empty">Carregando…</td></tr></tbody>
                 </table>
             </div>
+            </details>
             <div class="ch"><h3>Recomendações</h3><span class="cs" id="sim-fx-sens">—</span></div>
             <ul class="sim-recs" id="sim-recs"></ul>
             <details class="sim-assump"><summary>Premissas</summary><ul id="sim-assumptions"></ul></details>

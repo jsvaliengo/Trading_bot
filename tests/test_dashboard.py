@@ -2294,3 +2294,8 @@ def test_simulation_route_requires_store_and_returns_scenarios(tmp_path, monkeyp
         assert f'id="{i}"' in html, i
     js = open("trading_bot/web/static/js/main.js", encoding="utf-8").read()
     assert "function fetchSim(" in js and "simVisible(name === 'sim')" in js
+    # resposta em passos + bloco de progresso "Rumo ao capital necessário" (estado verde é só JS: capital ≥ necessário)
+    for txt in ("você precisa ganhar", "O bot ganha hoje por dia", "Capital necessário na corretora", "Dias reinvestindo até lá",
+                "Ciclos por dia necessários", 'id="sim-goal"', "Rumo ao capital necessário", "Capital atingido"):
+        assert txt in js, txt
+    assert "Precisa ganhar por dia" in html and "Dias reinvestindo</th>" in html
