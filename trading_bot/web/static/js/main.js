@@ -1228,7 +1228,10 @@
     // ───────── Trading › Simulações (/api/simulation: meta R$ → alvo US$/dia; cenários p25/média/p75 da amostra do martingale) ─────────
     const sm = { loaded: false };
     const simQuery = () => { const q = new URLSearchParams(); if ($('sim-brl').value) q.set('target_brl', $('sim-brl').value); if ($('sim-fx').value) q.set('fx', $('sim-fx').value); q.set('days', $('sim-days').value); if ($('sim-capital').value) q.set('capital', $('sim-capital').value); return q.toString(); };
-    const both = (usd, brl) => `${esc(fmt._usd(usd))}${isNum(brl) ? ` <small>R$ ${esc(fmt.num(brl))}</small>` : ''}`;
+    // US$ e R$ (câmbio da simulação) na ordem do toggle R$/US$ do topo; a meta é digitada em R$, então o passo 1 fica sempre R$ primeiro
+    const pair = (usd, brl, brlFirst = inBrl()) => !isNum(brl) ? [fmt._usd(usd), ''] : brlFirst ? [`R$ ${fmt.num(brl)}`, fmt._usd(usd)] : [fmt._usd(usd), `R$ ${fmt.num(brl)}`];
+    const both = (usd, brl, brlFirst) => { const [a, b] = pair(usd, brl, brlFirst); return esc(a) + (b ? ` <small>${esc(b)}</small>` : ''); };
+    const perDay = (usd, brl, brlFirst) => { const [a, b] = pair(usd, brl, brlFirst); return `${esc(a)} por dia` + (b ? ` <small>(${esc(b)})</small>` : ''); };
     async function fetchSim() {
         const err = $('sim-error');
         try {
@@ -1241,23 +1244,36 @@
         const p = palette(), sc = d.scenarios, obs = sc[1], req = d.required, t = d.target, st = d.stats;
         if (isNum(d.fx) && !$('sim-fx').value) $('sim-fx').value = d.fx.toFixed(2);
         if (!$('sim-capital').value) $('sim-capital').value = Math.round(d.capital);
-        $('sim-target').innerHTML = both(t.daily_usd, t.daily_brl) + `<small> · ${esc(fmt._usd(t.monthly_usd))}/mês</small>`;
+        $('sim-target').innerHTML = both(t.daily_usd, t.daily_brl, true) + `<small> · ${esc(fmt._usd(t.monthly_usd))}/mês</small>`;
         $('sim-sub').textContent = `amostra ${fmt.day(st.from)} → ${fmt.day(st.to)}: ${st.sample_days} dia(s), ${st.cycles} ciclo(s), win ${fmt.pct(st.win_rate, 0, false)}, ${fmt._usd(st.pnl_per_cycle)}/ciclo · líquido de fees da corretora; impostos não incluídos · simulação, não recomendação`;
-        const kpi = (l, v, s, c) => `<article class="kpi"><div class="kpi-h"><b class="kpi-v ${c || ''}">${v}</b><span class="kpi-l">${l}</span><small class="kpi-s">${s}</small></div></article>`;
+        const kpi = (l, v, s, c, extra) => `<article class="kpi ${extra || ''}"><div class="kpi-h"><span class="kpi-l">${l}</span><b class="kpi-v ${c || ''}">${v}</b><small class="kpi-s">${s}</small></div></article>`;
         const dz = (n) => n === 0 ? 'já alcançado' : isNum(n) ? `${n} dias` : 'não alcança';
-        $('sim-kpis').innerHTML = [
-            kpi('Diário no capital atual', both(obs.daily_usd, obs.daily_brl), `${fmt.pct(obs.daily_pct)}/dia · p25 ${fmt._usd(sc[0].daily_usd)} · p75 ${fmt._usd(sc[2].daily_usd)}`, cls(obs.daily_usd)),
-            kpi(`Mensal (${d.days_per_month} dias)`, both(obs.monthly_usd, obs.monthly_brl), `p25 ${fmt._usd(sc[0].monthly_usd)} · p75 ${fmt._usd(sc[2].monthly_usd)}`, cls(obs.monthly_usd)),
-            kpi('Alvo diário', both(t.daily_usd, t.daily_brl), `${fmt._usd(t.monthly_usd)}/mês${isNum(t.monthly_brl) ? ` · R$ ${fmt.num(t.monthly_brl)}` : ''}`),
-            kpi('Capital p/ o alvo', isNum(req.capital) ? fmt._usd(req.capital) : '—', isNum(req.capital) ? `${fmt._usd(req.capital - d.capital, { signed: true })} vs. hoje${req.sheet ? ` · planilha ${esc(req.sheet.label)}` : ''}` : 'retorno observado ≤ 0'),
-            kpi('Dias até lá (reinvestindo)', dz(req.days_to_target), `conservador ${dz(sc[0].days_to_target)} · otimista ${dz(sc[2].days_to_target)}`),
-            kpi('Ciclos/dia p/ o alvo', isNum(req.cycles_needed_per_day) ? fmt.num(req.cycles_needed_per_day, 1) : '—', `observado ${fmt.num(req.cycles_observed_per_day, 1)} a ${fmt._usd(req.pnl_per_cycle)}/ciclo`),
-        ].join('');
+        const meta = isNum(t.monthly_brl) ? `R$ ${fmt.num(t.monthly_brl, 0)}` : fmt._usd(t.monthly_usd), cap = fmt._usd(d.capital);
+        const steps = [
+            kpi(`1. Para sacar ${esc(meta)} por mês, sem tirar o que já tem na corretora, você precisa ganhar`, perDay(t.daily_usd, t.daily_brl, true),
+                `${esc(fmt._usd(t.monthly_usd))}/mês em ${d.days_per_month} dias${isNum(d.fx) ? ` · câmbio R$ ${fmt.num(d.fx)}` : ''}`, '', 'sim-lead'),
+            kpi(`2. O bot ganha hoje por dia, com ${esc(cap)}`, perDay(obs.daily_usd, obs.daily_brl),
+                `${fmt.pct(obs.daily_pct)} ao dia (média de ${st.sample_days} dias) · pior quartil ${fmt._usd(sc[0].daily_usd)} · melhor ${fmt._usd(sc[2].daily_usd)} · ${both(obs.monthly_usd, obs.monthly_brl)}/mês`, cls(obs.daily_usd)),
+            kpi('3. Capital necessário na corretora', isNum(req.capital) ? fmt._usd(req.capital) : '—',
+                isNum(req.capital) ? `para render ${fmt._usd(t.daily_usd)}/dia nessa taxa · ${fmt._usd(req.capital - d.capital, { signed: true })} em relação a hoje${req.sheet ? ` · planilha ${esc(req.sheet.label)}` : ''}` : 'o retorno observado não é positivo: nenhum capital chega lá nesse ritmo'),
+            kpi('4. Dias reinvestindo até lá (sem depositar)', isNum(req.days_to_target) && req.days_to_target > 0 ? `~${req.days_to_target} dias` : dz(req.days_to_target),
+                `ritmo observado · pior quartil dos dias: ${dz(sc[0].days_to_target)} · melhor: ${dz(sc[2].days_to_target)}` + (isNum(req.capital) ? ` · depois disso, saque ${fmt._usd(t.daily_usd)}/dia e o capital fica` : '')),
+            kpi(`5. Ciclos por dia necessários (hoje: ${fmt.num(req.cycles_observed_per_day, 0)})`, isNum(req.cycles_needed_per_day) ? fmt.num(req.cycles_needed_per_day, 1) : '—',
+                `alternativa sem aumentar o capital, a ${fmt._usd(req.pnl_per_cycle)}/ciclo`),
+        ];
+        // Rumo ao capital necessário: progresso capital atual / necessário; dias = o mesmo cálculo do passo 4, refeito a cada carga
+        if (isNum(req.capital)) {
+            const done = d.capital >= req.capital, pct = Math.min(100, d.capital / req.capital * 100), eta = req.days_to_target;
+            const txt = done ? `Capital atingido: a partir daqui você pode sacar ${fmt._usd(t.daily_usd)}/dia${isNum(t.daily_brl) ? ` (R$ ${fmt.num(t.daily_brl)})` : ''} e manter o capital`
+                : `faltam ${fmt._usd(req.capital - d.capital)}` + (isNum(eta) ? ` · ~${eta} dias no ritmo atual (≈ ${addDays(dayStr(new Date()), eta).split('-').reverse().join('/')})` : ' · não alcança no ritmo atual');
+            steps.push(`<article class="kpi sim-lead sim-goal${done ? ' ok' : ''}" id="sim-goal"><div class="kpi-h"><span class="kpi-l">Rumo ao capital necessário</span><b class="kpi-v ${done ? 'pos' : ''}">${esc(fmt._usd(d.capital))} <small>/ ${esc(fmt._usd(req.capital))} · ${fmt.pct(pct, 0, false)}</small></b><small class="kpi-s">${txt}</small></div><div class="kpi-bar${done ? ' ok' : ''}" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(pct)}"><i style="width:${pct}%"></i></div></article>`);
+        }
+        $('sim-kpis').innerHTML = steps.join('');
         $('sim-table').querySelector('tbody').innerHTML = sc.map(s => `<tr><td class="sans"><b>${esc(s.label)}</b></td><td class="r ${cls(s.daily_pct)}">${esc(fmt.pct(s.daily_pct))}</td><td class="r ${cls(s.daily_usd)}">${both(s.daily_usd, s.daily_brl)}</td><td class="r ${cls(s.monthly_usd)}">${both(s.monthly_usd, s.monthly_brl)}</td><td class="r">${isNum(s.required_capital) ? esc(fmt._usd(s.required_capital)) : '—'}</td><td class="r">${dz(s.days_to_target)}</td><td class="sans">${s.sheet ? `${esc(s.sheet.label)} · 1ª ordem $${s.sheet.first_order} · stop $${s.sheet.stop} · ${s.sheet.coins} moeda(s)` : '—'}</td></tr>`).join('');
         $('sim-recs').innerHTML = d.recommendations.map(r => `<li>${esc(r)}</li>`).join('');
         $('sim-fx-sens').textContent = d.fx_sensitivity.length ? 'câmbio: ' + d.fx_sensitivity.map(f => `R$ ${fmt.num(f.fx)} → ${fmt._usd(f.daily_usd)}/dia`).join(' · ') : '';
         $('sim-assumptions').innerHTML = d.assumptions.map(a => `<li>${esc(a)}</li>`).join('');
-        const rk = d.risks; $('sim-chart-sub').textContent = `${obs.curve.length - 1} dias · linha tracejada = capital necessário${isNum(rk.stop_pct_of_capital) ? ` · stop $${rk.stop_usd} = ${fmt.pct(rk.stop_pct_of_capital, 0, false)} do capital` : ''}${rk.small_sample ? ` · amostra curta (${rk.sample_days}d)` : ''}`;
+        const rk = d.risks; $('sim-chart-sub').textContent = `${obs.curve.length - 1} dias reinvestindo tudo · linha tracejada vermelha = capital necessário (passo 3)${isNum(rk.stop_pct_of_capital) ? ` · stop $${rk.stop_usd} = ${fmt.pct(rk.stop_pct_of_capital, 0, false)} do capital` : ''}${rk.small_sample ? ` · amostra curta (${rk.sample_days}d)` : ''}`;
         const el = $('sim-chart'); if (!el || typeof Chart === 'undefined') return;
         const labels = obs.curve.map((_, i) => i), colors = [p.warn, p.ac, p.good];
         const dss = sc.map((s, i) => ({ label: s.label, data: s.curve, borderColor: colors[i], borderWidth: i === 1 ? 2 : 1.5, pointRadius: 0, tension: 0.2 }));

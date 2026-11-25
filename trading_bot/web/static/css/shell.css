@@ -49,7 +49,8 @@
 .kpi-cv canvas { position:absolute; inset:0; width:100% !important; height:100% !important; }
 .kpi-bar { margin:auto 18px 18px; height:8px; border-radius:4px; background:var(--bg-elevated); overflow:hidden; }
 .kpi-bar i { display:block; height:100%; width:0; border-radius:4px; background:var(--brand-gradient); transition:width .3s ease; }
-.kpi-bar.hot i { background:var(--bad); }
+.kpi-bar.hot i { background:var(--bad); } .kpi-bar.ok i { background:var(--good); }
+.sim-goal .kpi-bar { margin-top:10px; } .sim-goal:not(.ok) .kpi-bar i { background:var(--warn); } .sim-goal.ok { border-color:var(--good); }
 .kpi-legs { margin:auto 18px 14px; display:flex; flex-wrap:wrap; gap:4px 10px; font-size:11.5px; color:var(--text-dim); font-family:var(--font-mono); }
 .kpi-legs span.pos { color:var(--good); } .kpi-legs span.neg { color:var(--bad); }
 /* linha de perpétuo embaixo de cada posição: alavancagem, notional, margem, marca, liquidação, ROE */
@@ -186,12 +187,14 @@
 .sim-form { margin-bottom:12px; align-items:center; }
 .sim-form input, .sim-form select { font:inherit; color:var(--text); background:var(--bg-elevated); border:1px solid var(--border-strong); border-radius:10px; padding:5px 9px; margin-left:4px; width:120px; color-scheme:inherit; }
 .sim-derived { color:var(--text-muted); } .sim-derived b { color:var(--text); font-family:var(--font-mono); font-weight:500; margin-left:4px; }
-.sim-kpis { display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:12px; margin-bottom:14px; }
+.sim-kpis { display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:12px; margin-bottom:14px; }
+.sim-kpis .kpi-v { white-space:normal; } .sim-kpis .sim-lead { grid-column:1 / -1; } .sim-kpis .sim-lead .kpi-v { font-size:28px; } .sim-kpis .kpi-l { white-space:normal; }
+.sim-table-wrap { margin:8px 0; } .sim-table-wrap[open] summary { margin-bottom:8px; }
 .sim-kpis .kpi { min-height:0; padding-bottom:14px; } .sim-kpis .kpi-s { white-space:normal; } .sim-kpis .kpi-v { font-size:20px; } .sim-kpis .kpi-v small { font-size:12px; color:var(--text-muted); font-weight:500; }
 .sim-recs { margin:4px 0 10px; padding-left:18px; font-size:13px; line-height:1.5; } .sim-recs li + li { margin-top:4px; }
 .sim-assump summary { font-size:12px; color:var(--text-muted); cursor:pointer; } .sim-assump ul { font-size:12px; color:var(--text-dim); padding-left:18px; line-height:1.5; }
 #sim-table td small { color:var(--text-muted); }
-@media (max-width: 600px) { .sim-form label { width:100%; display:flex; justify-content:space-between; } .sim-form input, .sim-form select { min-height:40px; width:150px; } .sim-kpis { grid-template-columns:repeat(2, minmax(0,1fr)); } .sim-kpis .kpi-v small { display:block; margin:0; } }
+@media (max-width: 600px) { .sim-form label { width:100%; display:flex; justify-content:space-between; } .sim-form input, .sim-form select { min-height:40px; width:150px; } .sim-kpis { grid-template-columns:1fr; } .sim-kpis .sim-lead .kpi-v { font-size:24px; } .sim-kpis .kpi-v small { display:block; margin:0; } }
 
 /* Páginas: uma visível por vez (showPage no main.js) */
 .page { display:flex; flex-direction:column; gap:16px; min-width:0; } /* min-width:0: tabela larga rola dentro do card, não alarga a página */
