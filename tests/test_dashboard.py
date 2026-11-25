@@ -382,6 +382,11 @@ def test_fills_route_matches_bot_trades_filters_and_paginates(tmp_path):
     assert [f["trade_id"] for f in client.get("/api/fills?from=2026-11-20&to=2026-11-21&side=SHORT").get_json()["fills"]] == ["t3"]
     assert client.get("/api/fills?from=2026-11-20&to=2026-11-21&symbol=adausdt").get_json()["total"] == 2 and calls[-1]["symbol"] == "ADAUSDT"
     assert client.get("/api/fills?side=UP").status_code == 400 and client.get("/api/fills?page=x").status_code == 400
+    # ordenação por coluna (lista completa, antes de paginar); empate → mais recente primeiro; None por último
+    assert [f["trade_id"] for f in client.get("/api/fills?from=2026-11-20&to=2026-11-21&sort=profit&dir=desc").get_json()["fills"]] == ["t2", "t3", "t1"]
+    assert [f["trade_id"] for f in client.get("/api/fills?from=2026-11-20&to=2026-11-21&sort=symbol&dir=asc").get_json()["fills"]] == ["t2", "t1", "t3"]
+    assert [f["bot_trade_id"] for f in client.get("/api/fills?from=2026-11-20&to=2026-11-21&sort=bot_trade_id&dir=asc").get_json()["fills"]] == [1, 1, None]
+    assert client.get("/api/fills?sort=order_id").status_code == 400 and client.get("/api/fills?dir=up").status_code == 400
     # paginação
     p = client.get("/api/fills?from=2026-11-20&to=2026-11-21&per_page=2&page=2").get_json()
     assert p["pages"] == 2 and p["page"] == 2 and [f["trade_id"] for f in p["fills"]] == ["t1"]
