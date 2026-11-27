@@ -975,6 +975,7 @@
             try { renderHistory(state.hist); } catch (err) { console.error('render do histórico falhou', err); }
         } catch (err) { console.warn('histórico falhou:', err); }
         fetchPnl();   // trade fechou (ou passaram 2 min): a aba de P&L acompanha
+        fetchPlan();
     }
     $('fx-toggle').addEventListener('click', () => {
         currency = currency === 'BRL' ? 'USD' : 'BRL';
@@ -983,6 +984,7 @@
         if (state.hist) renderHistory(state.hist);
         if (state.pnl) renderPnl(state.pnl);
         if (state.sim) renderSim(state.sim);
+        if (state.plan) renderPlan(state.plan);
     });
     function initChips() {
         $$('.chips .chip').forEach(b => b.addEventListener('click', () => {
@@ -1276,6 +1278,7 @@
             steps.push(`<article class="kpi sim-lead sim-goal${done ? ' ok' : ''}" id="sim-goal"><div class="kpi-h"><span class="kpi-l">Rumo ao capital necessário</span><b class="kpi-v ${done ? 'pos' : ''}">${esc(fmt._usd(d.capital))} <small>/ ${esc(fmt._usd(req.capital))} · ${fmt.pct(pct, 0, false)}</small></b><small class="kpi-s">${txt}</small></div><div class="kpi-bar${done ? ' ok' : ''}" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(pct)}"><i style="width:${pct}%"></i></div></article>`);
         }
         $('sim-kpis').innerHTML = steps.join('');
+        $('sim-plan-btn').disabled = !isNum(req.capital);
         $('sim-table').querySelector('tbody').innerHTML = sc.map(s => `<tr><td class="sans"><b>${esc(s.label)}</b></td><td class="r ${cls(s.daily_pct)}">${esc(fmt.pct(s.daily_pct))}</td><td class="r ${cls(s.daily_usd)}">${both(s.daily_usd, s.daily_brl)}</td><td class="r ${cls(s.monthly_usd)}">${both(s.monthly_usd, s.monthly_brl)}</td><td class="r">${isNum(s.required_capital) ? esc(fmt._usd(s.required_capital)) : '—'}</td><td class="r">${dz(s.days_to_target)}</td><td class="sans">${s.sheet ? `${esc(s.sheet.label)} · 1ª ordem $${s.sheet.first_order} · stop $${s.sheet.stop} · ${s.sheet.coins} moeda(s)` : '—'}</td></tr>`).join('');
         $('sim-recs').innerHTML = d.recommendations.map(r => `<li>${esc(r)}</li>`).join('');
         $('sim-fx-sens').textContent = d.fx_sensitivity.length ? 'câmbio: ' + d.fx_sensitivity.map(f => `R$ ${fmt.num(f.fx)} → ${fmt._usd(f.daily_usd)}/dia`).join(' · ') : '';
@@ -1291,6 +1294,56 @@
     }
     $('sim-form').addEventListener('submit', (e) => { e.preventDefault(); fetchSim(); });
     function simVisible(on) { if (on && !sm.loaded) fetchSim(); }
+
+    // ───────── Trading › Meu plano (/api/plan: alvo da simulação congelado; o servidor calcula progresso, dias e "pronto pra sacar") ─────────
+    const dmy = (iso) => iso ? String(iso).slice(0, 10).split('-').reverse().join('/') : '—';
+    async function fetchPlan() {
+        try { const r = await fetch('/api/plan', { credentials: 'include' }); const d = await r.json(); if (!r.ok || d.ok === false) throw new Error(d.error || ('HTTP ' + r.status)); state.plan = d.plan; renderPlan(d.plan); }
+        catch (e) { console.warn('plano falhou:', e); }
+    }
+    function renderPlan(p) {
+        const card = $('plan-card'), top = $('plan-banner');
+        if (!p) { card.hidden = true; top.hidden = true; return; }
+        const st = p.state, kpi = (l, v, s, c, extra) => `<article class="kpi ${extra || ''}"><div class="kpi-h"><span class="kpi-l">${l}</span><b class="kpi-v ${c || ''}">${v}</b><small class="kpi-s">${s}</small></div></article>`;
+        const meta = isNum(p.monthly_target_brl) ? `R$ ${fmt.num(p.monthly_target_brl, 0)}` : fmt._usd(p.monthly_target_usd);
+        $('plan-sub').textContent = `criado em ${dmy(p.created_at)} · meta ${meta}/mês (${fmt._usd(p.monthly_target_usd)} ao câmbio R$ ${fmt.num(p.fx_at_creation)}) · ${p.days_per_month} dias/mês · ritmo atual ${fmt.pct(st.daily_pct)} ao dia`;
+        const pct = st.progress_pct || 0, done = st.reached;
+        const rumo = done ? `Capital atingido em ${dmy(p.reached_at)}: a partir daqui o lucro acima de ${fmt.money(p.required_capital_usd)} é saque`
+            : `faltam ${fmt.money(st.remaining_usd)}` + (isNum(st.days_left) ? ` · ~${st.days_left} dias (≈ ${dmy(st.eta_date)})` : ' · não alcança no ritmo atual');
+        $('plan-kpis').innerHTML = [
+            kpi('Meta mensal', esc(meta), `precisa ganhar ${esc(fmt.money(p.daily_target_usd))} por dia${brlTag(p.daily_target_usd)}`),
+            kpi('Capital necessário na corretora', esc(fmt.money(p.required_capital_usd)), `equity hoje ${esc(fmt.money(st.equity))}${brlTag(st.equity)}`),
+            `<article class="kpi sim-lead sim-goal${done ? ' ok' : ''}" id="plan-goal"><div class="kpi-h"><span class="kpi-l">${done ? 'Capital atingido' : 'Rumo ao capital necessário'}</span><b class="kpi-v ${done ? 'pos' : ''}">${esc(fmt.money(st.equity))} <small>/ ${esc(fmt.money(p.required_capital_usd))} · ${fmt.pct(pct, 0, false)}</small></b><small class="kpi-s">${esc(rumo)}</small></div><div class="kpi-bar${done ? ' ok' : ''}" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(pct)}"><i style="width:${pct}%"></i></div></article>`,
+        ].join('');
+        const alert = $('plan-alert');
+        if (st.ready_to_withdraw) {
+            const msg = `Pronto para sacar ${fmt.money(st.withdrawable_usd)}${fmt.moneyAlt(st.withdrawable_usd) ? ` (${fmt.moneyAlt(st.withdrawable_usd).replace('≈ ', '')})` : ''} — o capital de ${fmt.money(p.required_capital_usd)} fica na corretora`;
+            alert.innerHTML = `<span>${esc(msg)}</span><button class="btn btn-quiet btn-xs" type="button" id="plan-withdraw">Registrar saque</button>`; alert.className = 'banner plan-alert'; alert.hidden = false;
+            $('plan-withdraw').addEventListener('click', () => registerWithdraw(st.withdrawable_usd));
+            top.innerHTML = `<span>${esc(msg)}</span><a class="btn btn-quiet btn-xs" href="#plan-card">Ver plano</a>`; top.className = 'banner plan-banner ok'; top.hidden = false;
+        } else {
+            top.hidden = true;
+            if (done) { alert.textContent = isNum(st.next_withdraw_eta_days) ? `Próximo saque de ${fmt.money(p.monthly_target_usd)} em ~${st.next_withdraw_eta_days} dias (≈ ${dmy(st.next_withdraw_eta)}) · já acumulado ${fmt.money(st.withdrawable_usd)}` : `Acumulado ${fmt.money(st.withdrawable_usd)} de ${fmt.money(p.monthly_target_usd)} · sem ritmo positivo para estimar o próximo saque`; alert.className = 'banner'; alert.hidden = false; }
+            else alert.hidden = true;
+        }
+        const w = p.withdrawals || [];
+        $('plan-withdrawals').textContent = w.length ? `Saques registrados (${w.length}): ` + w.slice(-5).reverse().map(x => `${dmy(x.at)} ${fmt.money(x.amount_usd)}`).join(' · ') : '';
+        card.hidden = false;
+    }
+    async function registerWithdraw(amount) {
+        const out = await formModal({ title: 'Registrar saque', hint: 'Anote aqui o valor que você sacou na corretora; o plano zera o ciclo e avisa de novo quando o próximo mês estiver pronto.', submit: 'Registrar',
+            fields: [{ name: 'amount_usd', label: 'Valor sacado (US$)', type: 'number', value: Math.floor(amount * 100) / 100, required: true }, { name: 'at', label: 'Data', type: 'date', value: dayStr(new Date()), required: true }],
+            onSubmit: (v) => apiPost('/api/plan/withdraw', { amount_usd: Number(v.amount_usd), at: v.at }) });
+        if (out) { state.plan = out.plan; renderPlan(out.plan); }
+    }
+    $('sim-plan-btn').addEventListener('click', async () => {
+        const d = state.sim; if (!d || !isNum(d.required.capital)) return;
+        try {
+            const out = await apiPost('/api/plan', { monthly_target_brl: d.target.brl_input, fx: d.fx, days_per_month: d.days_per_month, daily_target_usd: d.target.daily_usd, monthly_target_usd: d.target.monthly_usd, required_capital_usd: d.required.capital });
+            state.plan = out.plan; renderPlan(out.plan); $('plan-card').scrollIntoView({ block: 'start' });
+        } catch (e) { $('sim-error').textContent = 'Não deu pra criar o plano: ' + e.message; $('sim-error').hidden = false; }
+    });
+    $('plan-cancel').addEventListener('click', () => ask('Cancelar plano', 'O plano e o histórico de saques saem do painel; a simulação continua disponível para criar outro.', async () => { try { await apiPost('/api/plan', null, 'DELETE'); state.plan = null; renderPlan(null); } catch (e) { console.warn(e); } }));
 
     // ───────── Shell: KPIs com sparkline, páginas do menu, menu off-canvas, tema ─────────
     function sparkline(id, values, color) {
@@ -1348,8 +1401,8 @@
     // POST JSON com o token CSRF da sessão no header (o servidor exige em /api/users* e /api/me/*).
     const CSRF = document.body.dataset.csrf || '';
     const ME_ID = parseInt(document.body.dataset.userId, 10) || 0;
-    async function apiPost(path, body) {
-        const r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': CSRF }, body: JSON.stringify(body || {}), credentials: 'include' });
+    async function apiPost(path, body, method = 'POST') {
+        const r = await fetch(path, { method, headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': CSRF }, body: JSON.stringify(body || {}), credentials: 'include' });
         const data = await r.json().catch(() => ({}));
         if (!r.ok || data.ok === false) throw new Error(data.error || ('HTTP ' + r.status));
         return data;

@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 import os
 import secrets
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 from flask import Flask, Response, abort, jsonify, redirect, render_template, request, session, url_for
 from flask_socketio import SocketIO
@@ -308,6 +308,91 @@ def _register_routes(app: Flask, socketio: SocketIO) -> None:
         return jsonify({"ok": True, "stats": stats, **simulate(
             stats, capital, target_daily=num("target_daily", None), days_per_month=int(num("days", 30)),
             fx=fx, target_brl=num("target_brl", 6000.0), stop_usd=float(getattr(config, "MARTINGALE_STOP_LOSS_USDT", 0.0) or 0.0))})
+
+    def plan_account_id() -> int:
+        """Conta do plano: ?account=N validado por account_bot(), senão a 1ª conta ativa do usuário."""
+        raw = request.args.get("account")
+        if raw:
+            return int(raw)
+        return next(a["id"] for a in app.config["PLATFORM"].accounts_for(auth.current_user()["id"]) if a["active"])
+
+    def plan_payload(bot, account_id: int):
+        """Plano da conta + estado calculado com a equity atual e a taxa %/dia observada; marca `reached`
+        na 1ª vez e avisa no Telegram (se o bot tiver notifier habilitado) ao virar reached/pronto pra sacar."""
+        from ..core.trade_store import pnl_since_ms
+        from .plan import observed_daily_pct, plan_state
+        from .simulation import measure
+        platform = app.config["PLATFORM"]
+        plan = platform.plan_for(account_id)
+        if plan is None:
+            return {"ok": True, "plan": None}
+        equity = float(collect_summary(bot).get("last_balance") or 0.0)
+        store = getattr(bot, "trade_store", None)
+        stats = measure(store, pnl_since_ms()) if store is not None else None
+        st = plan_state(plan, equity, observed_daily_pct(stats, equity))
+        changes = {}
+        if st["reached"] and plan["status"] == "active":
+            changes.update(status="reached", reached_at=datetime.now(timezone.utc).isoformat())
+        tg = getattr(bot, "telegram", None)
+        if st["reached"] and not plan["notified_reached"]:
+            changes["notified_reached"] = 1
+            if tg is not None:
+                tg.send_message(f"🎯 Plano de saque: capital necessário (${plan['required_capital_usd']:,.2f}) atingido. "
+                                f"Equity ${equity:,.2f}.")
+        if st["ready_to_withdraw"] and not plan["notified_ready"]:
+            changes["notified_ready"] = 1
+            if tg is not None:
+                tg.send_message(f"💸 Plano de saque: pronto para sacar ${st['withdrawable_usd']:,.2f} "
+                                f"(meta ${plan['monthly_target_usd']:,.2f}/mês). O capital de ${plan['required_capital_usd']:,.2f} fica na corretora.")
+        if changes:
+            platform.update_plan(plan["id"], **changes)
+            plan.update(changes)
+        return {"ok": True, "plan": {**plan, "state": st}}
+
+    @app.route("/api/plan", methods=["GET", "POST", "DELETE"])
+    @login_required
+    def plan():
+        bot = account_bot()
+        account_id = plan_account_id()
+        platform = app.config["PLATFORM"]
+        if request.method == "DELETE":
+            platform.cancel_plan(account_id)
+            return jsonify({"ok": True, "plan": None})
+        if request.method == "POST":
+            p = request.get_json(silent=True) or {}
+            try:
+                fields = {k: float(p[k]) for k in ("daily_target_usd", "monthly_target_usd", "required_capital_usd")}
+                fields["days_per_month"] = int(p.get("days_per_month") or 30)
+                fields["monthly_target_brl"] = float(p["monthly_target_brl"]) if p.get("monthly_target_brl") is not None else None
+                fields["fx_at_creation"] = float(p["fx"]) if p.get("fx") is not None else None
+            except (KeyError, TypeError, ValueError):
+                return jsonify({"ok": False, "error": "payload da simulação incompleto"}), 400
+            if fields["required_capital_usd"] <= 0 or fields["daily_target_usd"] <= 0:
+                return jsonify({"ok": False, "error": "a simulação não tem capital necessário positivo: nada a monitorar"}), 400
+            platform.create_plan(account_id, **fields)
+        return jsonify(plan_payload(bot, account_id))
+
+    @app.route("/api/plan/withdraw", methods=["POST"])
+    @login_required
+    def plan_withdraw():
+        bot = account_bot()
+        account_id = plan_account_id()
+        platform = app.config["PLATFORM"]
+        current = platform.plan_for(account_id)
+        if current is None:
+            return jsonify({"ok": False, "error": "esta conta não tem plano ativo"}), 404
+        p = request.get_json(silent=True) or {}
+        try:
+            amount = float(p["amount_usd"])
+        except (KeyError, TypeError, ValueError):
+            return jsonify({"ok": False, "error": "amount_usd inválido"}), 400
+        if amount <= 0:
+            return jsonify({"ok": False, "error": "amount_usd precisa ser positivo"}), 400
+        at = str(p.get("at") or datetime.now(timezone.utc).isoformat())
+        # zera o ciclo: o próximo "pronto pra sacar" avisa de novo
+        platform.update_plan(current["id"], last_withdraw_at=at, notified_ready=0,
+                             withdrawals=current["withdrawals"] + [{"at": at, "amount_usd": round(amount, 2)}])
+        return jsonify(plan_payload(bot, account_id))
 
     @app.route("/api/control/pause", methods=["POST"])
     @login_required

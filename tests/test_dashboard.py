@@ -2328,3 +2328,110 @@ def test_simulation_route_requires_store_and_returns_scenarios(tmp_path, monkeyp
                 "Ciclos por dia necessários", 'id="sim-goal"', "Rumo ao capital necessário", "Capital atingido"):
         assert txt in js, txt
     assert "Precisa ganhar por dia" in html and "Dias reinvestindo</th>" in html
+
+
+# ---------- /api/plan: plano de saque criado a partir da simulação ----------
+
+
+def _martingale_store(tmp_path, days=20):
+    from trading_bot.core.trade_store import TradeStore
+    store = TradeStore(str(tmp_path / "plan.db"))
+    for i in range(days):
+        day = f"2026-11-{i + 1:02d}"
+        store.record_open({"timestamp": f"{day}T01:00:00+00:00", "symbol": "ADAUSDT", "signal": "BUY", "side": "LONG", "qty": 10.0,
+                           "value": 6.0, "entry_price": 0.6, "stop_loss": 0.55, "take_profit": 0.65, "strategy_name": "primary",
+                           "strategy_type": "martingale_hedge", "double_first": False, "ai_consultive": {}})
+        store.record_close(symbol="ADAUSDT", side="LONG", entry_price=0.6, exit_price=0.61, exit_at=f"{day}T05:00:00+00:00",
+                           pnl_gross=1.05, pnl_net=1.0, fees=0.05, close_reason="tp", strategy_name="primary")
+    return store
+
+
+def test_plan_lifecycle_progress_reached_ready_withdraw_delete(tmp_path, monkeypatch):
+    from trading_bot.web.app import create_app
+    monkeypatch.setattr(global_config, "PNL_SINCE_UTC", "", raising=False)
+    # equity = o que o bot reporta (em testnet o summary deriva o saldo do TradeStore; aqui o foco é o plano)
+    monkeypatch.setattr("trading_bot.web.app.collect_summary", lambda b: {"last_balance": b.last_known_balance})
+    bot = _make_bot(last_known_balance=320.0)
+    bot.trade_store = _martingale_store(tmp_path)
+    bot.telegram = MagicMock()
+    app, _ = create_app(bot)
+    client = app.test_client()
+    assert client.get("/api/plan").status_code == 401
+    _login(client)
+    client.get("/")   # o token CSRF nasce no render da página
+    hdr = {"X-CSRF-Token": _csrf(client)}
+    assert client.get("/api/plan").get_json() == {"ok": True, "plan": None}
+    assert client.post("/api/plan", json={"daily_target_usd": 33.33}).status_code == 400          # sem CSRF
+    assert client.post("/api/plan", json={"daily_target_usd": 33.33}, headers=hdr).status_code == 400   # payload incompleto
+    payload = {"monthly_target_brl": 6000, "fx": 6.0, "days_per_month": 30, "daily_target_usd": 33.33, "monthly_target_usd": 1000.0,
+               "required_capital_usd": 10000.0}
+    assert client.post("/api/plan", json={**payload, "required_capital_usd": 0}, headers=hdr).status_code == 400
+    d = client.post("/api/plan", json=payload, headers=hdr).get_json()
+    p = d["plan"]
+    assert p["status"] == "active" and p["required_capital_usd"] == 10000.0 and p["monthly_target_brl"] == 6000.0 and p["withdrawals"] == []
+    st = p["state"]   # equity 320 < 10000; taxa observada = 1/(320-20) = 0,333%/dia (mesma da simulação)
+    assert st["equity"] == 320.0 and st["reached"] is False and st["progress_pct"] == 3.2 and st["remaining_usd"] == 9680.0
+    assert st["daily_pct"] == pytest.approx(0.3333, abs=1e-3) and 1000 < st["days_left"] < 1100 and st["eta_date"]
+    assert st["withdrawable_usd"] == 0.0 and st["ready_to_withdraw"] is False and st["next_withdraw_eta_days"] > st["days_left"]
+    bot.telegram.send_message.assert_not_called()
+    # criar de novo substitui (um plano ativo por conta)
+    d2 = client.post("/api/plan", json={**payload, "required_capital_usd": 9000.0}, headers=hdr).get_json()
+    assert d2["plan"]["id"] != p["id"] and d2["plan"]["required_capital_usd"] == 9000.0
+    # equity acima do capital: vira reached (uma vez), avisa no Telegram uma vez, ainda não dá pra sacar a meta
+    bot.last_known_balance = 9050.0
+    g = client.get("/api/plan").get_json()["plan"]
+    assert g["status"] == "reached" and g["reached_at"] and g["state"]["reached"] and g["state"]["days_left"] == 0
+    assert g["state"]["withdrawable_usd"] == 50.0 and g["state"]["ready_to_withdraw"] is False and g["state"]["next_withdraw_eta_days"] > 0
+    reached_at = g["reached_at"]
+    assert client.get("/api/plan").get_json()["plan"]["reached_at"] == reached_at
+    assert bot.telegram.send_message.call_count == 1 and "atingido" in bot.telegram.send_message.call_args[0][0]
+    # pronto pra sacar: excedente ≥ meta mensal
+    bot.last_known_balance = 10100.0
+    g = client.get("/api/plan").get_json()["plan"]
+    assert g["state"]["ready_to_withdraw"] is True and g["state"]["withdrawable_usd"] == 1100.0 and g["state"]["next_withdraw_eta_days"] == 0
+    client.get("/api/plan")
+    assert bot.telegram.send_message.call_count == 2 and "sacar" in bot.telegram.send_message.call_args[0][0]
+    # registrar saque zera o ciclo (last_withdraw_at, histórico, aviso rearmado)
+    assert client.post("/api/plan/withdraw", json={"amount_usd": -1}, headers=hdr).status_code == 400
+    bot.last_known_balance = 9100.0   # o saque saiu da corretora
+    w = client.post("/api/plan/withdraw", json={"amount_usd": 1000, "at": "2026-11-26T12:00:00+00:00"}, headers=hdr).get_json()["plan"]
+    assert w["last_withdraw_at"] == "2026-11-26T12:00:00+00:00" and w["withdrawals"] == [{"at": "2026-11-26T12:00:00+00:00", "amount_usd": 1000.0}]
+    assert w["status"] == "reached" and w["state"]["ready_to_withdraw"] is False and w["notified_ready"] == 0
+    bot.last_known_balance = 10100.0
+    client.get("/api/plan")
+    assert bot.telegram.send_message.call_count == 3   # novo ciclo, novo aviso
+    # cancelar
+    assert client.delete("/api/plan").status_code == 400   # sem CSRF
+    assert client.delete("/api/plan", headers=hdr).get_json() == {"ok": True, "plan": None}
+    assert client.get("/api/plan").get_json()["plan"] is None
+    assert client.post("/api/plan/withdraw", json={"amount_usd": 1}, headers=hdr).status_code == 404
+
+
+def test_plan_without_store_has_no_rate_but_still_tracks_equity(tmp_path, monkeypatch):
+    from trading_bot.web.app import create_app
+    monkeypatch.setattr("trading_bot.web.app.collect_summary", lambda b: {"last_balance": b.last_known_balance})
+    bot = _make_bot(last_known_balance=500.0)   # conta sem TradeStore (ex.: só-leitura): sem taxa, sem ETA
+    app, _ = create_app(bot)
+    client = app.test_client()
+    _login(client)
+    client.get("/")
+    hdr = {"X-CSRF-Token": _csrf(client)}
+    d = client.post("/api/plan", json={"days_per_month": 30, "daily_target_usd": 10, "monthly_target_usd": 300, "required_capital_usd": 1000},
+                    headers=hdr).get_json()
+    st = d["plan"]["state"]
+    assert st["equity"] == 500.0 and st["progress_pct"] == 50.0 and st["days_left"] is None and st["eta_date"] is None and st["daily_pct"] == 0
+
+
+def test_plan_ui_elements_present():
+    from trading_bot.web.app import create_app
+    app, _ = create_app(_make_bot())
+    client = app.test_client()
+    _login(client)
+    html = client.get("/").data.decode()
+    for i in ("plan-banner", "plan-card", "plan-alert", "plan-kpis", "plan-withdrawals", "plan-cancel", "sim-plan-btn"):
+        assert f'id="{i}"' in html, i
+    assert "Criar plano com esta simulação" in html and "Cancelar plano" in html and "Meu plano" in html
+    js = open("trading_bot/web/static/js/main.js", encoding="utf-8").read()
+    for txt in ("function fetchPlan(", "function renderPlan(", "/api/plan/withdraw", "apiPost('/api/plan', null, 'DELETE')", "Registrar saque",
+                "Pronto para sacar", "Capital atingido em", "Próximo saque de", "Rumo ao capital necessário", "sim-plan-btn"):
+        assert txt in js, txt
