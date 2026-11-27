@@ -376,10 +376,20 @@
         </div>
 
         <div class="pnl-tab" data-tab="income" hidden>
+            <div class="filters pnl-income-filters" id="pnl-income-filters">
+                <div class="chips" role="tablist" aria-label="Tipo" id="pnl-income-types">
+                    <button class="chip on" role="tab" data-type="all" aria-selected="true">Todos</button>
+                    <button class="chip" role="tab" data-type="REALIZED_PNL">P&amp;L realizado</button>
+                    <button class="chip" role="tab" data-type="COMMISSION">Comissão</button>
+                    <button class="chip" role="tab" data-type="FUNDING_FEE">Funding</button>
+                    <button class="chip" role="tab" data-type="TRANSFER">Transferência</button>
+                </div>
+                <label>Par <select id="pnl-income-sym"><option value="all">todos</option></select></label>
+            </div>
             <div class="tr-stats" id="pnl-income-totals"></div>
             <div class="table-scroll">
                 <table class="table" id="pnl-income">
-                    <thead><tr><th scope="col">Data</th><th scope="col">Tipo</th><th scope="col">Par</th><th scope="col" class="r">Valor</th></tr></thead>
+                    <thead><tr><th scope="col" data-sort="time" aria-sort="descending"><button>Data</button></th><th scope="col" data-sort="type"><button>Tipo</button></th><th scope="col" data-sort="symbol"><button>Par</button></th><th scope="col" class="r" data-sort="amount"><button>Valor</button></th></tr></thead>
                     <tbody></tbody>
                 </table>
             </div>

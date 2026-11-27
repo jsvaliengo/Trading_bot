@@ -74,6 +74,10 @@
 
     /* Tabelas rolam dentro do próprio cartão, usando a borda do cartão. */
     .table-scroll { margin:0 -12px; padding:0 12px; -webkit-overflow-scrolling:touch; }
+    #pnl-income th:nth-child(3), #pnl-income td:nth-child(3) { display:none; }
+    #pnl-income .in-sym { display:block; font-family:var(--font-mono); margin-top:2px; }
+    .pnl-income-filters .chips { display:flex; flex-wrap:nowrap; overflow-x:auto; max-width:100%; } .pnl-income-filters .chip { flex:none; }
+    .pnl-income-filters label { width:100%; }
     .cal { -webkit-overflow-scrolling:touch; }
 
     /* Gráficos com altura fixa (maintainAspectRatio:false no main.js). */

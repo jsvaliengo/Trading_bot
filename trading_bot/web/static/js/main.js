@@ -614,9 +614,9 @@
             (f.side === 'all' || t.side === f.side) &&
             (f.reason === 'all' || reasonKind(t.close_reason) === f.reason));
     }
-    const TEXT_KEYS = ['symbol', 'side', 'close_reason'];
+    const TEXT_KEYS = ['symbol', 'side', 'close_reason', 'type'];
     // comparador das tabelas de trades: data por timestamp, texto por string, resto numérico; nulos sempre no fim
-    const byKey = (k, dir) => (a, b) => { let x = a[k], y = b[k]; if (k === 'exit_time' || k === 'exit_at') { x = new Date(x).getTime(); y = new Date(y).getTime(); } if (x == null) return 1; if (y == null) return -1; return (x > y ? 1 : x < y ? -1 : 0) * dir; };
+    const byKey = (k, dir) => (a, b) => { let x = a[k], y = b[k]; if (k === 'exit_time' || k === 'exit_at' || k === 'time') { x = new Date(x).getTime(); y = new Date(y).getTime(); } if (x == null) return 1; if (y == null) return -1; return (x > y ? 1 : x < y ? -1 : 0) * dir; };
     function renderTrades(all) {
         const rows = filteredTrades(all);
         rows.sort(byKey(state.sortKey, state.sortDir));
@@ -733,7 +733,7 @@
     const dayStr = (d) => d.toISOString().slice(0, 10);
     const addDays = (iso, n) => { const d = new Date(iso + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return dayStr(d); };
     const dayRange = (from, to) => { const out = []; for (let d = from; d <= to; d = addDays(d, 1)) out.push(d); return out; };
-    const pnlState = { days: 30, from: null, to: null, tab: 'account', month: null, page: {}, len: {}, symDir: -1, trKey: 'exit_at', trDir: -1 };
+    const pnlState = { days: 30, from: null, to: null, tab: 'account', month: null, page: {}, len: {}, symDir: -1, trKey: 'exit_at', trDir: -1, inKey: 'time', inDir: -1, inType: 'all', inSym: 'all' };
     // presets mandam só `days`: o servidor ancora no dia UTC dele (como a Bitget), não na data do navegador
     const pnlQuery = () => pnlState.days === 'custom' ? (pnlState.from && pnlState.to ? `?from=${pnlState.from}&to=${pnlState.to}` : '') : `?days=${pnlState.days}`;
     async function fetchPnl() {
@@ -896,12 +896,22 @@
             <td class="r dim">${fmt.money(-(r.fees || 0), { signed: true })}</td><td class="r dim">${fmt.money(r.funding, { signed: true })}</td></tr>`).join('');
     }
     const INCOME_LABEL = { REALIZED_PNL: 'P&L realizado', COMMISSION: 'Comissão', FUNDING_FEE: 'Funding', TRANSFER: 'Transferência' };
+    // tag do tipo: P&L verde/vermelho pelo sinal, comissão vermelha, funding/transferência neutros
+    const incomeTag = (i) => `<span class="side ${i.type === 'REALIZED_PNL' ? (i.amount >= 0 ? 'l' : 's') : i.type === 'COMMISSION' ? 's' : 'u'}">${esc(INCOME_LABEL[i.type] || i.type)}</span>`;
     function renderPnlIncome(p) {
-        const tb = $('pnl-income').querySelector('tbody'), tot = p.income_totals || {};
-        $('pnl-income-totals').innerHTML = p.income_ok ? Object.keys(INCOME_LABEL).map(k => `<span>${INCOME_LABEL[k]} <b class="${cls(tot[k])}">${fmt.money(tot[k] || 0, { signed: true })}</b></span>`).join('') : `<span class="warn">Income da ${esc(exchangeName())} indisponível no momento; o restante da aba usa o banco local.</span>`;
-        const rows = pnlPaginate('income', p.income || []);
-        if (!rows.length) { tb.innerHTML = `<tr><td colspan="4" class="empty sans">${p.income_ok ? 'Nenhum lançamento no período.' : 'Sem dados.'}</td></tr>`; return; }
-        tb.innerHTML = rows.map(i => `<tr><td><small>${fmt.dateTime(i.time)}</small></td><td class="sans">${esc(INCOME_LABEL[i.type] || i.type)}</td><td class="sans">${esc(i.symbol || '—')}</td><td class="r ${cls(i.amount)}">${fmt.money(i.amount, { signed: true })}</td></tr>`).join('');
+        const tb = $('pnl-income').querySelector('tbody'), all = p.income || [], sel = $('pnl-income-sym');
+        const syms = [...new Set(all.map(i => i.symbol).filter(Boolean))].sort();
+        if (!syms.includes(pnlState.inSym)) pnlState.inSym = 'all';
+        sel.innerHTML = ['<option value="all">todos</option>', ...syms.map(s => `<option value="${esc(s)}">${esc(s)}</option>`)].join(''); sel.value = pnlState.inSym;
+        const list = all.filter(i => (pnlState.inType === 'all' || i.type === pnlState.inType) && (pnlState.inSym === 'all' || i.symbol === pnlState.inSym));
+        // totais seguem o filtro; com um tipo escolhido só ele aparece
+        const keys = pnlState.inType === 'all' ? Object.keys(INCOME_LABEL) : [pnlState.inType];
+        $('pnl-income-totals').innerHTML = p.income_ok
+            ? [`<span>${list.length} lançamento(s)</span>`, ...keys.map(k => { const v = sum(list.filter(i => i.type === k).map(i => i.amount || 0)); return `<span>${INCOME_LABEL[k]} <b class="${cls(v)}">${fmt.money(v, { signed: true })}</b></span>`; })].join('')
+            : `<span class="warn">Income da ${esc(exchangeName())} indisponível no momento; o restante da aba usa o banco local.</span>`;
+        const rows = pnlPaginate('income', list.sort(byKey(pnlState.inKey, pnlState.inDir)));
+        if (!rows.length) { tb.innerHTML = `<tr><td colspan="4" class="empty sans">${p.income_ok ? 'Nenhum lançamento no filtro.' : 'Sem dados.'}</td></tr>`; return; }
+        tb.innerHTML = rows.map(i => `<tr><td class="dim">${fmt.dateTime(i.time)}</td><td class="sans">${incomeTag(i)}<small class="in-sym">${esc(i.symbol || '')}</small></td><td>${esc(i.symbol || '—')}</td><td class="r ${cls(i.amount)}">${fmt.money(i.amount, { signed: true })}</td></tr>`).join('');
     }
     function initPnl() {
         $$('#pnl-ranges .chip').forEach(b => b.addEventListener('click', () => {
@@ -927,6 +937,15 @@
             th.setAttribute('aria-sort', pnlState.trDir > 0 ? 'ascending' : 'descending');
             pnlState.page.details = 1; if (state.pnl) renderPnlTrades(state.pnl);
         }));
+        $$('#pnl-income th[data-sort]').forEach(th => th.querySelector('button').addEventListener('click', () => {
+            const k = th.dataset.sort;
+            if (pnlState.inKey === k) pnlState.inDir *= -1; else { pnlState.inKey = k; pnlState.inDir = TEXT_KEYS.includes(k) ? 1 : -1; }
+            $$('#pnl-income th[data-sort]').forEach(x => x.removeAttribute('aria-sort'));
+            th.setAttribute('aria-sort', pnlState.inDir > 0 ? 'ascending' : 'descending');
+            pnlState.page.income = 1; if (state.pnl) renderPnlIncome(state.pnl);
+        }));
+        $$('#pnl-income-types .chip').forEach(b => b.addEventListener('click', () => { pnlState.inType = b.dataset.type; pnlState.page.income = 1; if (state.pnl) renderPnlIncome(state.pnl); }));
+        $('pnl-income-sym').addEventListener('change', (e) => { pnlState.inSym = e.target.value; pnlState.page.income = 1; if (state.pnl) renderPnlIncome(state.pnl); });
         $('pnl-symbols').querySelector('th[data-sort] button').addEventListener('click', (e) => { pnlState.symDir *= -1; e.target.closest('th').setAttribute('aria-sort', pnlState.symDir > 0 ? 'ascending' : 'descending'); renderPnlSymbols(state.pnl); });
     }
 
