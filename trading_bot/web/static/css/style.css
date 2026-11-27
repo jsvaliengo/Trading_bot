@@ -301,6 +301,9 @@ details.card > :not(summary):first-of-type { margin-top:10px; }
 #pnl-income th:first-child { width:140px; } #pnl-income th:nth-child(2) { width:150px; }
 #pnl-income tbody tr:nth-child(even) { background:color-mix(in srgb, var(--bg-elevated) 30%, transparent); }
 #pnl-income .in-sym { display:none; }
+#pnl-fees th, #pnl-fees td { padding:6px 12px; }
+#pnl-fees tbody tr:nth-child(even) { background:color-mix(in srgb, var(--bg-elevated) 30%, transparent); }
+#pnl-fees tr.stale td { opacity:.55; }
 .sheet tr.cur td { background:var(--accent-soft); font-weight:600; } .sheet tr.cur td:first-child { box-shadow:inset 3px 0 0 var(--accent); }
 .sheet-coins { max-width:none; display:flex; flex-wrap:wrap; gap:4px; align-items:center; margin-top:10px; }
 .sheet-coins .side { font-size:11px; } .sheet-coins .side.on { outline:2px solid var(--accent); }

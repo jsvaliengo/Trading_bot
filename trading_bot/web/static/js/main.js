@@ -793,7 +793,7 @@
         if (!pnlState.month || pnlState.month < p.from.slice(0, 7) || pnlState.month > p.to.slice(0, 7)) pnlState.month = p.to.slice(0, 7);
         renderPnlCalendar(p); renderPnlTotal(p); renderPnlRoi(p); renderPnlEquity(p);
         renderPnlBars(p); renderPnlFunding(p);
-        renderPnlTrades(p); renderPnlSymbols(p); renderPnlIncome(p);
+        renderPnlTrades(p); renderPnlSymbols(p); renderPnlIncome(p); renderFees();
     }
     function renderPnlCalendar(p) {
         // extrato da conta por dia UTC (p.calendar: realizado + taxas + funding); o nº de trades do dia vem da aba de trading
@@ -919,6 +919,38 @@
         if (!rows.length) { tb.innerHTML = `<tr><td colspan="4" class="empty sans">${p.income_ok ? 'Nenhum lançamento no filtro.' : 'Sem dados.'}</td></tr>`; return; }
         tb.innerHTML = rows.map(i => `<tr><td class="dim">${fmt.dateTime(i.time)}</td><td class="sans">${incomeTag(i)}<small class="in-sym">${esc(i.symbol || '')}</small></td><td>${esc(i.symbol || '—')}</td><td class="r ${cls(i.amount)}">${fmt.money(i.amount, { signed: true })}</td></tr>`).join('');
     }
+    // ───────── Taxas (/api/fees): maker/taker da conta + funding por par; busca ao abrir a aba e a cada 5 min enquanto ela estiver visível ─────────
+    const FEES_MS = 300000;
+    async function fetchFees() {
+        try {
+            const r = await fetch('/api/fees', { credentials: 'include' }); if (!r.ok) throw new Error('HTTP ' + r.status);
+            state.fees = await r.json();
+        } catch (err) { console.warn('Taxas falharam:', err); state.fees = { ...(state.fees || { rows: [] }), ok: false, warning: 'sem resposta do servidor' }; }
+        renderFees();
+    }
+    setInterval(() => { if (pnlState.tab === 'fees' && !document.hidden) fetchFees(); }, FEES_MS);
+    const FEE_SOURCE = { conta: ['l', 'efetiva da conta'], contrato: ['u', 'padrão do contrato'] };
+    function renderFees() {
+        const f = state.fees, p = state.pnl;
+        if (f) {
+            const tb = $('pnl-fees').querySelector('tbody'), rows = f.rows || [];
+            $('pnl-fees-sub').innerHTML = `${esc(exchangeName())} · atualizado ${fmt.time(f.updated_at)} ${fmt.tzLabel()} · cache 5 min` + (f.warning ? ` · <span class="warn">${esc(f.warning)}</span>` : '');
+            tb.innerHTML = rows.map(r => { const src = FEE_SOURCE[r.fee_source] || ['u', '—'];
+                return `<tr${r.stale ? ' class="stale"' : ''}><td class="sans"><b>${esc(r.symbol)}</b></td><td class="r">${fmt.pct(r.maker_pct, 4, false)}</td><td class="r">${fmt.pct(r.taker_pct, 4, false)}</td>
+                <td class="sans"><span class="side ${src[0]}">${src[1]}</span></td><td class="r ${cls(r.funding_pct)}">${fmt.pct(r.funding_pct, 4)}</td><td class="dim">${fmt.dateTime(r.next_funding)}${r.next_funding ? ' ' + fmt.tzLabel() : ''}</td></tr>`; }).join('')
+                || '<tr><td colspan="6" class="empty sans">Nenhum par operado ou com posição aberta.</td></tr>';
+        }
+        if (!p) return;
+        // realizado: taxas pagas (income da exchange, senão fees do banco) ÷ volume negociado (entrada + saída de cada trade)
+        const t = p.totals || {}, it = p.income_totals || {}, paid = p.income_ok ? -(it.COMMISSION || 0) : (t.fees || 0);
+        const vol = sum((p.trades || []).map(tr => isNum(tr.qty) ? tr.qty * ((tr.entry_price || 0) + (tr.exit_price || 0)) : 0));
+        $('pnl-fees-real-sub').textContent = `${fmt.day(p.from)} → ${fmt.day(p.to)} · ${t.trades || 0} trade(s)`;
+        $('pnl-fees-paid').textContent = fmt.money(-paid, { signed: true }); $('pnl-fees-paid').className = cls(-paid);
+        $('pnl-fees-vol').textContent = vol > 0 ? fmt.money(vol) : '—';
+        const eff = vol > 0 ? paid / vol * 100 : null, taker = f && f.rows && f.rows.length ? Math.max(...f.rows.map(r => r.taker_pct || 0)) : null;
+        $('pnl-fees-eff').textContent = fmt.pct(eff, 4, false);
+        $('pnl-fees-eff-note').textContent = isNum(eff) && isNum(taker) && taker > 0 ? `${eff <= taker ? 'dentro' : 'acima'} do taker atual (${fmt.pct(taker, 4, false)}); funding fora` : (vol > 0 ? '' : 'sem volume (trades sem quantidade)');
+    }
     function initPnl() {
         $$('#pnl-ranges .chip').forEach(b => b.addEventListener('click', () => {
             const custom = b.dataset.days === 'custom'; $('pnl-custom').hidden = !custom;
@@ -929,6 +961,7 @@
         $$('#pnl-tabs .chip').forEach(b => b.addEventListener('click', () => {
             pnlState.tab = b.dataset.tab; pnlState.page = {}; $$('.pnl-tab').forEach(t => { t.hidden = t.dataset.tab !== pnlState.tab; }); Object.values(charts).forEach(c => c.resize());
             if (state.pnl) { renderPnlTrades(state.pnl); renderPnlIncome(state.pnl); }
+            if (pnlState.tab === 'fees') fetchFees();
         }));
         const shiftMonth = (n) => { const [y, m] = pnlState.month.split('-').map(Number); pnlState.month = dayStr(new Date(Date.UTC(y, m - 1 + n, 1))).slice(0, 7); renderPnlCalendar(state.pnl); };
         $('pnl-cal-prev').addEventListener('click', () => shiftMonth(-1)); $('pnl-cal-next').addEventListener('click', () => shiftMonth(1));

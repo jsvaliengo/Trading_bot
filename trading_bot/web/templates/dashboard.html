@@ -298,6 +298,7 @@
             <button class="chip" role="tab" data-tab="details">Detalhes</button>
             <button class="chip" role="tab" data-tab="symbols">Análise do Símbolo</button>
             <button class="chip" role="tab" data-tab="income">Financiamento e Transações</button>
+            <button class="chip" role="tab" data-tab="fees">Taxas</button>
         </div>
 
         <div class="pnl-tab" data-tab="account">
@@ -394,6 +395,22 @@
                 </table>
             </div>
             <div class="pager" id="pnl-income-pager" hidden><button class="btn btn-quiet btn-xs" id="pnl-income-prev">‹ Anterior</button><span class="pg-info" id="pnl-income-page">—</span><button class="btn btn-quiet btn-xs" id="pnl-income-next">Próxima ›</button></div>
+        </div>
+
+        <div class="pnl-tab" data-tab="fees" hidden>
+            <div class="ch"><h3>Taxas da conta agora</h3><span class="cs" id="pnl-fees-sub">—</span></div>
+            <div class="table-scroll">
+                <table class="table" id="pnl-fees">
+                    <thead><tr><th scope="col">Par</th><th scope="col" class="r">Maker</th><th scope="col" class="r">Taker</th><th scope="col">Fonte</th><th scope="col" class="r">Funding atual</th><th scope="col">Próximo funding</th></tr></thead>
+                    <tbody><tr><td colspan="6" class="empty sans">Carregando…</td></tr></tbody>
+                </table>
+            </div>
+            <div class="ch"><h3>Pago no período</h3><span class="cs" id="pnl-fees-real-sub">—</span></div>
+            <div class="pnl-wins">
+                <div><span class="tl">Taxas de transação pagas</span><b id="pnl-fees-paid">—</b></div>
+                <div><span class="tl">Volume negociado</span><b id="pnl-fees-vol">—</b></div>
+                <div><span class="tl">Taxa efetiva paga</span><b id="pnl-fees-eff">—</b><small id="pnl-fees-eff-note"></small></div>
+            </div>
         </div>
     </details>
 
