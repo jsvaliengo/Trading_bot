@@ -1907,7 +1907,7 @@ def test_pnl_details_and_income_tabs_paginate_client_side():
     assert "const PNL_PAGE = 10;" in js
     assert "if (pnlState.len[tab] !== rows.length) { pnlState.len[tab] = rows.length; pnlState.page[tab] = 1; }" in js
     assert "$(`pnl-${tab}-pager`).hidden = pages <= 1; $(`pnl-${tab}-page`).textContent = `página ${page} de ${pages}`;" in js
-    assert "pnlPaginate('details', [...(p.trades || [])].sort(byKey(pnlState.trKey, pnlState.trDir)))" in js and "pnlPaginate('income', p.income || [])" in js
+    assert "pnlPaginate('details', [...(p.trades || [])].sort(byKey(pnlState.trKey, pnlState.trDir)))" in js and "pnlPaginate('income', list.sort(byKey(pnlState.inKey, pnlState.inDir)))" in js
     assert "pnlState.tab = b.dataset.tab; pnlState.page = {};" in js
 
 
@@ -2284,6 +2284,25 @@ def test_pnl_details_table_headers_are_sortable():
     assert 'data-sort="exit_at" aria-sort="descending"' in thead
     js = open("trading_bot/web/static/js/main.js", encoding="utf-8").read()
     assert "sort(byKey(pnlState.trKey, pnlState.trDir))" in js and "#pnl-trades th[data-sort]" in js
+
+
+def test_pnl_income_table_has_filters_and_sortable_headers():
+    from trading_bot.web.app import create_app
+    app, _ = create_app(_make_bot())
+    client = app.test_client()
+    _login(client)
+    html = client.get("/").data.decode()
+    tab = html.split('data-tab="income" hidden>')[1].split("</thead>")[0]
+    for t in ("all", "REALIZED_PNL", "COMMISSION", "FUNDING_FEE", "TRANSFER"):
+        assert f'data-type="{t}"' in tab, t
+    assert 'id="pnl-income-sym"' in tab
+    thead = tab.split('id="pnl-income"')[1]
+    for k in ("time", "type", "symbol", "amount"):
+        assert f'data-sort="{k}"' in thead, k
+    assert thead.count("<button>") == 4 and 'data-sort="time" aria-sort="descending"' in thead
+    js = open("trading_bot/web/static/js/main.js", encoding="utf-8").read()
+    assert "sort(byKey(pnlState.inKey, pnlState.inDir))" in js and "#pnl-income th[data-sort]" in js
+    assert "k === 'time'" in js and "'type']" in js  # byKey ordena a data por timestamp e Tipo como texto
 
 
 # ---------- /api/simulation: página Trading › Simulações ----------
