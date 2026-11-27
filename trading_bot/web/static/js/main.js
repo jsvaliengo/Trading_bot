@@ -118,7 +118,13 @@
         $('top-title').textContent = s.strategy === 'donchian_4h' ? 'Forward test · Donchian 4h' : `Trading bot · ${s.strategy || 'pullback'}`;
         $('top-meta').textContent = `sinais ${s.signal_data_source || '—'} · deploy ${(h && h.deploy_sha) || '—'} · no ar há ${h ? fmt.ago(h.uptime_seconds) : '—'} · ${connLabel()} · atualizado ${fmt.time(state.live.server_time)}`;
         const fx = state.fx || {}; $('fx-badge').hidden = !isNum(fx.usd_brl);
-        if (isNum(fx.usd_brl)) { $('fx-rate').textContent = `US$ 1 = R$ ${fmt.num(fx.usd_brl)}`; $('fx-at').textContent = `câmbio ao vivo · ${fmt.dateTime(fx.fetched_at)}`; }
+        if (isNum(fx.usd_brl)) {
+            // fonte intradiária congela fora do horário de mercado: > 15 min sem cotação nova vira "atrasado" (amarelo)
+            const stale = Date.now() - new Date(fx.fetched_at).getTime() > 15 * 60e3;
+            $('fx-rate').textContent = `${fx.pair === 'USDT/BRL' ? '1 USDT' : 'US$ 1'} = R$ ${fmt.num(fx.usd_brl)}`;
+            $('fx-at').textContent = stale ? `câmbio atrasado · ${fmt.dateTime(fx.fetched_at)}` : `câmbio ao vivo · ${fmt.time(fx.fetched_at)}`;
+            $('fx-at').className = 'fx-pill' + (stale ? ' warn' : '');
+        }
         $('fx-toggle').textContent = currency === 'BRL' ? 'ver em US$' : 'ver em R$';
         $('btn-pause').disabled = !!s.paused; $('btn-resume').disabled = !s.paused;
         const banner = $('pause-banner');
