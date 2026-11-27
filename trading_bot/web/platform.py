@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import logging
 import sqlite3
 import threading
@@ -48,6 +49,23 @@ CREATE TABLE IF NOT EXISTS accounts (
     last_check_ok INTEGER,
     last_check_msg TEXT NOT NULL DEFAULT '',
     environment TEXT NOT NULL DEFAULT 'demo'
+);
+CREATE TABLE IF NOT EXISTS withdraw_plans (
+    id INTEGER PRIMARY KEY,
+    account_id INTEGER NOT NULL REFERENCES accounts(id),
+    created_at TEXT NOT NULL,
+    monthly_target_brl REAL,
+    fx_at_creation REAL,
+    days_per_month INTEGER NOT NULL,
+    daily_target_usd REAL NOT NULL,
+    monthly_target_usd REAL NOT NULL,
+    required_capital_usd REAL NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    reached_at TEXT,
+    last_withdraw_at TEXT,
+    withdrawals TEXT NOT NULL DEFAULT '[]',
+    notified_reached INTEGER NOT NULL DEFAULT 0,
+    notified_ready INTEGER NOT NULL DEFAULT 0
 );
 """
 
@@ -238,6 +256,41 @@ class PlatformStore:
         row = rows[0]
         return {"api_key": self.decrypt(row["api_key_enc"]), "api_secret": self.decrypt(row["api_secret_enc"]),
                 "passphrase": self.decrypt(row["passphrase_enc"])}
+
+    # ---- plano de saque (um ativo por conta; criar outro cancela o anterior) ----
+    _PLAN_FIELDS = ("monthly_target_brl", "fx_at_creation", "days_per_month", "daily_target_usd", "monthly_target_usd",
+                    "required_capital_usd")
+
+    def plan_for(self, account_id: int) -> Optional[Dict[str, Any]]:
+        """Plano `active`/`reached` da conta (saques como lista); None sem plano."""
+        rows = self._select("SELECT * FROM withdraw_plans WHERE account_id = ? AND status IN ('active', 'reached')"
+                            " ORDER BY id DESC LIMIT 1", (account_id,))
+        if not rows:
+            return None
+        plan = dict(rows[0])
+        plan["withdrawals"] = json.loads(plan["withdrawals"] or "[]")
+        return plan
+
+    def create_plan(self, account_id: int, **fields: Any) -> Dict[str, Any]:
+        with self._lock, self._conn:
+            self._conn.execute("UPDATE withdraw_plans SET status = 'cancelled' WHERE account_id = ? AND status IN ('active', 'reached')",
+                               (account_id,))
+            self._conn.execute(
+                f"INSERT INTO withdraw_plans (account_id, created_at, {', '.join(self._PLAN_FIELDS)}) VALUES (?, ?, {', '.join('?' * len(self._PLAN_FIELDS))})",
+                (account_id, datetime.now(timezone.utc).isoformat(), *(fields.get(k) for k in self._PLAN_FIELDS)))
+        return self.plan_for(account_id)
+
+    def update_plan(self, plan_id: int, **fields: Any) -> None:
+        if "withdrawals" in fields:
+            fields["withdrawals"] = json.dumps(fields["withdrawals"])
+        with self._lock, self._conn:
+            self._conn.execute(f"UPDATE withdraw_plans SET {', '.join(f'{k} = ?' for k in fields)} WHERE id = ?",
+                               (*fields.values(), plan_id))
+
+    def cancel_plan(self, account_id: int) -> None:
+        with self._lock, self._conn:
+            self._conn.execute("UPDATE withdraw_plans SET status = 'cancelled' WHERE account_id = ? AND status IN ('active', 'reached')",
+                               (account_id,))
 
     # ---- seed ----
     def seed_from_env(self, config) -> Dict[str, int]:

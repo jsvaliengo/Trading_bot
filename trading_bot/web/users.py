@@ -50,7 +50,7 @@ def register(app: Flask) -> None:
 
     @app.before_request
     def _csrf_on_platform_posts():
-        if request.method == "POST" and request.path.startswith(("/api/users", "/api/me/")) and not auth.csrf_ok():
+        if request.method in ("POST", "DELETE") and request.path.startswith(("/api/users", "/api/me/", "/api/plan")) and not auth.csrf_ok():
             return _bad("Sessão expirada, recarregue a página.", 400)
 
     @app.route("/api/users")

@@ -196,6 +196,13 @@
 #sim-table td small { color:var(--text-muted); }
 @media (max-width: 600px) { .sim-form label { width:100%; display:flex; justify-content:space-between; } .sim-form input, .sim-form select { min-height:40px; width:150px; } .sim-kpis { grid-template-columns:1fr; } .sim-kpis .sim-lead .kpi-v { font-size:24px; } .sim-kpis .kpi-v small { display:block; margin:0; } }
 
+/* Meu plano: alerta "pronto para sacar" em destaque (verde), cabeçalho com o botão de cancelar à direita */
+#plan-card .ch { align-items:flex-start; } #plan-card .ch .btn { margin-left:auto; flex:none; }
+.plan-alert, .plan-banner.ok { margin:0 0 12px; background:var(--good-soft); color:var(--good); display:flex; flex-wrap:wrap; gap:8px 14px; align-items:center; }
+.plan-banner.ok { margin-top:16px; } .plan-alert .btn, .plan-banner .btn { color:var(--good); border-color:currentColor; }
+#plan-withdrawals:empty { display:none; }
+@media (max-width: 600px) { #plan-card .ch { flex-wrap:wrap; } #plan-card .ch .btn { margin-left:0; } .plan-alert .btn { width:100%; min-height:40px; } }
+
 /* Páginas: uma visível por vez (showPage no main.js) */
 .page { display:flex; flex-direction:column; gap:16px; min-width:0; } /* min-width:0: tabela larga rola dentro do card, não alarga a página */
 /* Linhas de dois cards: mesma altura quando os dois estão abertos (o gráfico de equity estica pra preencher);

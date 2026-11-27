@@ -79,6 +79,7 @@
 </header>
 
 <div class="banner" id="pause-banner" hidden role="status"></div>
+<div class="banner plan-banner" id="plan-banner" hidden role="status"></div>
 
 <main class="wrap">
 
@@ -522,6 +523,13 @@
 
     <!-- Trading › Simulações: meta mensal em R$ → alvo diário em US$; projeções (p25/média/p75) da amostra do martingale (/api/simulation) -->
     <div class="page" data-page="sim" hidden>
+        <!-- Meu plano (/api/plan): alvo congelado da simulação, progresso até o capital, alerta "pronto para sacar" e saques -->
+        <section class="card" id="plan-card" aria-labelledby="plan-h" hidden>
+            <header class="ch"><div><h2 id="plan-h">Meu plano</h2><p class="cs" id="plan-sub">—</p></div><button class="btn btn-quiet btn-xs btn-danger" type="button" id="plan-cancel">Cancelar plano</button></header>
+            <div class="banner plan-alert" id="plan-alert" hidden role="status"></div>
+            <div class="sim-kpis" id="plan-kpis"></div>
+            <p class="cs" id="plan-withdrawals"></p>
+        </section>
         <section class="card" id="sim-card" aria-labelledby="sim-h">
             <header class="ch"><div><h2 id="sim-h">Simulações de renda</h2><p class="cs" id="sim-sub">responde em passos: quanto precisa ganhar por dia para sacar a meta, quanto o bot ganha hoje, quanto capital falta e em quantos dias se chega lá reinvestindo (sem depositar) · líquido de fees da corretora; impostos não incluídos · simulação, não recomendação</p></div></header>
             <form class="filters sim-form" id="sim-form">
@@ -531,6 +539,7 @@
                 <label>Capital (US$) <input type="number" id="sim-capital" min="0" step="1" inputmode="decimal" placeholder="equity atual"></label>
                 <span class="sim-derived">Precisa ganhar por dia <b id="sim-target">—</b></span>
                 <button class="btn btn-quiet btn-xs" type="submit">Simular</button>
+                <button class="btn btn-quiet btn-xs" type="button" id="sim-plan-btn" disabled title="Congela a meta e o capital necessário desta simulação e acompanha os dias que faltam">Criar plano com esta simulação</button>
             </form>
             <div class="sim-kpis" id="sim-kpis"></div>
             <div class="ch"><h3>Equity projetada reinvestindo tudo</h3><span class="cs" id="sim-chart-sub">—</span></div>
