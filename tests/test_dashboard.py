@@ -1657,9 +1657,9 @@ def test_pnl_report_days_preset_anchors_on_bot_trading_day(_brt):
 # ---------- cotação USD/BRL (trading_bot/web/fx.py) ----------
 
 
-def _fx_response(bid="5.508", ts="1794234043", status=200):
-    """Resposta da 1ª fonte (er-api); status != 200 levanta em raise_for_status como o requests."""
-    body = {"rates": {"BRL": bid}, "time_last_update_unix": ts} if status == 200 else {"status": status, "code": "QuotaExceeded"}
+def _fx_response(price="5.508", status=200):
+    """Resposta da 1ª fonte (ticker USDT/BRL da Binance); status != 200 levanta em raise_for_status como o requests."""
+    body = {"symbol": "USDTBRL", "price": price} if status == 200 else {"code": -1003, "msg": "Too many requests"}
     return _resp(body, status)
 
 
@@ -1690,29 +1690,43 @@ def test_fx_fetches_and_caches(monkeypatch):
     from trading_bot.web import fx
 
     calls = []
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(fx.time, "monotonic", lambda: clock["t"])
+    monkeypatch.setattr(fx, "_now_iso", lambda: "2026-11-27T14:20:43+00:00")
     monkeypatch.setattr(fx.requests, "get", lambda url, timeout: calls.append(timeout) or _fx_response())
     out = fx.usd_brl()
-    assert out == {"usd_brl": 5.508, "source": "er-api", "fetched_at": "2026-11-09T14:20:43+00:00"}
-    assert fx.usd_brl() is out and calls == [fx.TIMEOUT]  # 2ª chamada dentro do TTL não vai à rede
+    assert out == {"usd_brl": 5.508, "source": "binance", "pair": "USDT/BRL", "fetched_at": "2026-11-27T14:20:43+00:00"}
+    clock["t"] += fx.TTL_INTRADAY - 1
+    assert fx.usd_brl() is out and calls == [fx.TIMEOUT]  # dentro do TTL de 60 s não vai à rede
+    clock["t"] += 2
+    monkeypatch.setattr(fx.requests, "get", lambda url, timeout: calls.append(timeout) or _fx_response("5.61"))
+    assert fx.usd_brl()["usd_brl"] == 5.61 and len(calls) == 2  # TTL vencido: cotação nova
 
 
 def test_fx_sources_fallback_in_order(monkeypatch):
-    """1ª fonte 429 (caso real da VM: awesomeapi QuotaExceeded) → usa a 2ª e guarda source."""
+    """Ticker da Binance falha → usa a Bitget (horário vem do ticker); chave ausente/exceção pulam pra próxima
+    até as fontes USD (awesomeapi) e diárias (er-api, com TTL de 10 min)."""
     from trading_bot.web import fx
 
-    er, fr, aw = (u for _, u, _ in fx.SOURCES)
+    bn, bg, aw, er, fr = (u for _, u, _, _, _ in fx.SOURCES)
     calls = []
-    _mock_get(monkeypatch, {er: _fx_response(status=429), fr: _resp({"rates": {"BRL": 5.5167}, "date": "2026-11-09"})}, calls)
-    assert fx.usd_brl() == {"usd_brl": 5.5167, "source": "frankfurter", "fetched_at": "2026-11-09"}
-    assert [u for u, _ in calls] == [er, fr] and all(t == fx.TIMEOUT for _, t in calls)
+    bitget = _resp({"code": "00000", "data": [{"symbol": "USDTBRL", "lastPr": "5.5729", "ts": "1795788420323"}]})
+    _mock_get(monkeypatch, {bn: _fx_response(status=429), bg: bitget}, calls)
+    assert fx.usd_brl() == {"usd_brl": 5.5729, "source": "bitget", "pair": "USDT/BRL", "fetched_at": "2026-11-27T14:07:00+00:00"}
+    assert [u for u, _ in calls] == [bn, bg] and all(t == fx.TIMEOUT for _, t in calls)
 
     monkeypatch.setitem(fx._cache, "next_at", 0.0)
-    _mock_get(monkeypatch, {er: _resp({"rates": {"BRL": 5.5046}, "time_last_update_unix": 1794182551})})
-    assert fx.usd_brl() == {"usd_brl": 5.5046, "source": "er-api", "fetched_at": "2026-11-09T00:02:31+00:00"}  # 1ª OK: não chama as outras
+    _mock_get(monkeypatch, {bn: _resp({"code": -1121}), bg: TimeoutError("lento"),
+                            aw: _resp({"USDBRL": {"bid": "5.5394", "timestamp": "1795788194", "create_date": "2026-11-27 11:03:14"}})})
+    assert fx.usd_brl() == {"usd_brl": 5.5394, "source": "awesomeapi", "pair": "USD/BRL", "fetched_at": "2026-11-27T14:03:14+00:00"}
 
-    monkeypatch.setitem(fx._cache, "next_at", 0.0)  # chave ausente (JSON de erro) e exceção também pulam pra próxima
-    _mock_get(monkeypatch, {er: _resp({"result": "error"}), fr: TimeoutError("lento"), aw: _resp({"USDBRL": {"bid": "5.6", "timestamp": "1794234043"}})})
-    assert fx.usd_brl() == {"usd_brl": 5.6, "source": "awesomeapi", "fetched_at": "2026-11-09T14:20:43+00:00"}
+    clock = {"t": 5000.0}
+    monkeypatch.setattr(fx.time, "monotonic", lambda: clock["t"])
+    monkeypatch.setitem(fx._cache, "next_at", 0.0)
+    _mock_get(monkeypatch, {bn: ConnectionError(), bg: ConnectionError(), aw: _fx_response(status=429),
+                            er: _resp({"rates": {"BRL": 5.5046}, "time_last_update_unix": 1794182551})})
+    assert fx.usd_brl() == {"usd_brl": 5.5046, "source": "er-api", "pair": "USD/BRL", "fetched_at": "2026-11-09T00:02:31+00:00"}
+    assert fx._cache["next_at"] == clock["t"] + fx.TTL_DAILY  # fonte diária: cache de 10 min
 
 
 def test_fx_failure_returns_none_then_last_known(monkeypatch):
@@ -1727,8 +1741,8 @@ def test_fx_failure_returns_none_then_last_known(monkeypatch):
     calls = []
     monkeypatch.setattr(fx.requests, "get", lambda url, timeout: calls.append(url) or _fx_response(status=429))
     assert fx.usd_brl()["usd_brl"] == 5.6  # todas falham: mantém o último valor conhecido
-    assert calls == [u for _, u, _ in fx.SOURCES]  # tentou as 3 fontes, em ordem
-    assert fx.usd_brl()["usd_brl"] == 5.6 and len(calls) == 3  # retry negativo: 60s sem ir à rede
+    assert calls == [u for _, u, _, _, _ in fx.SOURCES]  # tentou todas as fontes, em ordem
+    assert fx.usd_brl()["usd_brl"] == 5.6 and len(calls) == len(fx.SOURCES)  # retry negativo: 60s sem ir à rede
 
 
 @pytest.mark.parametrize("equity,expected", [(306.0, 1), (89.0, None), (6500.0, 8), (7200.0, 9), (10500.0, 12), (None, None)])

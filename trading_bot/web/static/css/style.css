@@ -83,6 +83,7 @@ button { font:inherit; color:inherit; }
 .fx-toggle { font:inherit; font-size:11px; padding:2px 8px; border-radius:999px; border:1px solid var(--border-strong); background:none; color:var(--text-dim); cursor:pointer; }
 .fx-toggle:hover { color:var(--text); border-color:var(--text-dim); }
 .fx-pill { font-size:11px; padding:2px 8px; border-radius:999px; background:var(--good-soft); color:var(--good); }
+.fx-pill.warn { background:var(--warn-soft); color:var(--warn); }
 /* equivalente em BRL embaixo do valor em USD (brlTag no main.js) */
 .brl { display:block; font-family:var(--font-mono); font-size:11px; font-weight:400; letter-spacing:0; color:var(--text-muted); line-height:1.3; }
 .clock { font-family:var(--font-mono); font-variant-numeric:tabular-nums; font-size:13px; color:var(--text-dim); white-space:nowrap; }
