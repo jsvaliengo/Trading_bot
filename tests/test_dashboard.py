@@ -1686,7 +1686,7 @@ def _mock_get(monkeypatch, by_url, calls=None):
     monkeypatch.setattr(fx.requests, "get", get)
 
 
-def test_fx_fetches_and_caches(monkeypatch):
+def test_fx_fetches_and_caches(monkeypatch, caplog):
     from trading_bot.web import fx
 
     calls = []
@@ -1694,10 +1694,16 @@ def test_fx_fetches_and_caches(monkeypatch):
     monkeypatch.setattr(fx.time, "monotonic", lambda: clock["t"])
     monkeypatch.setattr(fx, "_now_iso", lambda: "2026-11-27T14:20:43+00:00")
     monkeypatch.setattr(fx.requests, "get", lambda url, timeout: calls.append(timeout) or _fx_response())
-    out = fx.usd_brl()
+    with caplog.at_level("INFO", logger="trading_bot.web.fx"):
+        out = fx.usd_brl()
     assert out == {"usd_brl": 5.508, "source": "binance", "pair": "USDT/BRL", "fetched_at": "2026-11-27T14:20:43+00:00"}
+    assert [r.getMessage() for r in caplog.records] == [
+        "Cotação dólar/BRL via binance: USDT/BRL = 5.5080 (2026-11-27T14:20:43+00:00)"
+    ]
     clock["t"] += fx.TTL_INTRADAY - 1
-    assert fx.usd_brl() is out and calls == [fx.TIMEOUT]  # dentro do TTL de 60 s não vai à rede
+    with caplog.at_level("INFO", logger="trading_bot.web.fx"):
+        assert fx.usd_brl() is out and calls == [fx.TIMEOUT]  # dentro do TTL de 60 s não vai à rede
+    assert len(caplog.records) == 1  # cache hit não loga
     clock["t"] += 2
     monkeypatch.setattr(fx.requests, "get", lambda url, timeout: calls.append(timeout) or _fx_response("5.61"))
     assert fx.usd_brl()["usd_brl"] == 5.61 and len(calls) == 2  # TTL vencido: cotação nova

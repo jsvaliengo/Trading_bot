@@ -71,6 +71,7 @@ def usd_brl() -> Dict[str, Any]:
         except Exception as exc:
             logger.warning(f"Cotação dólar/BRL via {name} falhou ({exc}); tentando próxima fonte")
             continue
+        logger.info(f"Cotação dólar/BRL via {name}: {pair} = {rate:.4f} ({at})")
         _cache["data"] = {"usd_brl": rate, "source": name, "pair": pair, "fetched_at": at}
         _cache["next_at"] = now + ttl
         return _cache["data"]
