@@ -2518,15 +2518,18 @@ def test_fees_route_requires_auth_and_lists_account_rates_per_active_pair(monkey
     assert out["ok"] is True and (out["rows"][0]["maker_pct"], out["rows"][0]["fee_source"]) == (pytest.approx(0.02), "contrato")
 
 
-def test_fees_cache_5min_and_fail_open_keeps_last_value_with_warning(monkeypatch):
+def test_fees_cache_5min_and_fail_open_keeps_last_value_with_warning(monkeypatch, caplog):
     from trading_bot.web import fees
     fees._memo.clear()
     ex = _fees_exchange()
     calls = []
     ex.get_funding_rate = lambda symbol, force_refresh=False: calls.append(symbol) or {"rate_percent": 0.01, "next_funding_time": None}
     bot = SimpleNamespace(exchange=ex)
-    first = fees.build_fees(bot, ["ADAUSDT"])
-    assert fees.build_fees(bot, ["ADAUSDT"])["rows"] == first["rows"] and calls == ["ADAUSDT"]  # 2ª chamada vem do cache
+    with caplog.at_level("INFO", logger="trading_bot.web.fees"):
+        first = fees.build_fees(bot, ["ADAUSDT"])
+        assert fees.build_fees(bot, ["ADAUSDT"])["rows"] == first["rows"] and calls == ["ADAUSDT"]  # 2ª chamada vem do cache
+    msgs = [r.getMessage() for r in caplog.records if r.name == "trading_bot.web.fees"]
+    assert len(msgs) == 1 and msgs[0].startswith("Taxas de ADAUSDT via conta: maker ") and "| funding 0.01%" in msgs[0]  # cache hit não loga
     # exchange cai depois do TTL: devolve a última linha conhecida, marcada, com aviso; nunca levanta
     fees._memo[(id(ex), "ADAUSDT")] = (float("-inf"), first["rows"][0])
     def boom(*a, **k):
