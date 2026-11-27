@@ -281,6 +281,13 @@ def _register_routes(app: Flask, socketio: SocketIO) -> None:
         from .pnl_report import build_report
         return jsonify(build_report(account_bot(), request.args.get("from"), request.args.get("to"), request.args.get("days")))
 
+    @app.route("/api/fees")
+    @login_required
+    def fees():
+        """Aba Taxas: maker/taker da conta + funding por par operado (cache 5 min, fail-open)."""
+        from .fees import build_fees
+        return jsonify(build_fees(account_bot()))
+
     @app.route("/api/simulation")
     @login_required
     def simulation():

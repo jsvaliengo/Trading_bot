@@ -2474,3 +2474,79 @@ def test_plan_ui_elements_present():
     for txt in ("function fetchPlan(", "function renderPlan(", "/api/plan/withdraw", "apiPost('/api/plan', null, 'DELETE')", "Registrar saque",
                 "Pronto para sacar", "Capital atingido em", "Próximo saque de", "Rumo ao capital necessário", "sim-plan-btn"):
         assert txt in js, txt
+
+
+# ---------- Análise do P&L › aba Taxas (/api/fees) ----------
+
+
+def _fees_exchange(account_ok=True):
+    from datetime import datetime, timezone
+    ex = SimpleNamespace(
+        get_commission_rates=lambda symbol="BTCUSDT": {"maker_rate": 0.0002, "taker_rate": 0.0006},
+        get_funding_rate=lambda symbol, force_refresh=False: {"rate_percent": 0.0125, "next_funding_time": datetime(2026, 11, 27, 16, 0, tzinfo=timezone.utc)})
+    if account_ok:
+        ex.get_account_fee_rates = lambda symbol: {"maker_rate": 0.00014, "taker_rate": 0.00042}
+    else:
+        def boom(symbol):
+            raise RuntimeError("40001 trade-rate indisponível")
+        ex.get_account_fee_rates = boom
+    return ex
+
+
+def test_fees_route_requires_auth_and_lists_account_rates_per_active_pair(monkeypatch):
+    """/api/fees: maker/taker EFETIVOS da conta (Bitget /api/v2/common/trade-rate) + funding por par operado
+    (TRADING_PAIRS/MARTINGALE_PAIRS ∪ posições abertas); sem o endpoint da conta, cai na taxa padrão do contrato."""
+    from trading_bot.web import fees
+    from trading_bot.web.app import create_app
+    fees._memo.clear()
+    monkeypatch.setattr(global_config, "TRADING_PAIRS", ["adausdt"], raising=False)
+    monkeypatch.setattr(global_config, "MARTINGALE_PAIRS", ["ADAUSDT"], raising=False)
+    bot = _make_bot(known_positions={"XRPUSDT_LONG": {}})
+    bot.trade_store = _pnl_bot().trade_store
+    bot.exchange = _fees_exchange()
+    app, _ = create_app(bot)
+    client = app.test_client()
+    assert client.get("/api/fees").status_code == 401
+    body = client.get("/api/fees", headers=_basic_auth("admin", "secret")).get_json()
+    assert body["ok"] is True and body["warning"] is None and body["updated_at"]
+    assert [(r["symbol"], r["maker_pct"], r["taker_pct"], r["fee_source"], r["funding_pct"], r["next_funding"]) for r in body["rows"]] == [
+        ("ADAUSDT", pytest.approx(0.014), pytest.approx(0.042), "conta", 0.0125, "2026-11-27T16:00:00+00:00"),
+        ("XRPUSDT", pytest.approx(0.014), pytest.approx(0.042), "conta", 0.0125, "2026-11-27T16:00:00+00:00")]
+    # endpoint da conta falhou: taxa padrão do contrato, rotulada
+    fees._memo.clear()
+    out = fees.build_fees(SimpleNamespace(exchange=_fees_exchange(account_ok=False)), ["ADAUSDT"])
+    assert out["ok"] is True and (out["rows"][0]["maker_pct"], out["rows"][0]["fee_source"]) == (pytest.approx(0.02), "contrato")
+
+
+def test_fees_cache_5min_and_fail_open_keeps_last_value_with_warning(monkeypatch):
+    from trading_bot.web import fees
+    fees._memo.clear()
+    ex = _fees_exchange()
+    calls = []
+    ex.get_funding_rate = lambda symbol, force_refresh=False: calls.append(symbol) or {"rate_percent": 0.01, "next_funding_time": None}
+    bot = SimpleNamespace(exchange=ex)
+    first = fees.build_fees(bot, ["ADAUSDT"])
+    assert fees.build_fees(bot, ["ADAUSDT"])["rows"] == first["rows"] and calls == ["ADAUSDT"]  # 2ª chamada vem do cache
+    # exchange cai depois do TTL: devolve a última linha conhecida, marcada, com aviso; nunca levanta
+    fees._memo[(id(ex), "ADAUSDT")] = (float("-inf"), first["rows"][0])
+    def boom(*a, **k):
+        raise RuntimeError("bitget down")
+    ex.get_commission_rates = ex.get_funding_rate = ex.get_account_fee_rates = boom
+    out = fees.build_fees(bot, ["ADAUSDT", "NEWUSDT"])
+    assert out["ok"] is False and "último valor" in out["warning"]
+    assert out["rows"][0] == {**first["rows"][0], "stale": True}
+    assert out["rows"][1]["symbol"] == "NEWUSDT" and out["rows"][1]["stale"] is True and out["rows"][1]["maker_pct"] is None
+    # conta sem exchange: lista vazia, sem erro
+    fees._memo.clear()
+    assert fees.build_fees(SimpleNamespace(), [])["rows"] == []
+
+
+def test_fees_tab_in_template_fetches_on_open_and_every_5min_while_visible():
+    html = open("trading_bot/web/templates/dashboard.html", encoding="utf-8").read()
+    assert '<button class="chip" role="tab" data-tab="fees">Taxas</button>' in html
+    pane = html.split('<div class="pnl-tab" data-tab="fees" hidden>')[1].split('</details>')[0]
+    assert 'id="pnl-fees"' in pane and 'id="pnl-fees-sub"' in pane and 'id="pnl-fees-eff"' in pane
+    js = open("trading_bot/web/static/js/main.js", encoding="utf-8").read()
+    assert "const FEES_MS = 300000;" in js and "if (pnlState.tab === 'fees' && !document.hidden) fetchFees();" in js
+    assert "if (pnlState.tab === 'fees') fetchFees();" in js and "await fetch('/api/fees', { credentials: 'include' })" in js
+    assert "FEE_SOURCE = { conta: ['l', 'efetiva da conta'], contrato: ['u', 'padrão do contrato'] }" in js

@@ -265,6 +265,12 @@ class BitgetConnection:
             logger.warning(f"⚠️ Erro ao obter taxas da API: {e} — usando Maker 0.02%, Taker 0.06%")
             return {"maker_rate": 0.0002, "taker_rate": 0.0006, "maker_percent": 0.02, "taker_percent": 0.06}
 
+    def get_account_fee_rates(self, symbol: str) -> Dict[str, float]:
+        """Taxa EFETIVA desta conta no contrato (já com nível VIP/desconto), via endpoint autenticado
+        /api/v2/common/trade-rate. Levanta em falha: quem chama decide o fallback (padrão do contrato)."""
+        data = self._request("GET", "/api/v2/common/trade-rate", {"symbol": self.to_bitget(symbol), "businessType": "mix"}) or {}
+        return {"maker_rate": abs(_f(data.get("makerFeeRate"))), "taker_rate": abs(_f(data.get("takerFeeRate")))}
+
     # ---- conta ----
     def _fetch_account(self) -> Dict[str, float]:
         data = self._request("GET", "/api/v2/mix/account/accounts", {"productType": self.product_type}) or []
