@@ -194,6 +194,25 @@ def test_paused_bot_still_takes_profit_but_opens_nothing():
     assert len(ex.orders) == 2                 # sem adição nem reabertura
 
 
+def test_without_credit_open_cycles_finish_but_no_new_cycle_opens(caplog):
+    ex = _Ex(min_notional=1.0)
+    bot = _bot(ex)
+    r = mg.MartingaleRunner(bot)
+    r.start()
+    r.tick()                                   # 2 bases abertas com crédito
+    bot.allow_new_cycles = False
+    ex.price = 98.5                            # SHORT bate o TP (fecha); LONG ainda ADICIONA (ciclo aberto)
+    with caplog.at_level("INFO"):
+        r.tick()
+        r.tick()                               # SHORT não reabre; aviso só 1× por par
+    assert [c[1] for c in bot.closed] == ["SHORT"]
+    assert r.pairs["ADAUSDT"].legs["LONG"].level == 2 and r.pairs["ADAUSDT"].legs["SHORT"].level == 0
+    assert len(ex.orders) == 3 and sum("sem crédito" in m for m in caplog.messages) == 1
+    bot.allow_new_cycles = True
+    r.tick()                                   # crédito de volta: a base SHORT reabre
+    assert len(ex.orders) == 4 and r.pairs["ADAUSDT"].legs["SHORT"].level == 1
+
+
 def test_portfolio_stop_closes_everything_pauses_and_does_not_restart():
     ex = _Ex(min_notional=1.0)
     bot = _bot(ex)

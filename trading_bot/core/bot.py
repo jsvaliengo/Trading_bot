@@ -293,6 +293,9 @@ class TradingBot:
         # Usado p/ congelar o trading enquanto a estratégia é repensada (expectativa
         # negativa confirmada em 97 trades, 24/06).
         self.paused = bool(getattr(config, "START_PAUSED", False))
+        # control.json new_cycles (plataforma pré-paga): False = martingale não abre ciclo novo;
+        # ciclos abertos terminam. Só muda via _apply_control_file (CONTROL_FILE_ENABLED).
+        self.allow_new_cycles = True
         self.invert_signals = False
         self._stale_klines_logged: Dict[str, float] = {}
         # TRADING_BOT_STRATEGY=donchian_4h: runner do forward test; None = pullback.
@@ -4705,6 +4708,44 @@ class TradingBot:
         logger.warning(f"🖐️ Fechamento manual de {live[0]['side']} {symbol}: {reason}")
         return self.close_position(live[0], reason)
 
+    def _apply_control_file(self) -> None:
+        """Aplica RUNTIME_DIR/control.json (escrito pelo dashboard pro worker da conta): pausa,
+        crédito (new_cycles) e comandos close_all/close_position, com ack em control_ack.json.
+        `paused` e os comandos são consumidos do arquivo (stop de portfólio/kill switch pausam
+        sem o arquivo religar no ciclo seguinte); new_cycles fica. Nunca levanta pro loop."""
+        from .control_file import consume_commands, read_control, write_ack
+        try:
+            ctl = read_control(config.RUNTIME_DIR)
+            drop = ()
+            if ctl["paused"] is not None:
+                drop = ("paused",)
+                if ctl["paused"] != self.paused:
+                    self.paused = ctl["paused"]
+                    logger.warning("⏸️ Pausado via control.json" if self.paused else "▶️ Retomado via control.json")
+            if ctl["new_cycles"] is not None and ctl["new_cycles"] != self.allow_new_cycles:
+                self.allow_new_cycles = ctl["new_cycles"]
+                logger.warning("🔋 Ciclos novos liberados via control.json" if self.allow_new_cycles
+                               else "🪫 Créditos esgotados: sem ciclos novos via control.json")
+            acks = []
+            for cmd in ctl["commands"]:
+                error = ""
+                try:
+                    if cmd["cmd"] == "close_all":
+                        self._close_all_positions_daily_target(cmd["reason"])
+                    else:
+                        self.close_position_manual(cmd["symbol"], cmd["reason"], cmd["side"])
+                except Exception as exc:
+                    error = str(exc) or type(exc).__name__
+                    logger.warning(f"⚠️ control.json: comando {cmd['cmd']} ({cmd['id']}) falhou: {error}")
+                acks.append({"id": cmd["id"], "ok": not error, "error": error,
+                             "at": datetime.now(timezone.utc).isoformat()})
+            if acks:
+                write_ack(config.RUNTIME_DIR, acks)
+            if acks or drop:
+                consume_commands(config.RUNTIME_DIR, [a["id"] for a in acks], drop=drop)
+        except Exception:
+            logger.exception("⚠️ control.json: falha ao aplicar")
+
     def check_global_stop_loss(self) -> bool:
         """Delegador — lógica real em ExecutionEngine."""
         return self.execution_engine.check_global_stop_loss()
@@ -5792,6 +5833,9 @@ class TradingBot:
                             self.kill_switch.check_all(bot=self)
                         except Exception as _exc:
                             logger.warning(f"⚠️ KillSwitch check falhou: {_exc}")
+
+                    if config.CONTROL_FILE_ENABLED:
+                        self._apply_control_file()   # antes dos runners: pausa/crédito valem já neste tick
 
                     if self.donchian is not None:
                         try:

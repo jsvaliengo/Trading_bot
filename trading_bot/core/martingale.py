@@ -177,6 +177,7 @@ class MartingaleRunner:
         self.score_cache: Optional[PairScoreCache] = None             # dono do score (dashboard lê daqui)
         self.stops = 0
         self._no_candidate_logged_at = 0.0
+        self._no_credit_logged: set = set()   # pares já avisados de "sem crédito" (1 log por par até liberar)
 
     def snapshot(self) -> Dict[str, Any]:
         c = config
@@ -350,7 +351,12 @@ class MartingaleRunner:
         c = config
         if pos is None:
             leg.reset()
-            if not self.bot.paused and plan.symbol not in self.drain:
+            if not getattr(self.bot, "allow_new_cycles", True):   # pré-pago sem crédito: só a base não reabre
+                if plan.symbol not in self._no_credit_logged:
+                    self._no_credit_logged.add(plan.symbol)
+                    logger.info(f"🪫 Martingale: {plan.symbol} sem crédito — ciclo novo ({leg.side}) não abre")
+            elif not self.bot.paused and plan.symbol not in self.drain:
+                self._no_credit_logged.discard(plan.symbol)
                 self._open(plan, leg, price, k=0)
             return
         ex_avg, ex_qty = float(pos["entry_price"]), float(pos["quantity"])

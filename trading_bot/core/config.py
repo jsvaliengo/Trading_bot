@@ -477,6 +477,10 @@ class TradingConfig:
     # processo — ex.: enquanto a estratégia é repensada.
     START_PAUSED: bool = _env_bool("TRADING_BOT_START_PAUSED", False)
 
+    # Canal de controle por arquivo (RUNTIME_DIR/control.json: pausa, crédito new_cycles e
+    # fechamentos escritos pelo dashboard pro worker da conta). worker.py liga; conta 1 fica False.
+    CONTROL_FILE_ENABLED: bool = _env_bool("TRADING_BOT_CONTROL_FILE_ENABLED", False)
+
     # Percentual da posição para hedge (usado apenas se USE_SIGNAL_STRATEGY = False)
     HEDGE_RATIO: float = 0.5
 
