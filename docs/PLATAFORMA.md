@@ -149,6 +149,27 @@ continuam adicionando níveis e fecham no TP normalmente; `true` libera. Latênc
 Retomar uma conta à mão: acrescentar `"paused": false` em `runtime/accounts/N/control.json` (editar, não
 sobrescrever: `new_cycles` deve ser preservado).
 
+**Feito (PR 3): supervisor no `update_server.sh`.** Além do screen `bot` da conta 1 (inalterado), o
+deploy (e o restart manual `SKIP_GIT_PULL=1 SKIP_TESTS=1 bash scripts/update_server.sh`) sobe um screen
+`bot-accN` para cada `runtime/accounts/N/worker.enabled` (marcador criado à mão; N ≠ 1), rodando
+`scripts/run_bot_loop.sh` (mesmo wrapper de auto-restart com backoff) com `BOT_MODULE=trading_bot.core.worker
+BOT_ARGS=N RESTART_LOG=runtime/accounts/N/restart.log`; stdout/stderr do worker vão para
+`runtime/accounts/N/worker.out.log`, o log do bot continua em `runtime/accounts/N/trading_bot.*.log`. A cada
+rodada, os workers existentes são parados como a conta 1 (SIGTERM → SIGKILL por padrão de processo
+`trading_bot\.core\.worker N`, nunca `pkill -f run_bot_loop`) e relançados só se o marcador ainda existir;
+sem marcador = parado e não relançado. Sem `runtime/accounts/` nada muda. Caminho mínimo da 2ª conta na VM:
+
+1. Cadastrar a conta N no painel (prod, Testar conexão OK).
+2. `TRADING_BOT_ACCOUNT_DRY=1 .venv/bin/python -m trading_bot.core.worker N` — conferir o env mascarado
+   (isso cria `runtime/accounts/N/`).
+3. `touch runtime/accounts/N/worker.enabled`
+4. `cd /home/ubuntu/trading_bot && SKIP_GIT_PULL=1 SKIP_TESTS=1 bash scripts/update_server.sh`
+   (reinicia a conta 1 também, como qualquer deploy).
+5. `screen -ls` deve listar `bot` e `bot-accN`; `tail runtime/accounts/N/worker.out.log
+   runtime/accounts/N/trading_bot.*.log` — lock, "Bitget em PRODUÇÃO", pausado.
+6. Retomar: acrescentar `"paused": false` em `runtime/accounts/N/control.json` (PR 2).
+   Parar de vez: `rm runtime/accounts/N/worker.enabled` e rerodar o passo 4.
+
 Ainda exige:
 
 1. **Worker por conta**: processo próprio (`python -m trading_bot --account N`) com `.env` derivado da
