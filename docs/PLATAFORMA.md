@@ -196,20 +196,44 @@ trocar ambiente/desativar uma conta com worker é recusado. Conta sem `runtime/a
 (escada/pernas) para a conta com worker — precisa do runner, fica `null` (a planilha renderiza sem score).
 **Primeiro PR da fase que mexe no processo do dashboard: o deploy reinicia a conta 1 (~1 min de 502).**
 
-Ainda exige:
+**Feito (PR 6): créditos pré-pagos ("gás").** Cada conta tem `accounts.credit_pct` (default 20; conta 1 = 0,
+editável pelo admin) e um extrato `credit_ledger(id, account_id, ts, kind 'topup'|'consume', amount > 0, ref, note)`
+no `platform.db`; saldo = Σ topup − Σ consume. O consumo é DERIVADO do `trades.*.db` da conta
+(`trading_bot/web/credits.py`): cada ciclo do martingale é uma linha de `trades` (a base abre, o TP fecha a mesma
+linha), então `ref` = `"{trades.id}@{opened_at}"`; cobra `credit_pct`% do `pnl_net` de cada ciclo fechado POSITIVO há mais de 1 h
+(carência pro `pnl_reconciler` acertar fees/funding); ciclo negativo não consome nem compensa; idempotente por
+`(account_id, ref)` (índice único), por isso pode rodar quantas vezes quiser. O arquivo é lido só-leitura
+(`mode=ro`, sem abrir `TradeStore`). Roda em dois lugares, ambos fail-open: no `GET /api/live?account=N` de uma
+conta com worker (no máximo 1× por minuto por conta; a resposta ganha `credits: {balance, credit_pct, exhausted,
+low, ledger}`) e numa thread daemon do processo do dashboard a cada 5 min para todas as `runtime/accounts/N/`
+(a trava vale com o painel fechado). **Trava:** saldo ≤ 0 → `new_cycles: false` no `control.json` da conta (PR 2:
+o martingale não abre ciclo novo, os abertos terminam no TP); saldo > 0 → `true`; só escreve quando o valor
+desejado difere do que está no arquivo. O saldo pode ficar negativo uma vez (ciclo fechando com saldo pequeno) —
+aceito, a recarga seguinte cobre. Conta 1, conta com `credit_pct` 0 e conta sem `runtime/accounts/N/` nunca
+consomem nem são travadas. Painel: chip no topo da conta com worker — verde `créditos $X · 20%`, amarelo quando
+saldo < max($5, 2× o último consumo), vermelho `sem crédito — ciclos novos não abrem`; conta 1 não mostra nada.
+Admin: botão **Créditos** na página Contas (saldo, últimos lançamentos, recarga, percentual).
 
-1. **Worker por conta**: processo próprio (`python -m trading_bot --account N`) com `.env` derivado da
-   conta (chaves decifradas em memória, nunca em arquivo), `TradeStore` e `bot_state` por conta
-   (`runtime/<account>/`), lock por conta.
-2. **Supervisor**: sobe/derruba/reinicia workers (systemd template unit ou um supervisor Python),
-   heartbeat por conta (hoje `scripts/heartbeat.py` é de um processo só).
-3. **Canal web ↔ worker**: o dashboard deixa de importar o bot; lê snapshots/eventos do worker
-   (arquivo JSON + SQLite por conta, ou um Redis pequeno). `BOTS[account_id]` vira um handle com
-   `collect_*` e `pause/resume/close` via esse canal.
-4. **Controle de risco por conta**: limites da planilha e stop de portfólio já são por bot; falta
-   impedir que uma conta derrube o processo das outras (isolamento é o motivo do multi-processo).
-5. **Faturamento/termos** (fora do código): responsabilidade por ordens em conta de terceiros é
-   jurídica antes de técnica; definir antes de ligar qualquer execução.
+Operação: créditos. A recarga é manual, depois do PIX/USDT fora da plataforma (a API da Bitget não transfere
+entre contas de terceiros). Pelo painel: Contas › Créditos › valor + observação › Lançar. Por API, com o cookie
+de sessão de um admin e o CSRF da página (`X-CSRF-Token`, o mesmo das outras rotas `/api/accounts`):
+
+```bash
+# saldo, percentual e extrato (dono da conta ou admin)
+curl -b cookies.txt https://trader.adityve.com.br/api/accounts/2/credits
+# recarga de 50 USDT (admin); credit_pct é opcional, amount 0 só troca o percentual
+curl -b cookies.txt -H "X-CSRF-Token: $CSRF" -H 'Content-Type: application/json' \
+     -d '{"amount": 50, "note": "PIX 28/11", "credit_pct": 20}' https://trader.adityve.com.br/api/accounts/2/credits
+```
+
+A recarga liquida na hora: se o saldo voltar a > 0 o `control.json` recebe `new_cycles: true` na mesma resposta e o
+worker libera a base no ciclo seguinte do monitor. Para zerar a cobrança de uma conta (ex. a sua), `credit_pct: 0`.
+`reset_bot_state.py` apaga o `trades.db` da conta, mas o extrato vive no `platform.db` e sobrevive; um `trades.db`
+novo recomeça os ids em 1, por isso o `ref` leva o `opened_at` junto — ciclos novos continuam sendo cobrados.
+
+Ainda exige (fora do código): **faturamento/termos** — responsabilidade por ordens em conta de terceiros é
+jurídica antes de técnica; definir antes de abrir a plataforma a terceiros. Opcional (PR 7): Prometheus/Telegram
+por conta, perfil por conta, Socket.IO para workers, systemd no lugar do screen.
 
 ## 5. Variáveis novas
 

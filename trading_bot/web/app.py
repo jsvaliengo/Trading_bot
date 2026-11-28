@@ -22,7 +22,7 @@ from flask import Flask, Response, abort, jsonify, redirect, render_template, re
 from flask_socketio import SocketIO
 
 from ..core.config import config, exchange_label
-from . import accounts, auth, klines, users
+from . import accounts, auth, credits, klines, users
 from .auth import login_required
 from .data import _deploy_info, collect_history, collect_live, collect_snapshot, collect_summary
 from .platform import PlatformStore
@@ -150,7 +150,7 @@ def _register_routes(app: Flask, socketio: SocketIO) -> None:
             if not all(creds.values()):
                 abort(404)   # sem chaves não há o que ler
             client = accounts.exchange_client(acc["exchange"], creds, acc["environment"])
-            handles[account_id] = accounts.WorkerAccount(client, worker_dir) if worker_dir else accounts.ReadOnlyAccount(client)
+            handles[account_id] = accounts.WorkerAccount(client, worker_dir, account_id) if worker_dir else accounts.ReadOnlyAccount(client)
         return handles[account_id]
 
     @app.route("/")
@@ -234,7 +234,11 @@ def _register_routes(app: Flask, socketio: SocketIO) -> None:
     @app.route("/api/live")
     @login_required
     def live():
-        return jsonify(collect_live(account_bot()))
+        bot = account_bot()
+        data = collect_live(bot)
+        if isinstance(bot, accounts.WorkerAccount):   # conta pré-paga: consome ciclos novos (≤1×/min) e devolve o saldo
+            data["credits"] = credits.settle_throttled(app.config["PLATFORM"], bot.account_id, bot.runtime_dir)
+        return jsonify(data)
 
     @app.route("/api/history")
     @login_required
