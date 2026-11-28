@@ -13,6 +13,14 @@ Uso típico (na inicialização do bot):
     server.start()  # spawn thread; sem-op se DASHBOARD_ENABLED=False
 """
 
-from .server import DashboardServer
-
 __all__ = ["DashboardServer"]
+
+
+def __getattr__(name):
+    # Lazy: `.server` importa o singleton `config` (montado do env no import). O worker
+    # por conta (core/worker.py) precisa de `trading_bot.web.platform` ANTES de popular
+    # o env, então o pacote não pode puxar o config só por ser importado.
+    if name == "DashboardServer":
+        from .server import DashboardServer
+        return DashboardServer
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

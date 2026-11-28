@@ -125,7 +125,19 @@ Fica para depois:
 
 ## 4. Fase 3 — um bot por conta (multi-processo)
 
-Exige:
+**Feito (PR 1): worker por conta.** `python -m trading_bot.core.worker N` (ou `TRADING_BOT_ACCOUNT_ID=N`)
+lê a conta N no `platform.db`, decifra as chaves em memória, popula `os.environ` e só então importa
+`trading_bot.core.bot` (o `config` é montado do env no import; `.env` não sobrescreve o que já está no
+ambiente). Força: `BITGET_API_KEY/SECRET/PASSPHRASE` da conta, `BITGET_DEMO` (prod → false),
+`TRADING_BOT_EXCHANGE=bitget`, `TRADING_BOT_RUNTIME_DIR=runtime/accounts/N` (lock, state, trades.db e log
+isolados), Telegram/relatório diário/dashboard/métricas desligados, `TRADING_BOT_START_PAUSED=true` e
+`TRADING_BOT_CONTROL_FILE_ENABLED=true` (sem efeito até o PR 2). O resto (MARTINGALE_*, STRATEGY,
+TRADING_BOT_ENVIRONMENT...) herda do `.env`, igual à conta 1. Recusa conta 1, inexistente, inativa, não-bitget
+ou sem chaves. Conferir antes de subir: `TRADING_BOT_ACCOUNT_DRY=1 .venv/bin/python -m trading_bot.core.worker N`
+imprime o env com os segredos mascarados e sai sem importar o bot. Não subir na VM antes do PR 3
+(o `update_server.sh` atual não conhece o worker).
+
+Ainda exige:
 
 1. **Worker por conta**: processo próprio (`python -m trading_bot --account N`) com `.env` derivado da
    conta (chaves decifradas em memória, nunca em arquivo), `TradeStore` e `bot_state` por conta
