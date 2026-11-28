@@ -168,6 +168,14 @@ sem marcador = parado e não relançado. Sem `runtime/accounts/` nada muda. Cami
 5. `screen -ls` deve listar `bot` e `bot-accN`; `tail runtime/accounts/N/worker.out.log
    runtime/accounts/N/trading_bot.*.log` — lock, "Bitget em PRODUÇÃO", pausado.
 6. Retomar: acrescentar `"paused": false` em `runtime/accounts/N/control.json` (PR 2).
+
+**Feito (PR 4): heartbeat por conta.** O mesmo `scripts/heartbeat.py` do cron (a cada 2 min, entrada do
+cron inalterada) vigia, além da conta 1, cada `runtime/accounts/N/worker.enabled`: processo
+`-m trading_bot.core.worker N` vivo (pgrep ancorado — `worker 2` não casa `worker 22`) e mtime do
+`trading_bot.*.log` mais novo do diretório dentro de `HEARTBEAT_STALE_MINUTES` (sem log = caído). Estado e
+re-aviso (30 min) independentes por conta em `heartbeat_state.json["accounts"][N]`; o aviso vai para o mesmo
+Telegram do operador com o rótulo ` conta N` (as mensagens da conta 1 não mudam). Sem marcador = não vigia e
+esquece o estado; sem `runtime/accounts/` nada muda.
    Parar de vez: `rm runtime/accounts/N/worker.enabled` e rerodar o passo 4.
 
 Ainda exige:
