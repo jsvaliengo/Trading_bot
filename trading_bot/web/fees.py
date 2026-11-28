@@ -52,8 +52,9 @@ def _fetch(exchange, symbol: str) -> Dict[str, Any]:
     nxt = f.get("next_funding_time")
     row.update(funding_pct=f.get("rate_percent"), next_funding=nxt.isoformat() if isinstance(nxt, datetime) else None,
                at=datetime.now(timezone.utc).replace(microsecond=0).isoformat())
+    funding = f"{row['funding_pct']:.4f}%" if row["funding_pct"] is not None else "n/d"
     logger.info(f"Taxas de {symbol} via {row['fee_source']}: maker {row['maker_pct']:.4f}% | taker {row['taker_pct']:.4f}% "
-                f"| funding {row['funding_pct']}%")
+                f"| funding {funding}")
     return row
 
 
