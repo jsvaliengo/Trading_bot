@@ -4722,6 +4722,10 @@ class TradingBot:
                 if ctl["paused"] != self.paused:
                     self.paused = ctl["paused"]
                     logger.warning("⏸️ Pausado via control.json" if self.paused else "▶️ Retomado via control.json")
+                    try:
+                        self.save_state()   # o painel lê `paused` do bot_state.json; sem isto ficaria defasado até o save periódico
+                    except Exception as exc:
+                        logger.warning(f"⚠️ control.json: estado não salvo após pausa/retomada: {exc}")
             if ctl["new_cycles"] is not None and ctl["new_cycles"] != self.allow_new_cycles:
                 self.allow_new_cycles = ctl["new_cycles"]
                 logger.warning("🔋 Ciclos novos liberados via control.json" if self.allow_new_cycles

@@ -178,6 +178,24 @@ Telegram do operador com o rótulo ` conta N` (as mensagens da conta 1 não muda
 esquece o estado; sem `runtime/accounts/` nada muda.
    Parar de vez: `rm runtime/accounts/N/worker.enabled` e rerodar o passo 4.
 
+**Feito (PR 5): `WorkerAccount` no dashboard.** `account_bot()` (`trading_bot/web/app.py`) devolve, para uma
+conta com `runtime/accounts/N/` (marcador `worker.enabled` ou um `bot_state.*.json` já gravado), um
+`WorkerAccount` (`trading_bot/web/accounts.py`, subclasse do `ReadOnlyAccount`) em vez do handle só-leitura.
+Estado (`paused`, posições, capital inicial, pico, contadores, `start_time`) vem do `bot_state.*.json` mais novo
+do diretório (releitura a cada 2 s); trades/P&L/calendário/ranking do `trades.*.db` do worker (mesmo
+`TradeStore` da conta 1, aberto no processo do dashboard — SQLite em WAL aceita o leitor); saldo, mark price e
+extrato continuam vindo da Bitget com as chaves da conta, como na só-leitura. `running` = log
+`trading_bot.*.log` do worker escrito há < 5 min. Controles: Pausar/Retomar escrevem `paused` no `control.json`
+(merge; `new_cycles` preservado) e voltam na hora — o worker aplica no ciclo seguinte e agora salva o state
+imediatamente (o payload do state ganhou a chave `paused`), então o painel reflete a pausa em segundos; Fechar
+posição / Fechar tudo acrescentam um comando com id e esperam o ack em `control_ack.json` por até 15 s
+(erro do worker → 500 com a mensagem; sem resposta → 500 "não respondeu", o comando fica na fila). `has_bot`
+(`/api/me`, `/api/accounts`, `data-has-bot` do painel) passa a valer para contas com worker — os botões aparecem;
+trocar ambiente/desativar uma conta com worker é recusado. Conta sem `runtime/accounts/N/` segue só-leitura
+(409 nos controles); conta 1 e `?account` ausente continuam no bot do processo. Fora: painel do martingale
+(escada/pernas) para a conta com worker — precisa do runner, fica `null` (a planilha renderiza sem score).
+**Primeiro PR da fase que mexe no processo do dashboard: o deploy reinicia a conta 1 (~1 min de 502).**
+
 Ainda exige:
 
 1. **Worker por conta**: processo próprio (`python -m trading_bot --account N`) com `.env` derivado da

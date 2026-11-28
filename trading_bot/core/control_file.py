@@ -17,7 +17,8 @@ from __future__ import annotations
 import json
 import logging
 import os
-from typing import Any, Dict, Iterable, List, Tuple
+import uuid
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +88,24 @@ def write_control(runtime_dir: str, **fields: Any) -> Dict[str, Any]:
     raw = {**_raw_control(runtime_dir), **fields}
     _write_atomic(os.path.join(runtime_dir, CONTROL_FILE), raw)
     return raw
+
+
+def append_command(runtime_dir: str, cmd: str, symbol: Optional[str] = None, side: Optional[str] = None,
+                   reason: str = "dashboard") -> str:
+    """Acrescenta um comando (id novo) ao control.json preservando o resto; devolve o id. Lado do dashboard."""
+    raw = _raw_control(runtime_dir)
+    cmd_id = uuid.uuid4().hex
+    raw["commands"] = list(raw.get("commands") or []) + [
+        {"id": cmd_id, "cmd": cmd, "symbol": symbol, "side": side, "reason": reason}]
+    _write_atomic(os.path.join(runtime_dir, CONTROL_FILE), raw)
+    return cmd_id
+
+
+def find_ack(runtime_dir: str, cmd_id: str) -> Optional[Dict[str, Any]]:
+    """Ack de `cmd_id` em control_ack.json, ou None se o worker ainda não respondeu."""
+    acks, _ = _load(os.path.join(runtime_dir, ACK_FILE))
+    return next((a for a in acks if isinstance(a, dict) and str(a.get("id")) == cmd_id), None) \
+        if isinstance(acks, list) else None
 
 
 def consume_commands(runtime_dir: str, ids: Iterable[str], drop: Iterable[str] = ()) -> None:
