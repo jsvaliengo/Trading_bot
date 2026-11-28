@@ -87,6 +87,8 @@ class DashboardServer:
 
             self._thread = threading.Thread(target=_run, name="dashboard-server", daemon=True)
             self._thread.start()
+            from .credits import start_daemon
+            start_daemon(self._app.config["PLATFORM"])   # trava de crédito das contas com worker, painel aberto ou não
             self._started = True
             logger.info(f"📊 Dashboard ativo em http://{host}:{port}/ (auth Basic obrigatória)")
             return True

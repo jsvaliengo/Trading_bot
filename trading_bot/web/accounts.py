@@ -25,8 +25,8 @@ from flask import Flask, current_app, jsonify, request
 from ..core import control_file
 from ..core.bot_state_serde import BotStatePersistence
 from ..core.config import config
-from . import auth
-from .auth import login_required
+from . import auth, credits
+from .auth import admin_required, login_required
 from .platform import ENVIRONMENTS
 
 logger = logging.getLogger(__name__)
@@ -125,9 +125,10 @@ class WorkerAccount(ReadOnlyAccount):
 
     readonly = False
 
-    def __init__(self, exchange_client, runtime_dir: str) -> None:
+    def __init__(self, exchange_client, runtime_dir: str, account_id: int = 0) -> None:
         super().__init__(exchange_client)
         self.runtime_dir = runtime_dir
+        self.account_id = account_id
         self._state_cache: Dict[str, Any] = {}
         self._state_at = float("-inf")
         self._store = None
@@ -326,6 +327,38 @@ def register(app: Flask) -> None:
         store.set_account_active(account_id, active)
         logger.info(f"🧩 Conta {account_id} {'ativada' if active else 'desativada'} por {auth.current_user()['username']!r}")
         return jsonify({"ok": True, "account": store.account(account_id)})
+
+    @app.route("/api/accounts/<int:account_id>/credits")
+    @login_required
+    def account_credits(account_id: int):
+        """Saldo, percentual e extrato (últimos 50) dos créditos pré-pagos da conta."""
+        store = current_app.config["PLATFORM"]
+        if _owned(store, account_id) is None:
+            return _bad("conta não existe", 404)
+        return jsonify({"ok": True, **credits.summary(store, account_id)})
+
+    @app.route("/api/accounts/<int:account_id>/credits", methods=["POST"])
+    @admin_required
+    def account_credits_topup(account_id: int):
+        """Recarga manual (admin, após PIX/USDT): {amount, note, credit_pct?}. amount 0 só troca o percentual.
+        Reaplica a trava na hora: saldo > 0 religa new_cycles no control.json."""
+        store = current_app.config["PLATFORM"]
+        if store.account(account_id) is None:
+            return _bad("conta não existe", 404)
+        body = request.get_json(silent=True) or {}
+        try:
+            amount, pct = float(body.get("amount") or 0), body.get("credit_pct")
+            if amount < 0:
+                raise ValueError("valor precisa ser positivo")
+            if pct is not None:
+                store.set_credit_pct(account_id, float(pct))
+            if amount > 0:
+                store.add_credit(account_id, "topup", amount, str(body.get("ref") or "manual"), str(body.get("note") or ""))
+        except (TypeError, ValueError) as exc:
+            return _bad(str(exc) or "valor inválido")
+        who = auth.current_user()["username"]
+        logger.info(f"🪙 Conta {account_id}: recarga {amount:.2f} USDT" + (f", pct {pct}" if pct is not None else "") + f" por {who!r}")
+        return jsonify({"ok": True, **credits.settle_credits(store, account_id, worker_runtime_dir(account_id))})
 
     @app.route("/api/accounts/<int:account_id>/test", methods=["POST"])
     @login_required

@@ -109,6 +109,14 @@
     if (window.ResizeObserver) new ResizeObserver(([e]) => document.documentElement.style.setProperty('--top-h', e.target.offsetHeight + 'px')).observe(document.querySelector('.top'));
 
     // ───────── Topo + status ─────────
+    // Créditos pré-pagos (conta com worker e credit_pct > 0): verde ok, amarelo baixo, vermelho esgotado (ciclos novos não abrem)
+    function renderCredits(c) {
+        const el = $('credits-tag'); if (!el) return;
+        if (!c || !(c.credit_pct > 0)) { el.hidden = true; return; }
+        el.hidden = false;
+        el.textContent = c.exhausted ? `sem crédito — ciclos novos não abrem · ${fmt._usd(c.balance)}` : `créditos ${fmt._usd(c.balance)} · ${c.credit_pct}%`;
+        el.className = 'tag ' + (c.exhausted ? 'off' : c.low ? 'warn' : 'on');
+    }
     const BAR_MS = 4 * 3600e3;
     function renderTop(s, h, e) {
         const pill = $('state-pill');
@@ -1019,6 +1027,7 @@
         const hadFx = isNum(state.fx && state.fx.usd_brl); if (l.fx) state.fx = l.fx;
         if (!hadFx && isNum(state.fx && state.fx.usd_brl) && state.pnl) try { renderPnl(state.pnl); } catch (err) { console.error('render do P&L falhou', err); }
         try { renderLive(l); } catch (err) { console.error('render falhou', err); }
+        try { renderCredits(l.credits); } catch (err) { console.error('render dos créditos falhou', err); }
         try { chartSync(); } catch (err) { console.error('linhas do gráfico falharam', err); }
         resetCountdown();
         // trade fechou desde o último poll: o histórico mudou
@@ -1599,6 +1608,7 @@
                     <button class="btn good" data-act="test" type="button" ${a.has_keys ? '' : 'disabled'}>Testar conexão</button>
                     <button class="btn" data-act="edit" type="button">Editar</button>
                     <button class="btn warn" data-act="keys" type="button">Substituir chaves</button>
+                    ${IS_ADMIN && a.id !== 1 ? `<button class="btn" data-act="credits" data-pct="${a.credit_pct}" type="button">Créditos</button>` : ''}
                     <button class="btn ${a.active ? 'bad' : 'good'}" data-act="active" type="button" ${a.has_bot && a.active ? 'disabled title="conta do bot deste processo"' : ''}>${a.active ? 'Desativar' : 'Ativar'}</button>
                 </div></td></tr>`;
         }).join('');
@@ -1632,6 +1642,15 @@
                 if (ok) loadAccounts();
             } else if (act === 'keys') {
                 if (await formModal({ title: `Substituir chaves de ${name}`, hint: 'As três chaves são trocadas juntas; as antigas deixam de valer no painel.', submit: 'Substituir', fields: KEY_FIELDS, onSubmit: (v) => apiPost(`/api/accounts/${id}/keys`, v) })) loadAccounts();
+            } else if (act === 'credits') {
+                let cur = null; try { const r = await fetch(`/api/accounts/${id}/credits`, { credentials: 'include' }); cur = await r.json(); } catch (e) { cur = null; }
+                const ledger = cur && cur.ledger && cur.ledger.length ? '<br>Últimos lançamentos: ' + cur.ledger.slice(0, 5).map(e => `${e.kind === 'topup' ? '+' : '−'}${esc(fmt._usd(e.amount))} <small class="dim">${esc(fmt.dateTime(e.ts))}${e.note ? ' · ' + esc(e.note) : ''}</small>`).join('; ') : '';
+                const out = await formModal({ title: `Créditos de ${name}`, hint: `Saldo atual <b>${cur ? esc(fmt._usd(cur.balance)) : '—'}</b> (USDT). A recarga é manual, depois do PIX/USDT; com saldo ≤ 0 o martingale não abre ciclo novo.${ledger}`, submit: 'Lançar',
+                    fields: [{ name: 'amount', label: 'Recarga (USDT)', value: '0', hint: '0 = só alterar o percentual' },
+                             { name: 'credit_pct', label: '% do lucro líquido por ciclo positivo', value: b.dataset.pct },
+                             { name: 'note', label: 'Observação', placeholder: 'ex.: PIX 28/11' }],
+                    onSubmit: (v) => apiPost(`/api/accounts/${id}/credits`, { amount: Number(v.amount) || 0, credit_pct: Number(v.credit_pct), note: v.note }) });
+                if (out) { formModal({ title: `Créditos de ${name}`, hint: `Saldo agora <b>${esc(fmt._usd(out.balance))}</b> · ${out.credit_pct}% por ciclo${out.exhausted ? ' · <b>sem crédito: ciclos novos não abrem</b>' : ''}.` }); loadAccounts(); }
             } else if (act === 'active') {
                 const off = b.textContent === 'Desativar';
                 ask(off ? `Desativar ${name}` : `Ativar ${name}`, off ? 'Some do seletor e das rotas de dados; as chaves ficam guardadas. Dá pra reativar depois.' : 'Volta ao seletor e às rotas de dados.', async () => { try { await apiPost(`/api/accounts/${id}/active`, { active: !off }); loadAccounts(); } catch (err) { formModal({ title: 'Não deu', hint: esc(err.message) }); } });

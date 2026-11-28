@@ -67,6 +67,16 @@ CREATE TABLE IF NOT EXISTS withdraw_plans (
     notified_reached INTEGER NOT NULL DEFAULT 0,
     notified_ready INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS credit_ledger (
+    id INTEGER PRIMARY KEY,
+    account_id INTEGER NOT NULL REFERENCES accounts(id),
+    ts TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    amount REAL NOT NULL,
+    ref TEXT NOT NULL DEFAULT '',
+    note TEXT NOT NULL DEFAULT ''
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_credit_consume ON credit_ledger (account_id, ref) WHERE kind = 'consume';
 """
 
 
@@ -99,9 +109,11 @@ class PlatformStore:
             acols = {r["name"] for r in self._conn.execute("PRAGMA table_info(accounts)")}
             for col, ddl in (("active", "INTEGER NOT NULL DEFAULT 1"), ("last_check_at", "TEXT"),
                              ("last_check_ok", "INTEGER"), ("last_check_msg", "TEXT NOT NULL DEFAULT ''"),
-                             ("environment", "TEXT NOT NULL DEFAULT 'demo'")):
+                             ("environment", "TEXT NOT NULL DEFAULT 'demo'"),
+                             ("credit_pct", "REAL NOT NULL DEFAULT 20.0")):
                 if col not in acols:
                     self._conn.execute(f"ALTER TABLE accounts ADD COLUMN {col} {ddl}")
+            self._conn.execute("UPDATE accounts SET credit_pct = 0 WHERE id = 1")   # a conta do operador não paga
             # a coluna acabou de nascer: o seed ajusta a conta do bot ao ambiente do processo (fase 2b)
             self._environment_added = "environment" not in acols
 
@@ -197,7 +209,7 @@ class PlatformStore:
             return int(cur.lastrowid)
 
     _ACCOUNT_COLS = ("a.id, a.user_id, a.exchange, a.label, a.created_at, a.active, a.last_check_at, a.last_check_ok,"
-                     " a.last_check_msg, a.environment, a.api_key_enc, u.username AS owner")
+                     " a.last_check_msg, a.environment, a.credit_pct, a.api_key_enc, u.username AS owner")
 
     def _account_row(self, row) -> Dict[str, Any]:
         """Linha pública da conta: nunca secret/passphrase; da key só os 4 últimos caracteres."""
@@ -256,6 +268,35 @@ class PlatformStore:
         row = rows[0]
         return {"api_key": self.decrypt(row["api_key_enc"]), "api_secret": self.decrypt(row["api_secret_enc"]),
                 "passphrase": self.decrypt(row["passphrase_enc"])}
+
+    # ---- créditos pré-pagos (docs/PLATAFORMA.md §4, PR 6): saldo = topup − consume ----
+    def set_credit_pct(self, account_id: int, pct: float) -> None:
+        if not 0 <= pct <= 100:
+            raise ValueError("percentual precisa estar entre 0 e 100")
+        with self._lock, self._conn:
+            self._conn.execute("UPDATE accounts SET credit_pct = ? WHERE id = ?", (float(pct), account_id))
+
+    def add_credit(self, account_id: int, kind: str, amount: float, ref: str = "", note: str = "") -> bool:
+        """Lança topup/consume (amount > 0). consume é idempotente por (account_id, ref): repetido → False."""
+        if kind not in ("topup", "consume"):
+            raise ValueError("kind precisa ser topup ou consume")
+        if not amount > 0:
+            raise ValueError("valor precisa ser positivo")
+        with self._lock, self._conn:
+            cur = self._conn.execute(
+                "INSERT OR IGNORE INTO credit_ledger (account_id, ts, kind, amount, ref, note) VALUES (?, ?, ?, ?, ?, ?)",
+                (account_id, datetime.now(timezone.utc).isoformat(), kind, float(amount), ref, note[:200]))
+            return cur.rowcount > 0
+
+    def credit_balance(self, account_id: int) -> float:
+        rows = self._select("SELECT COALESCE(SUM(CASE kind WHEN 'topup' THEN amount ELSE -amount END), 0) AS bal"
+                            " FROM credit_ledger WHERE account_id = ?", (account_id,))
+        return float(rows[0]["bal"])
+
+    def credit_ledger(self, account_id: int, limit: int = 50) -> List[Dict[str, Any]]:
+        rows = self._select("SELECT id, ts, kind, amount, ref, note FROM credit_ledger WHERE account_id = ?"
+                            " ORDER BY id DESC LIMIT ?", (account_id, int(limit)))
+        return [dict(r) for r in rows]
 
     # ---- plano de saque (um ativo por conta; criar outro cancela o anterior) ----
     _PLAN_FIELDS = ("monthly_target_brl", "fx_at_creation", "days_per_month", "daily_target_usd", "monthly_target_usd",
@@ -318,5 +359,6 @@ class PlatformStore:
             logger.warning("🔐 Sem segredo da plataforma: conta 1 criada sem as chaves (defina TRADING_BOT_PLATFORM_SECRET)")
             creds = {k: "" for k in creds}
         account_id = self.create_account(user_id, exchange, label=f"{exchange} principal", environment=environment, **creds)
+        self.set_credit_pct(account_id, 0)   # a conta do operador não paga crédito (banco novo: a migração rodou antes dela existir)
         logger.info(f"🧩 Plataforma: usuário {user_id} ({username}) e conta {account_id} ({exchange}) criados do .env")
         return {"user_id": user_id, "account_id": account_id}
