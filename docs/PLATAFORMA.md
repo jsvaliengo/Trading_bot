@@ -137,6 +137,18 @@ ou sem chaves. Conferir antes de subir: `TRADING_BOT_ACCOUNT_DRY=1 .venv/bin/pyt
 imprime o env com os segredos mascarados e sai sem importar o bot. Não subir na VM antes do PR 3
 (o `update_server.sh` atual não conhece o worker).
 
+**Feito (PR 2): canal de controle `control.json`.** O dashboard escreve `runtime/accounts/N/control.json`
+(`trading_bot/core/control_file.py: write_control`); o worker lê a cada ciclo do monitor
+(`TradingBot._apply_control_file`, só com `TRADING_BOT_CONTROL_FILE_ENABLED=true` — a conta 1 nunca lê).
+Formato: `{"paused": bool, "new_cycles": bool, "commands": [{"id", "cmd": "close_all"|"close_position",
+"symbol", "side", "reason"}]}`. `paused` e os comandos são consumidos (somem do arquivo depois de
+aplicados; assim o stop de portfólio/kill switch pausam sem o arquivo religar); cada comando ganha um ack
+`{"id", "ok", "error", "at"}` em `control_ack.json`. `new_cycles` é estado e fica: `false` = conta
+pré-paga sem crédito — o martingale não abre ciclo novo (base de uma perna zerada), mas ciclos abertos
+continuam adicionando níveis e fecham no TP normalmente; `true` libera. Latência = ciclo do monitor.
+Retomar uma conta à mão: acrescentar `"paused": false` em `runtime/accounts/N/control.json` (editar, não
+sobrescrever: `new_cycles` deve ser preservado).
+
 Ainda exige:
 
 1. **Worker por conta**: processo próprio (`python -m trading_bot --account N`) com `.env` derivado da
