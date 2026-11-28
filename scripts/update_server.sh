@@ -195,4 +195,25 @@ else
   exit 1
 fi
 
+# Workers por conta (fase 3): um screen 'bot-accN' por runtime/accounts/N/worker.enabled
+# (marcador criado à mão). O wrapper já foi encerrado acima (WRAPPER_PROCESS_PATTERN casa
+# todos os run_bot_loop.sh), então aqui só resta o python do worker. Diretório sem
+# marcador = worker parado e não relançado. Sem runtime/accounts/ nada acontece.
+for acc_dir in "$RUNTIME_DIR"/accounts/[0-9]*/; do
+  acc_dir="${acc_dir%/}"
+  acc="$(basename "$acc_dir")"
+  [[ -d "$acc_dir" && "$acc" =~ ^[0-9]+$ && "$acc" != "1" ]] || continue
+  worker_screen="bot-acc${acc}"
+  worker_pattern="python.*-m[[:space:]]+trading_bot\\.core\\.worker[[:space:]]+${acc}([[:space:]]|\$)"
+  stop_pattern "Worker da conta $acc" "$worker_pattern" 8 \
+    || log "AVISO: worker da conta $acc sobreviveu ao SIGKILL — seguindo mesmo assim."
+  screen -S "$worker_screen" -X quit >/dev/null 2>&1 || true
+  if [[ ! -f "$acc_dir/worker.enabled" ]]; then
+    log "Conta $acc sem worker.enabled — worker não relançado."
+    continue
+  fi
+  log "Subindo sessão screen '$worker_screen' (worker da conta $acc) via wrapper de auto-restart..."
+  screen -dmS "$worker_screen" bash -lc "PROJECT_DIR='$PROJECT_DIR' PYTHON_BIN='$PYTHON_BIN' BOT_MODULE='trading_bot.core.worker' BOT_ARGS='$acc' RESTART_LOG='$acc_dir/restart.log' '$BOT_WRAPPER' >> '$acc_dir/worker.out.log' 2>&1"
+done
+
 log "Concluído."

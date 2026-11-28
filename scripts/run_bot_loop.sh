@@ -10,7 +10,9 @@ set -u
 PROJECT_DIR="${PROJECT_DIR:-/home/ubuntu/trading_bot}"
 PYTHON_BIN="${PYTHON_BIN:-$PROJECT_DIR/.venv/bin/python}"
 BOT_MODULE="${BOT_MODULE:-trading_bot.core.bot}"
-RESTART_LOG="$PROJECT_DIR/runtime/restart.log"
+# Worker por conta (fase 3): BOT_MODULE=trading_bot.core.worker BOT_ARGS=N RESTART_LOG=runtime/accounts/N/restart.log
+BOT_ARGS="${BOT_ARGS:-}"
+RESTART_LOG="${RESTART_LOG:-$PROJECT_DIR/runtime/restart.log}"
 BACKOFF_BASE=5
 BACKOFF_MAX=60
 backoff=$BACKOFF_BASE
@@ -32,7 +34,8 @@ fi
 while true; do
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] Iniciando bot (backoff=${backoff}s)" >> "$RESTART_LOG"
     start_ts=$(date +%s)
-    "$PYTHON_BIN" -m "$BOT_MODULE"
+    # shellcheck disable=SC2086  # BOT_ARGS é lista separada por espaço, de propósito
+    "$PYTHON_BIN" -m "$BOT_MODULE" $BOT_ARGS
     exit_code=$?
     run_secs=$(( $(date +%s) - start_ts ))
     # Se o bot rodou > 60s era uma instância estável (não crash-loop): reseta o
