@@ -22,7 +22,7 @@ from flask import Flask, Response, abort, jsonify, redirect, render_template, re
 from flask_socketio import SocketIO
 
 from ..core.config import config, exchange_label
-from . import accounts, auth, credits, klines, users
+from . import accounts, assistant_routes, auth, credits, klines, users
 from .auth import login_required
 from .data import _deploy_info, collect_history, collect_live, collect_snapshot, collect_summary
 from .platform import PlatformStore
@@ -113,6 +113,7 @@ def create_app(bot) -> tuple[Flask, SocketIO]:
     klines.register(app)
     users.register(app)
     accounts.register(app)
+    assistant_routes.register(app)
     _register_sockets(socketio)
     return app, socketio
 
@@ -153,6 +154,8 @@ def _register_routes(app: Flask, socketio: SocketIO) -> None:
             handles[account_id] = accounts.WorkerAccount(client, worker_dir, account_id) if worker_dir else accounts.ReadOnlyAccount(client)
         return handles[account_id]
 
+    app.config["ACCOUNT_BOT"] = account_bot   # outras rotas de conta (assistant_routes) resolvem a conta do mesmo jeito
+
     @app.route("/")
     @login_required
     def index():
@@ -167,6 +170,7 @@ def _register_routes(app: Flask, socketio: SocketIO) -> None:
             user=user,
             accounts=[a for a in app.config["PLATFORM"].accounts_for(user["id"]) if a["active"]],
             bots={a["id"] for a in app.config["PLATFORM"].accounts_for(user["id"]) if accounts.has_bot(a["id"])},
+            assistant_enabled=bool(getattr(config, "ASSISTANT_ENABLED", False)),
         )
 
     @app.route("/login", methods=["GET", "POST"])

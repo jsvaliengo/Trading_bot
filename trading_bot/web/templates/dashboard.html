@@ -74,6 +74,7 @@
     </div>
     <time class="clock" id="clock" aria-label="Hora em São Paulo">--:--:--</time>
     <button class="icon-btn" id="theme-toggle" type="button" aria-label="Alternar tema claro/escuro" title="Tema">◐</button>
+    {% if assistant_enabled %}<button class="btn btn-quiet btn-xs" id="assistant-btn" type="button" title="Assistente da conta: pergunte sobre estado, trades, P&amp;L, taxas e créditos (só leitura)" hidden>Assistente</button>{% endif %}
     {% if accounts|length > 1 %}<select class="acct-sel" id="acct-sel" aria-label="Conta" title="Conta exibida no painel">{% for a in accounts %}<option value="{{ a.id }}" data-has-bot="{{ '1' if a.id in bots else '0' }}" data-env="{{ a.environment }}">{{ a.label }} · {{ 'PROD' if a.environment == 'prod' else 'DEMO' }}</option>{% endfor %}</select><span class="tag" id="acct-env" title="Ambiente da conta exibida"></span>{% endif %}
     <div class="profile" id="profile"><button class="profile-btn" id="profile-btn" type="button" title="Meu perfil: trocar a senha"><span class="avatar" aria-hidden="true">{{ (user.display_name or user.username or '?')[:1]|upper }}</span><span class="profile-name">{{ user.display_name or user.username }}<small>{{ 'admin · ' if user.role == 'admin' else '' }}{{ accounts|length }} conta(s)</small></span></button>
         <form class="user-menu" action="/logout" method="post"><input type="hidden" name="csrf" value="{{ csrf_token }}"><button class="btn btn-quiet btn-xs" type="submit">Sair</button></form></div>
@@ -649,6 +650,19 @@
 </div><!-- /.main -->
 </div><!-- /.shell -->
 
+{% if assistant_enabled %}
+<!-- Assistente da conta: painel lateral só-leitura (POST /api/assistant). Mostrado só quando a conta exibida tem bot. -->
+<aside class="assistant" id="assistant" aria-label="Assistente da conta" hidden>
+    <header class="assistant-head"><h3>Assistente</h3><small class="dim" id="assistant-quota"></small><button type="button" class="btn btn-quiet btn-xs" id="assistant-close" aria-label="Fechar">✕</button></header>
+    <p class="cs">Só lê os dados desta conta e explica; não opera nem recomenda ordens.</p>
+    <div class="assistant-msgs" id="assistant-msgs" aria-live="polite"></div>
+    <p class="login-error" id="assistant-error" role="alert" hidden></p>
+    <form class="assistant-form" id="assistant-form">
+        <textarea id="assistant-input" rows="2" maxlength="2000" placeholder="Pergunte sobre a conta…" required></textarea>
+        <button class="btn btn-primary" type="submit" id="assistant-send">Enviar</button>
+    </form>
+</aside>
+{% endif %}
 <div class="modal" id="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="confirm-title" hidden>
     <div class="modal-card">
         <h3 id="confirm-title">Confirmar</h3>
@@ -682,5 +696,6 @@
 <script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"></script>
 <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 <script src="{{ static_url('js/main.js') }}"></script>
+{% if assistant_enabled %}<script src="{{ static_url('js/assistant.js') }}"></script>{% endif %}
 </body>
 </html>

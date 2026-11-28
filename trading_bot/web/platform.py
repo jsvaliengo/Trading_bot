@@ -77,6 +77,24 @@ CREATE TABLE IF NOT EXISTS credit_ledger (
     note TEXT NOT NULL DEFAULT ''
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_credit_consume ON credit_ledger (account_id, ref) WHERE kind = 'consume';
+CREATE TABLE IF NOT EXISTS assistant_conversations (
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    account_id INTEGER NOT NULL REFERENCES accounts(id),
+    created_at TEXT NOT NULL,
+    title TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS assistant_messages (
+    id INTEGER PRIMARY KEY,
+    conversation_id INTEGER NOT NULL REFERENCES assistant_conversations(id),
+    ts TEXT NOT NULL,
+    role TEXT NOT NULL,
+    content TEXT NOT NULL,
+    tool_calls_json TEXT NOT NULL DEFAULT '[]',
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_assistant_msgs_conv ON assistant_messages (conversation_id, id);
 """
 
 
@@ -332,6 +350,47 @@ class PlatformStore:
         with self._lock, self._conn:
             self._conn.execute("UPDATE withdraw_plans SET status = 'cancelled' WHERE account_id = ? AND status IN ('active', 'reached')",
                                (account_id,))
+
+    # ---- assistente da conta (histórico + cota diária) ----
+    def create_conversation(self, user_id: int, account_id: int, title: str = "") -> int:
+        with self._lock, self._conn:
+            cur = self._conn.execute("INSERT INTO assistant_conversations (user_id, account_id, created_at, title) VALUES (?, ?, ?, ?)",
+                                     (user_id, account_id, datetime.now(timezone.utc).isoformat(), title[:80]))
+            return int(cur.lastrowid)
+
+    def conversation(self, conversation_id: int, user_id: int, account_id: int) -> Optional[Dict[str, Any]]:
+        """Conversa se existe E é deste usuário nesta conta (uma conversa nunca atravessa conta/usuário)."""
+        rows = self._select("SELECT * FROM assistant_conversations WHERE id = ? AND user_id = ? AND account_id = ?",
+                            (conversation_id, user_id, account_id))
+        return dict(rows[0]) if rows else None
+
+    def add_message(self, conversation_id: int, role: str, content: str, tool_calls: Optional[List[str]] = None,
+                    input_tokens: int = 0, output_tokens: int = 0) -> int:
+        with self._lock, self._conn:
+            cur = self._conn.execute(
+                "INSERT INTO assistant_messages (conversation_id, ts, role, content, tool_calls_json, input_tokens, output_tokens)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (conversation_id, datetime.now(timezone.utc).isoformat(), role, content, json.dumps(tool_calls or []),
+                 int(input_tokens), int(output_tokens)))
+            return int(cur.lastrowid)
+
+    def messages(self, conversation_id: int, limit: int = 50) -> List[Dict[str, Any]]:
+        """Últimas `limit` mensagens em ordem cronológica."""
+        rows = self._select("SELECT * FROM (SELECT * FROM assistant_messages WHERE conversation_id = ? ORDER BY id DESC LIMIT ?)"
+                            " ORDER BY id ASC", (conversation_id, int(limit)))
+        out = []
+        for r in rows:
+            m = dict(r)
+            m["tool_calls"] = json.loads(m.pop("tool_calls_json") or "[]")
+            out.append(m)
+        return out
+
+    def user_messages_today(self, user_id: int) -> int:
+        """Mensagens `role='user'` deste usuário no dia UTC corrente (todas as contas/conversas): base da cota."""
+        day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        rows = self._select("SELECT COUNT(*) AS n FROM assistant_messages m JOIN assistant_conversations c ON c.id = m.conversation_id"
+                            " WHERE c.user_id = ? AND m.role = 'user' AND substr(m.ts, 1, 10) = ?", (user_id, day))
+        return int(rows[0]["n"])
 
     # ---- seed ----
     def seed_from_env(self, config) -> Dict[str, int]:

@@ -971,6 +971,10 @@ class TradingConfig:
 
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "").strip()
 
+    # Assistente da conta (chat só-leitura no dashboard, docs/PLATAFORMA.md §6). Modelo pinado em ai/assistant.py.
+    ASSISTANT_ENABLED: bool = _env_bool("TRADING_BOT_ASSISTANT_ENABLED", False)
+    ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "").strip()
+
     # ============================================
     # RESILIÊNCIA DE API (retry/backoff)
     # ============================================

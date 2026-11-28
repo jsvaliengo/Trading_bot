@@ -241,6 +241,42 @@ por conta, perfil por conta, Socket.IO para workers, systemd no lugar do screen.
 |---|---|---|
 | `TRADING_BOT_PLATFORM_DB_PATH` | caminho do `platform.db` | `runtime/platform.db` |
 | `TRADING_BOT_PLATFORM_SECRET` | segredo da cifra das chaves | cai em `TRADING_BOT_DASHBOARD_SECRET_KEY` |
+| `TRADING_BOT_ASSISTANT_ENABLED` | liga o assistente de IA do painel (§6) | `false` |
+| `ANTHROPIC_API_KEY` | chave do SDK `anthropic` usada só pelo assistente (processo do dashboard) | vazio → rotas respondem 502 |
 
 Sem segredo nenhum, o seed cria a conta 1 **sem** as chaves e avisa no log (o bot continua usando o
 .env normalmente; só a tabela fica sem elas).
+
+## 6. Assistente de IA (PR A)
+
+Chat lateral no dashboard (botão **Assistente** no topo, só com `TRADING_BOT_ASSISTANT_ENABLED=true` e numa conta
+com bot/worker) que explica a conta ao dono dela com os números reais: estado, trades, P&L, taxas/faixa da planilha,
+créditos e trechos desta documentação. Desenho em `trading_bot/ai/assistant.py` + `trading_bot/web/assistant_routes.py`.
+
+**O que faz.** `POST /api/assistant?account=N {message, conversation_id?}` → `{conversation_id, reply, tool_calls,
+usage, remaining_today}`; `GET /api/assistant/history?account=N&conversation_id=` → últimas 50 mensagens. Modelo
+`claude-sonnet-5-5` (constante, SDK oficial `anthropic`, thinking desligado, effort low, `max_tokens` 1024, timeout 60 s)
+num loop tool-use de até 4 leituras por mensagem. Ferramentas, todas só-leitura e amarradas ao handle que `account_bot()`
+resolveu para a sessão (o modelo nunca escolhe a conta): `estado` (pausado/rodando, equity, P&L, pico, posições,
+pernas do martingale), `trades` (últimos ≤ 50 fechados do `TradeStore` da conta), `pnl` (mesmo `build_report` do
+`/api/pnl_report`), `taxas_planilha` (`build_fees` + faixa CoinTech2u da equity), `creditos` (`credits.summary`; vazio
+na conta 1), `docs` (trechos de `MARTINGALE_HEDGE.md`/`PLATAFORMA.md` por palavra-chave, ≤ 4k chars). Resultado de
+ferramenta vai como JSON passado por `redact()` e truncado: é dado, não instrução (o system diz isso). Histórico em
+`platform.db` (`assistant_conversations`, `assistant_messages`), uma conversa nunca atravessa usuário/conta.
+
+**O que nunca faz.** Não opera: nenhuma ferramenta de ordem, pausa, `control.json`, parâmetros ou recarga — nem com
+confirmação. Não sugere ordens específicas, não dá conselho de investimento, não promete retorno; sem dado, diz que
+não tem. Nunca roda dentro do bot/worker (só no processo web) e nunca vê chaves (as ferramentas usam o handle já
+autenticado; `ANTHROPIC_API_KEY` fica no cliente do SDK).
+
+**Limites.** `login_required` + CSRF (`X-CSRF-Token`) no POST; conta que não é do usuário → 404 antes de tocar no
+modelo; cota de **20 mensagens/usuário/dia UTC** (`role='user'` em `assistant_messages`) → 429 (PR D troca por
+débito no ledger de créditos); 1 pedido em voo por usuário → 409; erro/timeout do provedor → 502 e nada gravado.
+A chamada roda num `ThreadPoolExecutor(2)` do módulo para não ocupar os workers do Flask.
+
+**Custo (estimativa do desenho).** ≈ US$ 0,10–0,15 por conversa de 6 mensagens com Sonnet 5.5 (system+tools em
+cache, ~2 leituras/turno); 20 msgs/dia × 10 contas ≈ US$ 3–5/dia no pior caso (teto pela cota).
+
+**Deploy.** `update_server.sh` roda `pip install -r requirements.txt` (nova dependência `anthropic`). Com a flag
+desligada (default) nada muda no painel; ligar = `TRADING_BOT_ASSISTANT_ENABLED=true` + `ANTHROPIC_API_KEY` no `.env`
+da VM e restart do dashboard (~1 min de 502, como todo PR que mexe no processo).
