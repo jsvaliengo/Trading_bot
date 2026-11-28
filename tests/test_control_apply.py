@@ -97,3 +97,15 @@ def test_flag_off_reads_nothing(bot, tmp_path, monkeypatch):
     if config.CONTROL_FILE_ENABLED:
         bot._apply_control_file()
     assert bot.paused is False and _control(tmp_path) == {"paused": True}
+
+
+def test_paused_via_control_saves_state_at_once(bot, tmp_path):
+    """O painel da conta lê `paused` do bot_state.json: a pausa/retomada via control.json salva o state na hora
+    (não espera o save periódico). Sem state_file configurado, o apply segue e consome o paused mesmo assim."""
+    cf.write_control(str(tmp_path), paused=True)
+    bot._apply_control_file()                                           # bot de teste sem _state_file_path: só avisa
+    assert bot.paused is True and _control(tmp_path) == {"commands": []}
+    bot._state_file_path = str(tmp_path / "bot_state.test.json")
+    cf.write_control(str(tmp_path), paused=False)
+    bot._apply_control_file()
+    assert json.loads((tmp_path / "bot_state.test.json").read_text())["paused"] is False

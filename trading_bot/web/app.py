@@ -125,8 +125,9 @@ def _register_routes(app: Flask, socketio: SocketIO) -> None:
 
     def account_bot(control: bool = False):
         """Bot da conta pedida (?account=N; default = a 1ª conta ativa do usuário logado). 404 se a conta
-        não existe, está inativa ou não é do usuário. Conta sem bot neste processo → handle só-leitura
-        (saldo/posições/fills direto da exchange); com `control=True` essa conta responde 409."""
+        não existe, está inativa ou não é do usuário. Conta com worker próprio (runtime/accounts/N) →
+        WorkerAccount (arquivos do worker + control.json); sem bot nem worker → handle só-leitura
+        (saldo/posições/fills direto da exchange), que com `control=True` responde 409."""
         user = auth.current_user()
         mine = [a for a in app.config["PLATFORM"].accounts_for(user["id"]) if a["active"]]
         raw = request.args.get("account")
@@ -139,14 +140,17 @@ def _register_routes(app: Flask, socketio: SocketIO) -> None:
             abort(404)
         if account_id in app.config["BOTS"]:
             return app.config["BOTS"][account_id]
-        if control:
+        worker_dir = accounts.worker_runtime_dir(account_id)
+        if control and worker_dir is None:
             abort(409)
         handles = app.config["HANDLES"]
-        if account_id not in handles:
+        # handle só-leitura criado antes do worker aparecer é trocado pelo WorkerAccount
+        if type(handles.get(account_id)) is not (accounts.WorkerAccount if worker_dir else accounts.ReadOnlyAccount):
             creds = app.config["PLATFORM"].account_credentials(account_id)
             if not all(creds.values()):
                 abort(404)   # sem chaves não há o que ler
-            handles[account_id] = accounts.ReadOnlyAccount(accounts.exchange_client(acc["exchange"], creds, acc["environment"]))
+            client = accounts.exchange_client(acc["exchange"], creds, acc["environment"])
+            handles[account_id] = accounts.WorkerAccount(client, worker_dir) if worker_dir else accounts.ReadOnlyAccount(client)
         return handles[account_id]
 
     @app.route("/")
@@ -162,7 +166,7 @@ def _register_routes(app: Flask, socketio: SocketIO) -> None:
             csrf_token=auth.csrf_token(),
             user=user,
             accounts=[a for a in app.config["PLATFORM"].accounts_for(user["id"]) if a["active"]],
-            bots=set(app.config["BOTS"]),
+            bots={a["id"] for a in app.config["PLATFORM"].accounts_for(user["id"]) if accounts.has_bot(a["id"])},
         )
 
     @app.route("/login", methods=["GET", "POST"])
@@ -219,8 +223,8 @@ def _register_routes(app: Flask, socketio: SocketIO) -> None:
     @login_required
     def me():
         user = auth.current_user()
-        accounts = [{**a, "has_bot": a["id"] in app.config["BOTS"]} for a in app.config["PLATFORM"].accounts_for(user["id"])]
-        return jsonify({"user": user, "accounts": accounts})
+        rows = [{**a, "has_bot": accounts.has_bot(a["id"])} for a in app.config["PLATFORM"].accounts_for(user["id"])]
+        return jsonify({"user": user, "accounts": rows})
 
     @app.route("/api/snapshot")
     @login_required

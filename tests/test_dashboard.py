@@ -2553,3 +2553,117 @@ def test_fees_tab_in_template_fetches_on_open_and_every_5min_while_visible():
     assert "const FEES_MS = 300000;" in js and "if (pnlState.tab === 'fees' && !document.hidden) fetchFees();" in js
     assert "if (pnlState.tab === 'fees') fetchFees();" in js and "await fetch('/api/fees', { credentials: 'include' })" in js
     assert "FEE_SOURCE = { conta: ['l', 'efetiva da conta'], contrato: ['u', 'padrão do contrato'] }" in js
+
+
+# ---------- Fase 3: WorkerAccount (conta com runtime/accounts/N) ----------
+
+
+def _worker_account(monkeypatch, tmp_path, *, state=True, trades=True):
+    """App + conta da maria com worker (runtime/accounts/N com bot_state + trades.db fabricados) e uma conta sem worker."""
+    import json
+    from trading_bot.core.trade_store import TradeStore
+    monkeypatch.setattr(global_config, "RUNTIME_DIR", str(tmp_path / "rt"), raising=False)
+    monkeypatch.setattr(global_config, "PNL_SINCE_UTC", "", raising=False)
+    app, made = _app_with_secret(monkeypatch)
+    store = app.config["PLATFORM"]
+    uid = store.create_user("maria", "senha-forte")
+    aid = store.create_account(uid, "bitget", "com worker", **_FAKE_KEYS)
+    plain = store.create_account(uid, "bitget", "sem worker", **_FAKE_KEYS)
+    d = tmp_path / "rt" / "accounts" / str(aid)
+    d.mkdir(parents=True)
+    if state:
+        (d / "bot_state.prod.mainnet.json").write_text(json.dumps({
+            "paused": True, "initial_capital": 150.0, "total_pnl": 3.0, "closed_trades_count": 2,
+            "martingale_peak_equity": 160.0, "start_time": "2026-11-28T10:00:00+00:00",
+            "known_positions": {"ADAUSDT_LONG": {"symbol": "ADAUSDT", "side": "LONG", "entry_price": 0.5, "quantity": 100.0,
+                                                 "strategy_name": "martingale_hedge", "strategy_type": "martingale_hedge"}},
+        }))
+    else:
+        (d / "worker.enabled").write_text("")
+    if trades:
+        ts = TradeStore(str(d / "trades.prod.mainnet.db"))
+        now = datetime.now(timezone.utc)
+        for i, (pnl, reason) in enumerate(((1.2, "Take Profit"), (-0.4, "Manual (dashboard)"))):
+            ts.record_open({"opened_at": (now - timedelta(hours=3 + i)).isoformat(), "symbol": "ADAUSDT", "side": "LONG",
+                            "entry_price": 0.5, "qty": 100.0, "strategy_name": "martingale_hedge"})
+            ts.record_close(symbol="ADAUSDT", side="LONG", entry_price=0.5, exit_price=0.51, exit_at=(now - timedelta(hours=1 + i)).isoformat(),
+                            pnl_gross=pnl, pnl_net=pnl, fees=0.0, close_reason=reason, strategy_name="martingale_hedge")
+        ts.close()
+    client = app.test_client()
+    _login(client, user="maria", pw="senha-forte")
+    return app, client, aid, plain, d, made
+
+
+def test_worker_account_reads_state_and_trades_from_worker_files(monkeypatch, tmp_path):
+    """Conta com runtime/accounts/N: paused/posições/capital do bot_state.*.json, trades do trades.*.db do worker,
+    saldo/mark price da exchange com as chaves da conta; has_bot=1 liga os controles no painel. Conta 1 inalterada."""
+    from trading_bot.web import accounts as acc_mod
+    app, client, aid, plain, d, made = _worker_account(monkeypatch, tmp_path)
+    live = client.get(f"/api/live?account={aid}").get_json()
+    s = live["summary"]
+    assert s["paused"] is True and s["running"] is False and s["initial_capital"] == 150.0 and s["closed_trades"] == 2
+    assert [(p["symbol"], p["strategy_name"], p["mark_price"]) for p in live["positions"]] == [("ADAUSDT", "martingale_hedge", 0.51)]
+    assert len(made) == 1 and made[0].creds == _FAKE_KEYS
+    assert isinstance(app.config["HANDLES"][aid], acc_mod.WorkerAccount) and app.config["HANDLES"][aid].peak_equity == 160.0
+    (d / "trading_bot.prod.mainnet.log").write_text("x")   # log fresco = worker rodando
+    monkeypatch.setattr(acc_mod, "STATE_TTL_S", 0.0)
+    assert client.get(f"/api/summary?account={aid}").get_json()["running"] is True
+    p = client.get(f"/api/pnl_report?account={aid}").get_json()
+    assert p["totals"]["trades"] == 2 and p["totals"]["net"] == pytest.approx(0.8) and sorted(t["pnl_net"] for t in p["trades"]) == [-0.4, 1.2]
+    assert {a["id"]: a["has_bot"] for a in client.get("/api/me").get_json()["accounts"]} == {aid: True, plain: False}
+    html = client.get("/").data.decode()
+    assert f'<option value="{aid}" data-has-bot="1"' in html and f'<option value="{plain}" data-has-bot="0"' in html
+    assert client.get(f"/api/live?account={plain}").get_json()["summary"]["paused"] is False   # só-leitura, como antes
+    assert _post(client, f"/api/accounts/{aid}/environment", {"environment": "prod"}).status_code == 400   # worker segue o processo
+    admin = app.test_client()
+    _login(admin)
+    assert admin.post("/api/control/pause").get_json() == {"ok": True, "paused": True} and app.config["BOT"].paused is True
+
+
+def test_worker_account_pause_resume_write_control_and_plain_account_still_409(monkeypatch, tmp_path):
+    import json
+    from trading_bot.core import control_file as cf
+    app, client, aid, plain, d, _ = _worker_account(monkeypatch, tmp_path, state=False, trades=False)
+    assert client.get(f"/api/summary?account={aid}").get_json()["paused"] is True   # sem state ainda: worker nasce pausado
+    cf.write_control(str(d), new_cycles=False)
+    assert client.post(f"/api/control/resume?account={aid}").get_json() == {"ok": True, "paused": False}
+    assert json.loads((d / cf.CONTROL_FILE).read_text()) == {"new_cycles": False, "paused": False}   # merge: new_cycles preservado
+    assert client.post(f"/api/control/pause?account={aid}").status_code == 200
+    assert cf.read_control(str(d))["paused"] is True
+    for path in ("/api/control/pause", "/api/control/resume", "/api/control/close_all"):
+        assert client.post(f"{path}?account={plain}").status_code == 409
+
+
+def test_worker_account_close_commands_wait_for_ack(monkeypatch, tmp_path):
+    """close_position/close_all viram comando no control.json e esperam o ack: ok → 200; erro do worker → 500 com a
+    mensagem; sem resposta → 500 'não respondeu' (comando fica na fila)."""
+    import threading
+    import time
+    from trading_bot.core import control_file as cf
+    from trading_bot.web import accounts as acc_mod
+    monkeypatch.setattr(acc_mod, "ACK_TIMEOUT_S", 0.3)
+    monkeypatch.setattr(acc_mod, "ACK_POLL_S", 0.02)
+    app, client, aid, plain, d, _ = _worker_account(monkeypatch, tmp_path, trades=False)
+
+    def fake_worker(ok, error=""):
+        def run():
+            for _ in range(100):
+                cmds = cf.read_control(str(d))["commands"]
+                if cmds:
+                    cf.write_ack(str(d), [{"id": cmds[0]["id"], "ok": ok, "error": error, "at": "t"}])
+                    cf.consume_commands(str(d), [cmds[0]["id"]])
+                    return
+                time.sleep(0.01)
+        threading.Thread(target=run, daemon=True).start()
+
+    r = client.post(f"/api/positions/ADAUSDT/close?account={aid}", json={"confirm": "ADAUSDT", "side": "LONG"})
+    assert r.status_code == 500 and "não respondeu" in r.get_json()["error"]
+    pending = cf.read_control(str(d))["commands"]
+    assert [(c["cmd"], c["symbol"], c["side"], c["reason"]) for c in pending] == [("close_position", "ADAUSDT", "LONG", "Manual (dashboard)")]
+    cf.consume_commands(str(d), [pending[0]["id"]])
+    fake_worker(True)
+    assert client.post(f"/api/positions/ADAUSDT/close?account={aid}", json={"confirm": "ADAUSDT"}).get_json() == {"ok": True, "symbol": "ADAUSDT"}
+    assert cf.read_control(str(d))["commands"] == []
+    fake_worker(False, "ADAUSDT não tem posição aberta")
+    r = client.post(f"/api/control/close_all?account={aid}", json={"reason": "teste"})
+    assert r.status_code == 500 and r.get_json()["error"] == "ADAUSDT não tem posição aberta"

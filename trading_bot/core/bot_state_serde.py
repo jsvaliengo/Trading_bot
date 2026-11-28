@@ -85,6 +85,7 @@ class BotStatePersistence:
             'saved_at': datetime.now().isoformat(),
             'start_time': bot.start_time.isoformat() if isinstance(bot.start_time, datetime) else bot.start_time,
             'initial_capital': bot.initial_capital,
+            'paused': bool(getattr(bot, 'paused', False)),   # lido pelo painel da conta (WorkerAccount)
             'closed_trades_count': bot.closed_trades_count,
             'total_pnl': bot.total_pnl,
             'daily_realized_pnl': bot.daily_realized_pnl,
